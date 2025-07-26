@@ -33,9 +33,12 @@ import {
   Brain,
   Star,
   Zap,
+  Loader2,
 } from "lucide-react";
+import { useTeamMembers, useInventoryItems, useAnalytics, useLowStockItems } from "@/lib/hooks/use-graphql";
+import { format } from "date-fns";
 
-// Sample data for charts
+// Sample data for charts (fallback)
 const salesData = [
   { name: "Mon", sales: 4200, orders: 25 },
   { name: "Tue", sales: 3800, orders: 22 },
@@ -85,46 +88,65 @@ const recentActivities = [
   },
 ];
 
-const staffSchedule = [
-  { name: "Sarah Johnson", role: "Head Chef", shift: "2:00 PM - 10:00 PM", status: "active" },
-  { name: "Mike Chen", role: "Sous Chef", shift: "3:00 PM - 11:00 PM", status: "scheduled" },
-  { name: "Emma Davis", role: "Server", shift: "5:00 PM - 12:00 AM", status: "scheduled" },
-  { name: "Alex Rivera", role: "Bartender", shift: "6:00 PM - 1:00 AM", status: "scheduled" },
-];
-
 export default function DashboardPage() {
   const [selectedMetric, setSelectedMetric] = useState("sales");
+
+  // Fetch real data from GraphQL
+  const { data: teamData, loading: teamLoading, error: teamError } = useTeamMembers();
+  const { data: inventoryData, loading: inventoryLoading, error: inventoryError } = useInventoryItems();
+  const { data: analyticsData, loading: analyticsLoading, error: analyticsError } = useAnalytics("daily");
+  const { data: lowStockData, loading: lowStockLoading, error: lowStockError } = useLowStockItems();
+
+  // Calculate metrics from real data
+  const activeStaff = teamData?.teamMembers?.filter((member: any) => member.status === 'active').length || 0;
+  const totalInventoryItems = inventoryData?.inventoryItems?.length || 0;
+  const lowStockCount = lowStockData?.lowStockItems?.length || 0;
+  const revenue = analyticsData?.analytics?.revenue || 0;
+  const orders = analyticsData?.analytics?.orders || 0;
+  const tableTurnover = analyticsData?.analytics?.tableTurnover || 0;
 
   const metrics = [
     {
       title: "Today's Revenue",
-      value: "$6,842",
+      value: `$${revenue.toLocaleString()}`,
       change: "+12.5%",
       changeType: "positive",
       icon: DollarSign,
+      loading: analyticsLoading,
     },
     {
       title: "Orders",
-      value: "142",
+      value: orders.toString(),
       change: "+8.2%",
       changeType: "positive",
       icon: Package,
+      loading: analyticsLoading,
     },
     {
       title: "Active Staff",
-      value: "8",
+      value: activeStaff.toString(),
       change: "No change",
       changeType: "neutral",
       icon: Users,
+      loading: teamLoading,
     },
     {
       title: "Table Turnover",
-      value: "3.2x",
+      value: `${tableTurnover.toFixed(1)}x`,
       change: "-2.1%",
       changeType: "negative",
       icon: Calendar,
+      loading: analyticsLoading,
     },
   ];
+
+  // Generate staff schedule from real data
+  const staffSchedule = teamData?.teamMembers?.slice(0, 4).map((member: any) => ({
+    name: member.name,
+    role: member.role,
+    shift: "2:00 PM - 10:00 PM", // This would come from shifts data
+    status: member.status === 'active' ? 'active' : 'scheduled'
+  })) || [];
 
   return (
     <DashboardLayout>
@@ -175,7 +197,14 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">{metric.title}</p>
-                    <p className="text-2xl font-bold text-foreground mt-1">{metric.value}</p>
+                    {metric.loading ? (
+                      <div className="flex items-center mt-1">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-muted-foreground">Loading...</span>
+                      </div>
+                    ) : (
+                      <p className="text-2xl font-bold text-foreground mt-1">{metric.value}</p>
+                    )}
                     <div className="flex items-center mt-2">
                       {metric.changeType === "positive" && (
                         <TrendingUp className="h-4 w-4 text-green-600 mr-1" />
@@ -280,11 +309,11 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {staffSchedule.map((staff, index) => (
+                  {staffSchedule.map((staff: any, index: number) => (
                                                                 <div key={index} className="flex items-center justify-between p-4 bg-card rounded-lg border-2 border-border shadow-md hover:shadow-lg transition-shadow">
                         <div className="flex items-center space-x-3">
                           <div className="bg-orange-600 rounded-full w-10 h-10 flex items-center justify-center text-white font-semibold">
-                            {staff.name.split(" ").map(n => n[0]).join("")}
+                            {staff.name.split(" ").map((n: string) => n[0]).join("")}
                           </div>
                         <div>
                           <p className="font-semibold text-foreground">{staff.name}</p>
@@ -333,7 +362,7 @@ export default function DashboardPage() {
                       outerRadius={80}
                       dataKey="value"
                     >
-                      {inventoryData.map((entry, index) => (
+                      {inventoryData.map((entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -341,7 +370,7 @@ export default function DashboardPage() {
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="mt-4 space-y-2">
-                  {inventoryData.map((item, index) => (
+                  {inventoryData.map((item: any, index: number) => (
                     <div key={index} className="flex items-center justify-between">
                       <div className="flex items-center">
                         <div
