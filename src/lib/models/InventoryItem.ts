@@ -105,13 +105,11 @@ const inventoryItemSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for faster queries
+// Indexes for faster queries (barcode and qrCode already indexed via unique: true)
 inventoryItemSchema.index({ name: 1 });
 inventoryItemSchema.index({ category: 1 });
 inventoryItemSchema.index({ status: 1 });
 inventoryItemSchema.index({ supplier: 1 });
-inventoryItemSchema.index({ barcode: 1 });
-inventoryItemSchema.index({ qrCode: 1 });
 
 // Virtual for total value
 inventoryItemSchema.virtual('totalValue').get(function() {

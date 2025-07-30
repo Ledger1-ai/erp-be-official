@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Bell,
   Search,
+  Bot,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -59,6 +60,11 @@ const sidebarItems = [
     title: "Team Management",
     href: "/dashboard/team",
     icon: Users,
+  },
+  {
+    title: "Robotic Fleets",
+    href: "/dashboard/robotic-fleets",
+    icon: Bot,
   },
   {
     title: "Analytics",

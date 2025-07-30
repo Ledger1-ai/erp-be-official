@@ -1,71 +1,154 @@
 import mongoose from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/varuni-backoffice';
-
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://skynetpod:Vishnu%40123@varuniengram.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000' || 'mongodb://localhost:27017/varuni-backoffice';
+console.log(MONGODB_URI); 
 if (!MONGODB_URI) {
-  throw new Error('Please define the MONGODB_URI environment variable inside .env.local');
+  throw new Error('Please define the MONGODB_URI environment variable');
 }
 
 interface Connection {
   isConnected?: number;
+  promise?: Promise<typeof mongoose>;
 }
 
+// Global connection object to survive hot reloads
 const connection: Connection = {};
 
-async function connectDB() {
-  if (connection.isConnected) {
+// Detect if we're using Azure Cosmos DB
+const isAzureCosmosDB = MONGODB_URI.includes('cosmos.azure.com');
+
+// MongoDB/Cosmos DB connection options
+const connectionOptions = {
+  bufferCommands: true,
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  family: 4, // Use IPv4
+  ...(isAzureCosmosDB && {
+    // Azure Cosmos DB specific options
+    ssl: true,
+    retryWrites: false,
+    maxIdleTimeMS: 120000,
+  })
+};
+
+export async function connectDB() {
+  // If already connected, return
+  if (connection.isConnected === 1) {
     console.log('✅ Using existing database connection');
     return;
   }
 
-  try {
-    console.log('🔌 Connecting to MongoDB...');
-    
-    const db = await mongoose.connect(MONGODB_URI, {
-      bufferCommands: false,
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-    });
+  // If connection is in progress, wait for it
+  if (connection.promise) {
+    console.log('⏳ Waiting for ongoing connection...');
+    await connection.promise;
+    return;
+  }
 
+  try {
+    console.log(isAzureCosmosDB ? '🌐 Connecting to Azure Cosmos DB...' : '🔌 Connecting to MongoDB...');
+    
+    connection.promise = mongoose.connect(MONGODB_URI, connectionOptions);
+    
+    const db = await connection.promise;
+    
+    // Wait for the connection to be fully ready
+    let attempts = 0;
+    while (mongoose.connection.readyState !== 1 && attempts < 10) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    
     connection.isConnected = db.connections[0].readyState;
     
-    console.log('✅ MongoDB connected successfully');
+    if (connection.isConnected === 1) {
+      console.log(isAzureCosmosDB 
+        ? '✅ Azure Cosmos DB connected successfully' 
+        : '✅ MongoDB connected successfully'
+      );
+      
+      // Log database info (without sensitive data)
+      const dbName = mongoose.connection.name;
+      const host = isAzureCosmosDB ? 'Azure Cosmos DB' : mongoose.connection.host;
+      console.log(`📊 Database: ${dbName} on ${host}`);
+    } else {
+      throw new Error('Database connection failed');
+    }
     
-    // Handle connection events
-    mongoose.connection.on('error', (err) => {
-      console.error('❌ MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.log('🔌 MongoDB disconnected');
-      connection.isConnected = 0;
-    });
-
-    mongoose.connection.on('reconnected', () => {
-      console.log('🔄 MongoDB reconnected');
-      connection.isConnected = 1;
-    });
-
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      console.log('🛑 MongoDB connection closed through app termination');
-      process.exit(0);
-    });
-
   } catch (error) {
-    console.error('❌ Error connecting to MongoDB:', error);
+    console.error('❌ Database connection error:', error);
+    connection.promise = undefined;
     throw error;
   }
 }
 
-async function disconnectDB() {
-  if (connection.isConnected) {
+// Connection event handlers
+mongoose.connection.on('connected', () => {
+  console.log('🔗 Mongoose connected to database');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('❌ Mongoose connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('🔌 Mongoose disconnected');
+  connection.isConnected = 0;
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  try {
     await mongoose.connection.close();
-    connection.isConnected = 0;
-    console.log('🔌 MongoDB disconnected');
+    console.log('👋 Database connection closed through app termination');
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+});
+
+// Test connection function
+export async function testConnection() {
+  try {
+    await connectDB();
+    
+    // Test basic operations
+    const testCollection = mongoose.connection.db.collection('connection_test');
+    
+    // Write test
+    const writeResult = await testCollection.insertOne({
+      test: true,
+      timestamp: new Date(),
+      environment: process.env.NODE_ENV
+    });
+    
+    // Read test
+    const readResult = await testCollection.findOne({ _id: writeResult.insertedId });
+    
+    // Cleanup
+    await testCollection.deleteOne({ _id: writeResult.insertedId });
+    
+    console.log('✅ Database connection test successful');
+    console.log('✅ Read/Write operations working correctly');
+    
+    return {
+      success: true,
+      database: mongoose.connection.name,
+      host: isAzureCosmosDB ? 'Azure Cosmos DB' : mongoose.connection.host,
+      readyState: mongoose.connection.readyState,
+      isAzure: isAzureCosmosDB
+    };
+    
+  } catch (error) {
+    console.error('❌ Database connection test failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      isAzure: isAzureCosmosDB
+    };
   }
 }
 
-export { connectDB, disconnectDB, connection }; 
+export { isAzureCosmosDB }; 

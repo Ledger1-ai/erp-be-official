@@ -10,8 +10,9 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, Eye, EyeOff, Brain } from "lucide-react";
+import { Loader2, Eye, EyeOff, Brain, AlertCircle } from "lucide-react";
 import Image from "next/image";
+import FirstLoginPasswordChange from "@/components/auth/FirstLoginPasswordChange";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -20,9 +21,37 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>;
 
+interface LoginResponse {
+  success: boolean;
+  message: string;
+  user?: {
+    id: string;
+    email: string;
+    name: string;
+    role: string;
+    permissions: string[];
+  };
+  accessToken?: string;
+  remainingAttempts?: number;
+  retryAfter?: number;
+  requiresPasswordChange?: boolean;
+  isFirstLogin?: boolean;
+  tempToken?: string;
+}
+
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [rateLimitInfo, setRateLimitInfo] = useState<{
+    remainingAttempts?: number;
+    retryAfter?: number;
+  }>({});
+  const [passwordChangeData, setPasswordChangeData] = useState<{
+    tempToken: string;
+    userEmail: string;
+    isFirstLogin: boolean;
+  } | null>(null);
   const router = useRouter();
 
   const form = useForm<LoginForm>({
@@ -35,28 +64,87 @@ export default function LoginPage() {
 
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
+    setErrorMessage("");
+    setRateLimitInfo({});
     
-    // Simulate API call for demo
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // For demo purposes, accept any valid email/password
-      if (data.email && data.password.length >= 6) {
-        localStorage.setItem("user", JSON.stringify({
-          email: data.email,
-          name: "Demo User",
-          role: "Admin"
-        }));
-        router.push("/dashboard");
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+        credentials: 'include', // Important for cookies
+      });
+
+      const result: LoginResponse = await response.json();
+
+      if (result.success && result.user && result.accessToken) {
+        // Store access token in memory/state management
+        // The refresh token is automatically stored as an httpOnly cookie
+        sessionStorage.setItem('accessToken', result.accessToken);
+        localStorage.setItem('user', JSON.stringify(result.user));
+        
+        // Force a window location change instead of router.push for more reliable redirect
+        window.location.href = "/dashboard";
+      } else if (result.requiresPasswordChange && result.tempToken) {
+        // Handle first login or forced password change
+        setPasswordChangeData({
+          tempToken: result.tempToken,
+          userEmail: data.email,
+          isFirstLogin: result.isFirstLogin || false
+        });
       } else {
-        throw new Error("Invalid credentials");
+        // Handle login failure
+        setErrorMessage(result.message || 'Login failed');
+        
+        // Handle rate limiting
+        if (response.status === 429) {
+          setRateLimitInfo({
+            retryAfter: result.retryAfter
+          });
+        } else if (result.remainingAttempts !== undefined) {
+          setRateLimitInfo({
+            remainingAttempts: result.remainingAttempts
+          });
+        }
       }
     } catch (error) {
-      form.setError("password", { message: "Invalid email or password" });
+      console.error('Login error:', error);
+      setErrorMessage('An error occurred during login. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handlePasswordChangeSuccess = (accessToken: string, user: any) => {
+    // Store the new tokens and user data
+    sessionStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('user', JSON.stringify(user));
+    
+    // Redirect to dashboard
+    window.location.href = "/dashboard";
+  };
+
+  const formatRetryTime = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return minutes > 0 
+      ? `${minutes}m ${remainingSeconds}s`
+      : `${remainingSeconds}s`;
+  };
+
+  // Show password change component if needed
+  if (passwordChangeData) {
+    return (
+      <FirstLoginPasswordChange
+        tempToken={passwordChangeData.tempToken}
+        userEmail={passwordChangeData.userEmail}
+        isFirstLogin={passwordChangeData.isFirstLogin}
+        onSuccess={handlePasswordChangeSuccess}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden">
@@ -108,6 +196,31 @@ export default function LoginPage() {
           <CardContent>
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                {errorMessage && (
+                  <div className="flex items-center space-x-2 p-3 text-sm text-red-300 bg-red-900/20 border border-red-500/30 rounded-lg backdrop-blur-sm">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    <span>{errorMessage}</span>
+                  </div>
+                )}
+
+                {rateLimitInfo.retryAfter && (
+                  <div className="flex items-center space-x-2 p-3 text-sm text-orange-300 bg-orange-900/20 border border-orange-500/30 rounded-lg backdrop-blur-sm">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    <span>
+                      Too many failed attempts. Please try again in {formatRetryTime(rateLimitInfo.retryAfter)}.
+                    </span>
+                  </div>
+                )}
+
+                {rateLimitInfo.remainingAttempts !== undefined && rateLimitInfo.remainingAttempts < 3 && (
+                  <div className="flex items-center space-x-2 p-3 text-sm text-yellow-300 bg-yellow-900/20 border border-yellow-500/30 rounded-lg backdrop-blur-sm">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    <span>
+                      {rateLimitInfo.remainingAttempts} attempt{rateLimitInfo.remainingAttempts !== 1 ? 's' : ''} remaining
+                    </span>
+                  </div>
+                )}
+
                 <FormField
                   control={form.control}
                   name="email"

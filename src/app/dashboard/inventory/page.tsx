@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
 import { QRCode } from "react-qrcode-logo";
 import { Scanner } from "@yudiel/react-qr-scanner";
@@ -52,10 +54,54 @@ import {
   MousePointer2,
   Save,
   RefreshCw,
+  Loader2,
 } from "lucide-react";
+import { 
+  useInventoryItems, 
+  useLowStockItems, 
+  useCreateInventoryItem, 
+  useUpdateInventoryItem, 
+  useDeleteInventoryItem,
+  useUpdateStock 
+} from "@/lib/hooks/use-graphql";
+import { format } from "date-fns";
+import { toast } from "react-hot-toast";
+
+// TypeScript interfaces
+interface InventoryItem {
+  id: string;
+  name: string;
+  category: string;
+  currentStock: number;
+  minThreshold: number;
+  maxCapacity: number;
+  unit: string;
+  costPerUnit: number;
+  supplier: string;
+  lastUpdated: string;
+  status: string;
+  location?: string;
+  barcode?: string;
+  qrCode?: string;
+  description?: string;
+  expiryDate?: string;
+  waste?: number;
+  reorderPoint?: number;
+  reorderQuantity?: number;
+}
+
+interface Suggestion {
+  type: string;
+  title: string;
+  items: string[];
+  urgency: string;
+  description: string;
+  action: string;
+  costImpact: string;
+}
 
 // Sample current user role - In real app, this would come from auth context
-const currentUserRole = "Super Admin"; // Change to "Staff" to test staff view
+const currentUserRole = "Super Admin";
 
 // Default label template with positioning
 const defaultLabelTemplate = {
@@ -115,270 +161,16 @@ const AZURE_SAM_CONFIG = {
   apiKey: "FtUsk1gSK6c7M3fLAor9mjEdWsd4bVUIRIs8G7zEgENA0HDluoC6JQQJ99BGAAAAAAAAAAAAINFRAZMLhPnN",
 };
 
-// Updated inventory data with restaurant-standard "on hand" tracking
-const inventoryItems = [
-  {
-    id: 1,
-    name: "Chicken Breast",
-    category: "Proteins",
-    unit: "lbs",
-    costPerUnit: 8.50,
-    supplier: "Fresh Farm Co",
-    sku: "CHK-BST-001",
-    barcode: "123456789012",
-    
-    // Restaurant-standard tracking
-    onHand: 45,
-    parLevel: 60,
-    reorderPoint: 20,
-    lastCount: 48,
-    countDate: "2025-01-22",
-    countBy: "Sarah Johnson",
-    
-    // Usage tracking
-    dailyUsage: 8.5,
-    weeklyUsage: 59.5,
-    
-    // Waste tracking
-    waste: 2.5,
-    wasteReason: "Expired",
-    
-    // Receiving
-    lastReceived: 25,
-    receivedDate: "2025-01-20",
-    vendorInvoice: "FF-2025-0120",
-    
-    status: "adequate",
-  },
-  {
-    id: 2,
-    name: "Beef Ribeye",
-    category: "Proteins", 
-    unit: "lbs",
-    costPerUnit: 24.00,
-    supplier: "Premium Meats",
-    sku: "BEF-RIB-001",
-    barcode: "234567890123",
-    
-    onHand: 12,
-    parLevel: 25,
-    reorderPoint: 15,
-    lastCount: 14,
-    countDate: "2025-01-21",
-    countBy: "Mike Chen",
-    
-    dailyUsage: 3.2,
-    weeklyUsage: 22.4,
-    
-    waste: 0.5,
-    wasteReason: "Trim loss",
-    
-    lastReceived: 20,
-    receivedDate: "2025-01-18",
-    vendorInvoice: "PM-2025-0118",
-    
-    status: "low",
-  },
-  {
-    id: 3,
-    name: "Fresh Basil",
-    category: "Herbs",
-    unit: "bunches",
-    costPerUnit: 2.25,
-    supplier: "Green Gardens",
-    sku: "HRB-BSL-001",
-    barcode: "345678901234",
-    
-    onHand: 8,
-    parLevel: 12,
-    reorderPoint: 5,
-    lastCount: 8,
-    countDate: "2025-01-22",
-    countBy: "Emma Davis",
-    
-    dailyUsage: 1.5,
-    weeklyUsage: 10.5,
-    
-    waste: 1.0,
-    wasteReason: "Wilted",
-    
-    lastReceived: 12,
-    receivedDate: "2025-01-21",
-    vendorInvoice: "GG-2025-0121",
-    
-    status: "adequate",
-  },
-  {
-    id: 4,
-    name: "Extra Virgin Olive Oil",
-    category: "Pantry",
-    unit: "bottles (750ml)",
-    costPerUnit: 15.75,
-    supplier: "Mediterranean Imports",
-    sku: "OIL-EVO-001",
-    barcode: "456789012345",
-    
-    onHand: 3,
-    parLevel: 12,
-    reorderPoint: 6,
-    lastCount: 4,
-    countDate: "2025-01-21",
-    countBy: "Alex Rivera",
-    
-    dailyUsage: 0.8,
-    weeklyUsage: 5.6,
-    
-    waste: 0,
-    wasteReason: "",
-    
-    lastReceived: 6,
-    receivedDate: "2025-01-15",
-    vendorInvoice: "MI-2025-0115",
-    
-    status: "critical",
-  },
-  {
-    id: 5,
-    name: "Parmesan Cheese",
-    category: "Dairy",
-    unit: "lbs",
-    costPerUnit: 18.50,
-    supplier: "Artisan Dairy",
-    sku: "CHZ-PMN-001",
-    barcode: "567890123456",
-    
-    onHand: 18,
-    parLevel: 20,
-    reorderPoint: 10,
-    lastCount: 18,
-    countDate: "2025-01-22",
-    countBy: "Sarah Johnson",
-    
-    dailyUsage: 2.1,
-    weeklyUsage: 14.7,
-    
-    waste: 0.2,
-    wasteReason: "Mold",
-    
-    lastReceived: 10,
-    receivedDate: "2025-01-19",
-    vendorInvoice: "AD-2025-0119",
-    
-    status: "adequate",
-  },
-  {
-    id: 6,
-    name: "Roma Tomatoes",
-    category: "Produce",
-    unit: "lbs",
-    costPerUnit: 3.25,
-    supplier: "Fresh Harvest",
-    sku: "VEG-TOM-001",
-    barcode: "678901234567",
-    
-    onHand: 25,
-    parLevel: 30,
-    reorderPoint: 12,
-    lastCount: 26,
-    countDate: "2025-01-22",
-    countBy: "Emma Davis",
-    
-    dailyUsage: 4.2,
-    weeklyUsage: 29.4,
-    
-    waste: 1.5,
-    wasteReason: "Overripe",
-    
-    lastReceived: 30,
-    receivedDate: "2025-01-21",
-    vendorInvoice: "FH-2025-0121",
-    
-    status: "adequate",
-  },
-];
-
-const stockMovementData = [
-  { date: "Jan 15", usage: 85, received: 120 },
-  { date: "Jan 16", usage: 92, received: 0 },
-  { date: "Jan 17", usage: 78, received: 50 },
-  { date: "Jan 18", usage: 95, received: 0 },
-  { date: "Jan 19", usage: 88, received: 75 },
-  { date: "Jan 20", usage: 102, received: 0 },
-  { date: "Jan 21", usage: 90, received: 100 },
-];
-
-const suppliers = [
-  {
-    id: 1,
-    name: "Fresh Farm Co",
-    contact: "John Smith",
-    phone: "(555) 123-4567",
-    email: "orders@freshfarm.com",
-    category: "Proteins",
-    rating: 4.8,
-    deliveryDays: "Mon, Wed, Fri",
-  },
-  {
-    id: 2,
-    name: "Green Gardens",
-    contact: "Maria Rodriguez",
-    phone: "(555) 234-5678",
-    email: "supply@greengardens.com",
-    category: "Produce",
-    rating: 4.6,
-    deliveryDays: "Tue, Thu, Sat",
-  },
-  {
-    id: 3,
-    name: "Premium Meats",
-    contact: "David Wilson",
-    phone: "(555) 345-6789",
-    email: "orders@premiummeats.com",
-    category: "Proteins",
-    rating: 4.9,
-    deliveryDays: "Mon, Wed, Fri",
-  },
-];
-
-const aiSuggestions = [
-  {
-    type: "reorder",
-    title: "Immediate Reorder Required",
-    items: ["Extra Virgin Olive Oil", "Beef Ribeye"],
-    urgency: "critical",
-    description: "These items are below reorder point and may impact menu availability within 2 days.",
-    action: "Order 12 bottles olive oil, 25 lbs ribeye",
-    costImpact: "$567.75",
-  },
-  {
-    type: "optimization",
-    title: "Par Level Optimization",
-    items: ["Chicken Breast"],
-    urgency: "medium", 
-    description: "Current par level may be too high based on usage patterns. Reducing could free up $340 in working capital.",
-    action: "Reduce par level from 60 to 45 lbs",
-    costImpact: "-$127.50 inventory cost",
-  },
-  {
-    type: "waste_prevention",
-    title: "Waste Reduction Opportunity",
-    items: ["Roma Tomatoes", "Fresh Basil"],
-    urgency: "low",
-    description: "Higher than normal waste detected. Consider prep adjustments or menu promotions.",
-    action: "Daily specials featuring tomatoes and basil",
-    costImpact: "Save ~$45/week",
-  },
-];
-
 export default function InventoryPage() {
   const [selectedTab, setSelectedTab] = useState("overview");
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddItemOpen, setIsAddItemOpen] = useState(false);
+  const [isEditItemOpen, setIsEditItemOpen] = useState(false);
   const [isLabelDesignerOpen, setIsLabelDesignerOpen] = useState(false);
   const [isQuantityModifierOpen, setIsQuantityModifierOpen] = useState(false);
   const [isCameraCountingOpen, setIsCameraCountingOpen] = useState(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<typeof inventoryItems[0] | null>(null);
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
   const [labelTemplate, setLabelTemplate] = useState(defaultLabelTemplate);
   const [dragState, setDragState] = useState<{
     isDragging: boolean;
@@ -399,16 +191,23 @@ export default function InventoryPage() {
     unit: "",
     costPerUnit: "",
     supplier: "",
-    onHand: "",
-    parLevel: "",
+    currentStock: "",
+    minThreshold: "",
+    maxCapacity: "",
+    location: "",
+    description: "",
     reorderPoint: "",
+    reorderQuantity: "",
   });
 
   // Camera counting state
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [frozenFrame, setFrozenFrame] = useState<string | null>(null); // For freezing live video
-  const [isLiveMode, setIsLiveMode] = useState<boolean>(true); // New: Live video mode vs static image mode
+  const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
+  const [isLiveMode, setIsLiveMode] = useState<boolean>(true);
   const [markers, setMarkers] = useState<Array<{x: number, y: number, id: string, timestamp: number}>>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>("");
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [estimatedCount, setEstimatedCount] = useState<number>(0);
   const [segmentationMasks, setSegmentationMasks] = useState<Array<{
     id: string, 
     mask: string, 
@@ -416,41 +215,118 @@ export default function InventoryPage() {
     bounds: {x: number, y: number, width: number, height: number}, 
     timestamp: number,
     objectName?: string,
-    maskImageUrl?: string // Processed mask image URL
+    maskImageUrl?: string
   }>>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [countResult, setCountResult] = useState<number | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
-  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState<string>("");
-  
-  // Object tracking state
   const [isTracking, setIsTracking] = useState<boolean>(false);
   const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null);
   const [lastFrameTime, setLastFrameTime] = useState<number>(0);
-
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    // Role-based access control
+  // GraphQL hooks
+  const { data: inventoryData, loading: inventoryLoading, error: inventoryError, refetch: refetchInventory } = useInventoryItems();
+  const { data: lowStockData, loading: lowStockLoading } = useLowStockItems();
+  const [createInventoryItem, { loading: creating }] = useCreateInventoryItem();
+  const [updateInventoryItem, { loading: updating }] = useUpdateInventoryItem();
+  const [deleteInventoryItem, { loading: deleting }] = useDeleteInventoryItem();
+  const [updateStock, { loading: updatingStock }] = useUpdateStock();
+
+  // Extract data from GraphQL responses
+  const inventoryItems = inventoryData?.inventoryItems || [];
+  const lowStockItems = lowStockData?.lowStockItems || [];
+
+  // Role-based access control
   const isAdmin = currentUserRole === "Super Admin" || currentUserRole === "Manager";
   const availableTabs = isAdmin
     ? ["overview", "items", "suppliers", "analytics"]
     : ["overview", "items"];
 
+  // Sample data for charts and suppliers (until these are also connected to GraphQL)
+  const stockMovementData = [
+    { date: "Jan 15", usage: 85, received: 120 },
+    { date: "Jan 16", usage: 92, received: 0 },
+    { date: "Jan 17", usage: 78, received: 50 },
+    { date: "Jan 18", usage: 95, received: 0 },
+    { date: "Jan 19", usage: 88, received: 75 },
+    { date: "Jan 20", usage: 102, received: 0 },
+    { date: "Jan 21", usage: 90, received: 100 },
+  ];
+
+  const suppliers = [
+    {
+      id: 1,
+      name: "Fresh Farm Co",
+      contact: "John Smith",
+      phone: "(555) 123-4567",
+      email: "orders@freshfarm.com",
+      category: "Proteins",
+      rating: 4.8,
+      deliveryDays: "Mon, Wed, Fri",
+    },
+    {
+      id: 2,
+      name: "Green Gardens",
+      contact: "Maria Rodriguez",
+      phone: "(555) 234-5678",
+      email: "supply@greengardens.com",
+      category: "Produce",
+      rating: 4.6,
+      deliveryDays: "Tue, Thu, Sat",
+    },
+    {
+      id: 3,
+      name: "Premium Meats",
+      contact: "David Wilson",
+      phone: "(555) 345-6789",
+      email: "orders@premiummeats.com",
+      category: "Proteins",
+      rating: 4.9,
+      deliveryDays: "Mon, Wed, Fri",
+    },
+  ];
+
+  const aiSuggestions = [
+    {
+      type: "reorder",
+      title: "Immediate Reorder Required",
+      items: lowStockItems.slice(0, 2).map((item: any) => item.name),
+      urgency: "critical",
+      description: "These items are below reorder point and may impact menu availability within 2 days.",
+      action: `Order ${lowStockItems.length} low stock items`,
+      costImpact: "$567.75",
+    },
+    {
+      type: "optimization",
+      title: "Par Level Optimization",
+      items: inventoryItems.slice(0, 1).map((item: any) => item.name),
+      urgency: "medium", 
+      description: "Current par level may be too high based on usage patterns. Reducing could free up working capital.",
+      action: "Optimize par levels based on usage",
+      costImpact: "-$127.50 inventory cost",
+    },
+    {
+      type: "waste_prevention",
+      title: "Waste Reduction Opportunity",
+      items: inventoryItems.filter((item: any) => item.waste && item.waste > 0).map((item: any) => item.name),
+      urgency: "low",
+      description: "Higher than normal waste detected. Consider prep adjustments or menu promotions.",
+      action: "Daily specials featuring high-waste items",
+      costImpact: "Save ~$45/week",
+    },
+  ];
+
   // Get available cameras on component mount
   useEffect(() => {
     const getCameras = async () => {
       try {
-        // Request permission first
         await navigator.mediaDevices.getUserMedia({ video: true });
-        
-        // Get all video input devices
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(device => device.kind === 'videoinput');
         setAvailableCameras(videoDevices);
         
-        // Set default camera
         if (videoDevices.length > 0 && !selectedCameraId) {
           setSelectedCameraId(videoDevices[0].deviceId);
         }
@@ -462,7 +338,148 @@ export default function InventoryPage() {
     getCameras();
   }, [selectedCameraId]);
 
-  const filteredItems = inventoryItems.filter(item =>
+  // Handle form submission for creating new inventory item
+  const handleCreateItem = async () => {
+    try {
+      await createInventoryItem({
+        variables: {
+          input: {
+            name: newItemForm.name,
+            category: newItemForm.category,
+            currentStock: parseFloat(newItemForm.currentStock),
+            minThreshold: parseFloat(newItemForm.minThreshold),
+            maxCapacity: parseFloat(newItemForm.maxCapacity),
+            unit: newItemForm.unit,
+            costPerUnit: parseFloat(newItemForm.costPerUnit),
+            supplier: newItemForm.supplier,
+            location: newItemForm.location,
+            barcode: newItemForm.barcode,
+            description: newItemForm.description,
+            reorderPoint: parseFloat(newItemForm.reorderPoint) || undefined,
+            reorderQuantity: parseFloat(newItemForm.reorderQuantity) || undefined,
+          }
+        }
+      });
+      
+      toast.success('Inventory item created successfully!');
+      setIsAddItemOpen(false);
+      setNewItemForm({
+        name: "",
+        category: "",
+        sku: "",
+        barcode: "",
+        unit: "",
+        costPerUnit: "",
+        supplier: "",
+        currentStock: "",
+        minThreshold: "",
+        maxCapacity: "",
+        location: "",
+        description: "",
+        reorderPoint: "",
+        reorderQuantity: "",
+      });
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to create inventory item');
+    }
+  };
+
+  // Handle editing an existing item
+  const handleEditItem = async () => {
+    if (!selectedItem) return;
+    
+    try {
+      await updateInventoryItem({
+        variables: {
+          id: selectedItem.id,
+          input: {
+            name: newItemForm.name,
+            category: newItemForm.category,
+            currentStock: parseFloat(newItemForm.currentStock),
+            minThreshold: parseFloat(newItemForm.minThreshold),
+            maxCapacity: parseFloat(newItemForm.maxCapacity),
+            unit: newItemForm.unit,
+            costPerUnit: parseFloat(newItemForm.costPerUnit),
+            supplier: newItemForm.supplier,
+            location: newItemForm.location,
+            barcode: newItemForm.barcode,
+            description: newItemForm.description,
+            reorderPoint: parseFloat(newItemForm.reorderPoint) || undefined,
+            reorderQuantity: parseFloat(newItemForm.reorderQuantity) || undefined,
+          }
+        }
+      });
+      
+      toast.success('Inventory item updated successfully!');
+      setIsEditItemOpen(false);
+      setSelectedItem(null);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update inventory item');
+    }
+  };
+
+  // Handle deleting an item
+  const handleDeleteItem = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this item?')) return;
+    
+    try {
+      await deleteInventoryItem({
+        variables: { id }
+      });
+      
+      toast.success('Inventory item deleted successfully!');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to delete inventory item');
+    }
+  };
+
+  // Handle stock quantity updates
+  const handleUpdateStock = async (id: string, newQuantity: number) => {
+    try {
+      await updateStock({
+        variables: {
+          id,
+          quantity: newQuantity
+        }
+      });
+      
+      toast.success('Stock quantity updated successfully!');
+      setIsQuantityModifierOpen(false);
+      setSelectedItem(null);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update stock');
+    }
+  };
+
+  // Open edit dialog with prefilled data
+  const openEditDialog = (item: any) => {
+    setSelectedItem(item);
+    setNewItemForm({
+      name: item.name || "",
+      category: item.category || "",
+      sku: item.sku || "",
+      barcode: item.barcode || "",
+      unit: item.unit || "",
+      costPerUnit: item.costPerUnit?.toString() || "",
+      supplier: item.supplier || "",
+      currentStock: item.currentStock?.toString() || "",
+      minThreshold: item.minThreshold?.toString() || "",
+      maxCapacity: item.maxCapacity?.toString() || "",
+      location: item.location || "",
+      description: item.description || "",
+      reorderPoint: item.reorderPoint?.toString() || "",
+      reorderQuantity: item.reorderQuantity?.toString() || "",
+    });
+    setIsEditItemOpen(true);
+  };
+
+  // Open quantity modifier dialog
+  const openQuantityDialog = (item: any) => {
+    setSelectedItem(item);
+    setIsQuantityModifierOpen(true);
+  };
+
+  const filteredItems = inventoryItems.filter((item: InventoryItem) =>
     item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     item.category.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -471,18 +488,21 @@ export default function InventoryPage() {
     switch (status) {
       case "critical": return "tag-red";
       case "low": return "tag-yellow";
-      case "adequate": return "tag-green";
+      case "adequate": 
+      case "normal": return "tag-green";
       default: return "tag-slate";
     }
   };
 
-  const getCriticalItems = () => inventoryItems.filter(item => item.status === "critical");
-  const getLowStockItems = () => inventoryItems.filter(item => item.status === "low");
-  const getTotalValue = () => inventoryItems.reduce((sum, item) => sum + (item.onHand * item.costPerUnit), 0);
-  const getWeeklyWaste = () => inventoryItems.reduce((sum, item) => sum + (item.waste * item.costPerUnit), 0);
+  const getCriticalItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "critical");
+  const getLowStockItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "low");
+  const getTotalValue = () => inventoryItems.reduce((sum: number, item: InventoryItem) => sum + (item.currentStock * item.costPerUnit), 0);
+  const getWeeklyWaste = () => inventoryItems.reduce((sum: number, item: InventoryItem) => sum + ((item.waste || 0) * item.costPerUnit), 0);
+
+
 
   // QR Code generation function
-  const generateQRData = (item: typeof inventoryItems[0]) => {
+  const generateQRData = (item: InventoryItem) => {
     return JSON.stringify({
       id: item.id,
       name: item.name,
@@ -513,9 +533,13 @@ export default function InventoryPage() {
             unit: parsedData.unit || "",
             costPerUnit: parsedData.costPerUnit?.toString() || "",
             supplier: parsedData.supplier || "",
-            onHand: "",
-            parLevel: "",
+            currentStock: "",
+            minThreshold: "",
+            maxCapacity: "",
+            location: "",
+            description: "",
             reorderPoint: "",
+            reorderQuantity: "",
           });
         }
       } catch (error) {
@@ -537,7 +561,7 @@ export default function InventoryPage() {
     if (imageSrc) {
       setCapturedImage(imageSrc);
       setMarkers([]);
-      setCountResult(null);
+      setEstimatedCount(0);
     }
   }, [webcamRef]);
 
@@ -896,7 +920,7 @@ export default function InventoryPage() {
             console.log("🔍 Object identified as:", objectName);
             
             setSegmentationMasks(prev => [...prev, newMask]);
-            setCountResult(prev => (prev || 0) + 1);
+            setEstimatedCount(prev => (prev || 0) + 1);
             
             console.log("🎭 REAL SAM - Added new segmentation mask, total objects:", segmentationMasks.length + 1);
             console.log("✅ Processing complete for marker:", point.id);
@@ -904,7 +928,7 @@ export default function InventoryPage() {
             console.log("⚠️ No valid mask found, keeping as manual marker");
             console.log("🔍 Debug info - bestMask exists:", !!bestMask, "confidence:", bestConfidence);
             // Keep as manual marker if no good mask is found
-            setCountResult(markers.length);
+            setEstimatedCount(markers.length);
           }
       } else {
         const errorResult = await samResponse.json().catch(() => ({ error: 'Unknown error' }));
@@ -937,7 +961,7 @@ export default function InventoryPage() {
           return updated;
         });
         
-        setCountResult(prev => {
+        setEstimatedCount(prev => {
           const newCount = (prev || 0) + 1;
           console.log("📊 Count result updated to:", newCount);
           return newCount;
@@ -953,7 +977,7 @@ export default function InventoryPage() {
       } else {
         setProcessingError(error instanceof Error ? error.message : "AI segmentation failed. Using manual marker.");
         // Fallback to just the marker without mask
-        setCountResult(markers.length);
+        setEstimatedCount(markers.length);
       }
     } finally {
       setIsProcessing(false);
@@ -1211,7 +1235,7 @@ export default function InventoryPage() {
     });
   };
 
-  const printLabel = (item: typeof inventoryItems[0]) => {
+  const printLabel = (item: any) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
@@ -1452,33 +1476,33 @@ export default function InventoryPage() {
                     <h3 className="font-medium text-foreground mb-4">Inventory Levels</h3>
                     <div className="grid grid-cols-3 gap-4">
                       <div>
-                        <Label htmlFor="on-hand">Current On Hand</Label>
+                        <Label htmlFor="current-stock">Current Stock</Label>
                         <Input 
-                          id="on-hand" 
+                          id="current-stock" 
                           type="number" 
                           placeholder="Current quantity" 
-                          value={newItemForm.onHand}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, onHand: e.target.value }))}
+                          value={newItemForm.currentStock}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, currentStock: e.target.value }))}
                         />
                       </div>
                       <div>
-                        <Label htmlFor="par-level">Par Level</Label>
+                        <Label htmlFor="min-threshold">Min Threshold</Label>
                         <Input 
-                          id="par-level" 
+                          id="min-threshold" 
                           type="number" 
-                          placeholder="Target stock" 
-                          value={newItemForm.parLevel}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, parLevel: e.target.value }))}
+                          placeholder="Minimum stock" 
+                          value={newItemForm.minThreshold}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, minThreshold: e.target.value }))}
                         />
                       </div>
                       <div>
-                        <Label htmlFor="reorder-point">Reorder Point</Label>
+                        <Label htmlFor="max-capacity">Max Capacity</Label>
                         <Input 
-                          id="reorder-point" 
+                          id="max-capacity" 
                           type="number" 
-                          placeholder="Reorder when below" 
-                          value={newItemForm.reorderPoint}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, reorderPoint: e.target.value }))}
+                          placeholder="Maximum stock" 
+                          value={newItemForm.maxCapacity}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, maxCapacity: e.target.value }))}
                         />
                       </div>
                     </div>
@@ -1605,7 +1629,7 @@ export default function InventoryPage() {
                         <div>
                           <p className="font-medium text-foreground">{item.name}</p>
                           <p className="text-sm text-muted-foreground">
-                            On Hand: {item.onHand} {item.unit} • Reorder at: {item.reorderPoint} {item.unit}
+                            On Hand: {item.currentStock} {item.unit} • Reorder at: {item.reorderPoint} {item.unit}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             Daily usage: {item.dailyUsage} {item.unit}
@@ -1741,7 +1765,7 @@ export default function InventoryPage() {
                   </TableHeader>
                   <TableBody>
                     {filteredItems.map((item) => {
-                      const daysLeft = Math.floor(item.onHand / item.dailyUsage);
+                      const daysLeft = Math.floor(item.currentStock / item.dailyUsage);
                       return (
                         <TableRow key={item.id}>
                           <TableCell>
@@ -1754,11 +1778,11 @@ export default function InventoryPage() {
                           <TableCell className="text-muted-foreground">{item.category}</TableCell>
                           <TableCell>
                             <div>
-                              <p className="font-medium">{item.onHand} {item.unit}</p>
-                              <p className="text-xs text-muted-foreground">${(item.onHand * item.costPerUnit).toFixed(2)}</p>
+                              <p className="font-medium">{item.currentStock} {item.unit}</p>
+                              <p className="text-xs text-muted-foreground">${(item.currentStock * item.costPerUnit).toFixed(2)}</p>
                             </div>
                           </TableCell>
-                          <TableCell className="text-muted-foreground">{item.parLevel} {item.unit}</TableCell>
+                          <TableCell className="text-muted-foreground">{item.minThreshold} {item.unit}</TableCell>
                           <TableCell className="text-muted-foreground">{item.dailyUsage} {item.unit}</TableCell>
                           <TableCell>
                             <span className={`font-medium ${daysLeft <= 3 ? 'text-red-600' : daysLeft <= 7 ? 'text-yellow-600' : 'text-green-600'}`}>
@@ -2620,7 +2644,7 @@ export default function InventoryPage() {
                                     }
                                     return newMasks;
                                   });
-                                  setCountResult(prev => Math.max(0, (prev || 0) - 1));
+                                  setEstimatedCount(prev => Math.max(0, (prev || 0) - 1));
                                 }}
                                 title={isProcessingThisMarker ? "Processing with Azure SAM..." : "Click to remove marker and segmentation"}
                               >
@@ -2829,7 +2853,7 @@ export default function InventoryPage() {
                       <Button variant="outline" onClick={() => {
                         setCapturedImage(null);
                         setMarkers([]);
-                        setCountResult(null);
+                        setEstimatedCount(0);
                       }}>
                         Retake Photo
                       </Button>
@@ -2860,11 +2884,11 @@ export default function InventoryPage() {
                     )}
 
                     {/* Success Result Display */}
-                    {countResult !== null && (
+                    {estimatedCount !== 0 && (
                       <div className="bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded p-3">
                         <p className="text-green-800 dark:text-green-200">
                           <CheckCircle className="inline mr-2 h-4 w-4" />
-                                                     {processingError ? 'Simulated AI' : 'AI'} segmented: {countResult} objects (from {markers.length} clicks)
+                                                     {processingError ? 'Simulated AI' : 'AI'} segmented: {estimatedCount} objects (from {markers.length} clicks)
                         </p>
                                                  <div className="text-xs text-green-600 dark:text-green-400 mt-1">
                            Average confidence: {segmentationMasks.length > 0 ? 
@@ -2883,16 +2907,16 @@ export default function InventoryPage() {
                  setCapturedImage(null);
                  setMarkers([]);
                  setSegmentationMasks([]);
-                 setCountResult(null);
+                 setEstimatedCount(0);
                  setProcessingError(null);
                  stopTracking(); // Stop tracking when closing modal
                }}>
                  Close
                </Button>
-              {countResult !== null && (
+              {estimatedCount !== 0 && (
                 <Button className="bg-orange-600 hover:bg-orange-700 text-white">
                   <Package className="mr-2 h-4 w-4" />
-                  Update Inventory ({countResult} items)
+                  Update Inventory ({estimatedCount} items)
                 </Button>
               )}
             </DialogFooter>
@@ -2939,15 +2963,39 @@ export default function InventoryPage() {
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label>Current On Hand</Label>
-                    <Input defaultValue={selectedItem.onHand} type="number" />
+                    <Label>Current Stock</Label>
+                    <Input defaultValue={selectedItem.currentStock} type="number" />
                   </div>
                   <div>
-                    <Label>Par Level</Label>
-                    <Input defaultValue={selectedItem.parLevel} type="number" />
+                    <Label>Min Threshold</Label>
+                    <Input defaultValue={selectedItem.minThreshold} type="number" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Max Capacity</Label>
+                    <Input defaultValue={selectedItem.maxCapacity} type="number" />
+                  </div>
+                  <div>
+                    <Label>Location</Label>
+                    <Input defaultValue={selectedItem.location} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Description</Label>
+                    <Textarea defaultValue={selectedItem.description} />
+                  </div>
+                  <div>
+                    <Label>Reorder Point</Label>
+                    <Input defaultValue={selectedItem.reorderPoint} type="number" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Reorder Quantity</Label>
+                    <Input defaultValue={selectedItem.reorderQuantity} type="number" />
+                  </div>
                   <div>
                     <Label>Last Physical Count</Label>
                     <div className="flex items-center space-x-2 mt-1">
@@ -2955,6 +3003,8 @@ export default function InventoryPage() {
                       <span className="text-sm">{selectedItem.lastCount} {selectedItem.unit}</span>
                     </div>
                   </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Count Date</Label>
                     <div className="flex items-center space-x-2 mt-1">
@@ -2962,18 +3012,12 @@ export default function InventoryPage() {
                       <span className="text-sm">{selectedItem.countDate}</span>
                     </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Counted By</Label>
                     <div className="flex items-center space-x-2 mt-1">
                       <User className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm">{selectedItem.countBy}</span>
                     </div>
-                  </div>
-                  <div>
-                    <Label>Daily Usage</Label>
-                    <span className="text-sm mt-1 block">{selectedItem.dailyUsage} {selectedItem.unit}/day</span>
                   </div>
                 </div>
                 <div className="border-t pt-4">

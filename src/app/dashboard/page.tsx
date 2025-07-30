@@ -93,13 +93,13 @@ export default function DashboardPage() {
 
   // Fetch real data from GraphQL
   const { data: teamData, loading: teamLoading, error: teamError } = useTeamMembers();
-  const { data: inventoryData, loading: inventoryLoading, error: inventoryError } = useInventoryItems();
+  const { data: inventoryApiData, loading: inventoryLoading, error: inventoryError } = useInventoryItems();
   const { data: analyticsData, loading: analyticsLoading, error: analyticsError } = useAnalytics("daily");
   const { data: lowStockData, loading: lowStockLoading, error: lowStockError } = useLowStockItems();
 
   // Calculate metrics from real data
   const activeStaff = teamData?.teamMembers?.filter((member: any) => member.status === 'active').length || 0;
-  const totalInventoryItems = inventoryData?.inventoryItems?.length || 0;
+  const totalInventoryItems = inventoryApiData?.inventoryItems?.length || 0;
   const lowStockCount = lowStockData?.lowStockItems?.length || 0;
   const revenue = analyticsData?.analytics?.revenue || 0;
   const orders = analyticsData?.analytics?.orders || 0;

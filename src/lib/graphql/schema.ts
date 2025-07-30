@@ -46,6 +46,10 @@ export const typeDefs = gql`
     role: String!
     assignedTo: String!
     status: String!
+    notes: String
+    actualStartTime: String
+    actualEndTime: String
+    breakTime: Int
     teamMember: TeamMember
   }
 
@@ -61,17 +65,33 @@ export const typeDefs = gql`
     supplier: String!
     lastUpdated: Date!
     status: String!
+    location: String
+    barcode: String
+    qrCode: String
+    description: String
+    expiryDate: Date
+    waste: Float
+    reorderPoint: Float
+    reorderQuantity: Float
   }
 
   type Invoice {
     id: ID!
+    invoiceNumber: String!
     clientName: String!
+    clientEmail: String
+    clientPhone: String
     amount: Float!
+    tax: Float
+    totalAmount: Float!
     dueDate: Date!
     status: String!
     issuedDate: Date!
+    paidDate: Date
     description: String!
     paymentMethod: String!
+    notes: String
+    terms: String
   }
 
   type Analytics {
@@ -79,7 +99,15 @@ export const typeDefs = gql`
     orders: Int!
     avgOrderValue: Float!
     customerSatisfaction: Float!
-    tableNamesover: Float!
+    tableTurnover: Float!
+    totalCustomers: Int!
+    repeatCustomers: Int!
+    averageWaitTime: Float!
+    staffUtilization: Float!
+    inventoryValue: Float!
+    wastePercentage: Float!
+    period: String
+    date: Date
   }
 
   type Query {
@@ -182,6 +210,7 @@ export const typeDefs = gql`
     endTime: String!
     role: String!
     assignedTo: String!
+    notes: String
   }
 
   input UpdateShiftInput {
@@ -191,6 +220,10 @@ export const typeDefs = gql`
     role: String
     assignedTo: String
     status: String
+    notes: String
+    actualStartTime: String
+    actualEndTime: String
+    breakTime: Int
   }
 
   input CreateInventoryItemInput {
@@ -202,6 +235,13 @@ export const typeDefs = gql`
     unit: String!
     costPerUnit: Float!
     supplier: String!
+    location: String
+    barcode: String
+    qrCode: String
+    description: String
+    expiryDate: Date
+    reorderPoint: Float
+    reorderQuantity: Float
   }
 
   input UpdateInventoryItemInput {
@@ -213,23 +253,43 @@ export const typeDefs = gql`
     unit: String
     costPerUnit: Float
     supplier: String
+    location: String
+    barcode: String
+    qrCode: String
+    description: String
+    expiryDate: Date
+    waste: Float
+    reorderPoint: Float
+    reorderQuantity: Float
   }
 
   input CreateInvoiceInput {
+    invoiceNumber: String
     clientName: String!
+    clientEmail: String
+    clientPhone: String
     amount: Float!
+    tax: Float
     dueDate: Date!
     description: String!
     paymentMethod: String!
+    notes: String
+    terms: String
   }
 
   input UpdateInvoiceInput {
+    invoiceNumber: String
     clientName: String
+    clientEmail: String
+    clientPhone: String
     amount: Float
+    tax: Float
     dueDate: Date
     description: String
     paymentMethod: String
     status: String
+    notes: String
+    terms: String
   }
 
   # Subscriptions for real-time updates
@@ -271,9 +331,15 @@ export const GET_SHIFTS = gql`
       role
       assignedTo
       status
+      notes
+      actualStartTime
+      actualEndTime
+      breakTime
       teamMember {
+        id
         name
         email
+        role
       }
     }
   }
@@ -287,11 +353,20 @@ export const GET_INVENTORY_ITEMS = gql`
       category
       currentStock
       minThreshold
+      maxCapacity
       unit
       costPerUnit
       supplier
-      status
       lastUpdated
+      status
+      location
+      barcode
+      qrCode
+      description
+      expiryDate
+      waste
+      reorderPoint
+      reorderQuantity
     }
   }
 `;
@@ -300,13 +375,21 @@ export const GET_INVOICES = gql`
   query GetInvoices {
     invoices {
       id
+      invoiceNumber
       clientName
+      clientEmail
+      clientPhone
       amount
+      tax
+      totalAmount
       dueDate
       status
       issuedDate
+      paidDate
       description
       paymentMethod
+      notes
+      terms
     }
   }
 `;
@@ -318,7 +401,13 @@ export const GET_ANALYTICS = gql`
       orders
       avgOrderValue
       customerSatisfaction
-      tableNamesover
+      tableTurnover
+      totalCustomers
+      repeatCustomers
+      averageWaitTime
+      staffUtilization
+      inventoryValue
+      wastePercentage
     }
   }
 `;

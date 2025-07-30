@@ -1,17 +1,11 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-import { ThemeProvider } from "@/components/providers/theme-provider";
-import { ApolloClientProvider } from "@/components/providers/apollo-provider";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
+import { Toaster } from "react-hot-toast";
+import { ApolloWrapper } from "@/components/providers/apollo-provider";
 
 export const metadata: Metadata = {
-  title: "Varuni Backoffice - The Graine Ledger",
-  description: "AI-powered restaurant management system",
+  title: "Varuni Backoffice - Restaurant Management System",
+  description: "Complete restaurant management solution with inventory, scheduling, invoicing, and robotic fleet management",
 };
 
 export default function RootLayout({
@@ -20,15 +14,35 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${inter.variable} font-sans antialiased`}
-      >
-        <ApolloClientProvider>
-          <ThemeProvider>
-            {children}
-          </ThemeProvider>
-        </ApolloClientProvider>
+    <html lang="en">
+      <body className="antialiased">
+        <ApolloWrapper>
+          {children}
+        </ApolloWrapper>
+        <Toaster 
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#363636',
+              color: '#fff',
+            },
+            success: {
+              duration: 3000,
+              iconTheme: {
+                primary: '#4ade80',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              duration: 5000,
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
       </body>
     </html>
   );

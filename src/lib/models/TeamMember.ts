@@ -101,10 +101,8 @@ const teamMemberSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for faster queries
-teamMemberSchema.index({ email: 1 });
+// Indexes for faster queries (email and toastId already indexed via unique: true)
 teamMemberSchema.index({ department: 1 });
 teamMemberSchema.index({ status: 1 });
-teamMemberSchema.index({ toastId: 1 });
 
 export const TeamMember = mongoose.models.TeamMember || mongoose.model('TeamMember', teamMemberSchema); 

@@ -104,8 +104,7 @@ const invoiceSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for faster queries
-invoiceSchema.index({ invoiceNumber: 1 });
+// Indexes for faster queries (invoiceNumber already indexed via unique: true)
 invoiceSchema.index({ clientName: 1 });
 invoiceSchema.index({ status: 1 });
 invoiceSchema.index({ dueDate: 1 });
