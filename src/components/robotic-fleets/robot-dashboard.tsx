@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +20,25 @@ import {
   MapPin,
   Clock,
   TrendingUp,
-  Loader2
+  Loader2,
+  Target
 } from "lucide-react";
-import { bearCloudAPI, RobotStatus } from "@/lib/services/bear-cloud-api";
 import { toast } from "react-hot-toast";
+
+interface RobotStatus {
+  id: string;
+  name: string;
+  status: 'active' | 'charging' | 'maintenance' | 'idle';
+  battery: number;
+  position: { x: number; y: number; z?: number };
+  signal: number;
+  task: string;
+  uptime: string;
+  lastUpdate: string;
+  heading?: number;
+  destination?: string; // Real destination from Bear Cloud API
+  location?: string; // Current location description
+}
 
 // Initial empty state while loading from API
 const initialRobots: RobotStatus[] = [];
@@ -62,20 +78,42 @@ export default function RobotDashboard() {
   useEffect(() => {
     loadRobots();
     
-    // Set up periodic refresh every 10 seconds
-    const interval = setInterval(loadRobots, 10000);
+    // Set up periodic refresh every 30 seconds (slower refresh rate)
+    const interval = setInterval(loadRobots, 30000);
     return () => clearInterval(interval);
   }, []);
 
   const loadRobots = async () => {
     try {
       console.log('🔄 Loading robots from Bear Cloud API...');
-      const robotData = await bearCloudAPI.getAllRobots();
-      setRobots(robotData);
-      setIsConnected(true);
-      console.log('✅ Successfully loaded robots:', robotData.length);
+      const response = await fetch('/api/robots');
+      
+      if (!response.ok) {
+        console.error(`❌ HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error('❌ Error response:', errorText);
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+      
+      const result = await response.json();
+      console.log('📡 API response:', result);
+      
+      if (result.success) {
+        setRobots(result.data || []);
+        setIsConnected(true);
+        console.log('✅ Successfully loaded robots:', result.data?.length || 0);
+      } else {
+        setRobots([]);
+        setIsConnected(false);
+        console.warn('⚠️ API returned error:', result.message);
+        console.warn('⚠️ Full error details:', result);
+        toast.error(`API Error: ${result.message}`);
+      }
     } catch (error) {
       console.error('❌ Failed to load robots:', error);
+      console.error('❌ Error type:', typeof error);
+      console.error('❌ Error details:', error);
+      setRobots([]);
       setIsConnected(false);
       toast.error('Failed to connect to Bear Cloud API');
     } finally {
@@ -87,14 +125,22 @@ export default function RobotDashboard() {
     try {
       console.log(`🎮 Executing ${action} on robot ${robotId}`);
       
-      const success = await bearCloudAPI.sendRobotCommand(robotId, action);
+      const response = await fetch(`/api/robots/${robotId}/command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command: action }),
+      });
       
-      if (success) {
+      const result = await response.json();
+      
+      if (result.success) {
         toast.success(`Successfully ${action}ed robot ${robotId}`);
         // Refresh robot data after command
         setTimeout(loadRobots, 1000);
       } else {
-        toast.error(`Failed to ${action} robot ${robotId}`);
+        toast.error(`Failed to ${action} robot ${robotId}: ${result.message || 'Unknown error'}`);
       }
     } catch (error) {
       console.error(`❌ Error executing ${action} on robot ${robotId}:`, error);
@@ -215,85 +261,102 @@ export default function RobotDashboard() {
                 </Button>
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {robots.map((robot) => (
               <Card key={robot.id} className="border-2">
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-4">
+                <CardContent className="p-3">
+                  {/* Header with Image and Status */}
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center space-x-3">
-                      <div className={`p-2 rounded-full ${getStatusColor(robot.status)} bg-opacity-20`}>
-                        {getStatusIcon(robot.status)}
+                      <div className="relative w-12 h-12 flex-shrink-0">
+                        <Image
+                          src="/servi.webp"
+                          alt="Servi Robot"
+                          width={48}
+                          height={48}
+                          className="rounded-lg object-cover"
+                        />
+                        <div className={`absolute -top-1 -right-1 w-4 h-4 rounded-full ${getStatusColor(robot.status)} border-2 border-white`}></div>
                       </div>
-                      <div>
-                        <h3 className="font-semibold text-foreground">{robot.name}</h3>
-                        <p className="text-sm text-muted-foreground">{robot.id}</p>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-foreground text-sm truncate">{robot.name}</h3>
+                        <p className="text-xs text-muted-foreground truncate">{robot.id}</p>
                       </div>
                     </div>
                     <Badge 
                       variant="outline" 
-                      className={`${getStatusColor(robot.status)} text-white border-none`}
+                      className={`${getStatusColor(robot.status)} text-white border-none text-xs px-2 py-1`}
                     >
                       {robot.status}
                     </Badge>
                   </div>
 
-                  <div className="space-y-3">
+                  {/* Compact Stats Grid */}
+                  <div className="grid grid-cols-2 gap-2 mb-3">
                     {/* Battery */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Battery</span>
-                        <span className="font-medium">{robot.battery}%</span>
+                    <div className="bg-muted/30 rounded-lg p-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <Battery className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-xs font-medium">{robot.battery}%</span>
                       </div>
-                      <Progress 
-                        value={robot.battery} 
-                        className="h-2"
-                      />
+                      <Progress value={robot.battery} className="h-1" />
                     </div>
 
-                    {/* Signal Strength */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Signal</span>
-                        <span className="font-medium">{robot.signal}%</span>
+                    {/* Signal */}
+                    <div className="bg-muted/30 rounded-lg p-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <Wifi className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-xs font-medium">{robot.signal}%</span>
                       </div>
-                      <Progress 
-                        value={robot.signal} 
-                        className="h-2"
-                      />
+                      <Progress value={robot.signal} className="h-1" />
                     </div>
 
-                    {/* Current Task */}
-                    <div className="flex items-center space-x-2 text-sm">
-                      <MapPin className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">Task:</span>
-                      <span className="font-medium">{robot.task}</span>
-                    </div>
-
-                    {/* Uptime */}
-                    <div className="flex items-center space-x-2 text-sm">
-                      <Clock className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">Uptime:</span>
-                      <span className="font-medium">{robot.uptime}</span>
-                    </div>
-
-                    {/* Position */}
-                    <div className="flex items-center space-x-2 text-sm">
-                      <MapPin className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">Position:</span>
-                      <span className="font-medium">({robot.position.x}, {robot.position.y})</span>
+                    {/* Task */}
+                    <div className="bg-muted/30 rounded-lg p-2 col-span-2">
+                      <div className="flex items-center space-x-1">
+                        <MapPin className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                        <span className="text-xs text-muted-foreground">Task:</span>
+                        <span className="text-xs font-medium truncate">{robot.task}</span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Robot Controls */}
-                  <div className="flex space-x-2 mt-4">
+                  {/* Location Info */}
+                  <div className="space-y-1 mb-3">
+                    <div className="flex items-center space-x-1 text-xs">
+                      <MapPin className="h-3 w-3 text-green-600 flex-shrink-0" />
+                      <span className="text-muted-foreground">Location:</span>
+                      <span className="font-medium truncate">{(robot as any).location || 'Unknown'}</span>
+                    </div>
+                    
+                    {(robot as any).destination && (
+                      <div className="flex items-center space-x-1 text-xs">
+                        <Target className="h-3 w-3 text-blue-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Destination:</span>
+                        <span className="font-medium text-blue-600 truncate">{(robot as any).destination}</span>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <div className="flex items-center space-x-1">
+                        <Clock className="h-3 w-3" />
+                        <span>Uptime: {robot.uptime}</span>
+                      </div>
+                      <span>Pos: ({robot.position.x}, {robot.position.y})</span>
+                    </div>
+                  </div>
+
+                  {/* Compact Controls */}
+                  <div className="flex space-x-1">
                     <Button 
                       size="sm" 
                       variant="outline"
                       onClick={() => handleRobotAction(robot.id, 'start')}
                       disabled={robot.status === 'active' || isLoading}
+                      className="flex-1 text-xs h-7"
                     >
-                      <Play className="h-3 w-3 mr-1" />
+                      <Play className="h-2 w-2 mr-1" />
                       Start
                     </Button>
                     <Button 
@@ -301,8 +364,9 @@ export default function RobotDashboard() {
                       variant="outline"
                       onClick={() => handleRobotAction(robot.id, 'pause')}
                       disabled={robot.status !== 'active' || isLoading}
+                      className="flex-1 text-xs h-7"
                     >
-                      <Pause className="h-3 w-3 mr-1" />
+                      <Pause className="h-2 w-2 mr-1" />
                       Pause
                     </Button>
                     <Button 
@@ -310,14 +374,15 @@ export default function RobotDashboard() {
                       variant="outline"
                       onClick={() => handleRobotAction(robot.id, 'stop')}
                       disabled={robot.status === 'maintenance' || isLoading}
+                      className="flex-1 text-xs h-7"
                     >
-                      <Square className="h-3 w-3 mr-1" />
+                      <Square className="h-2 w-2 mr-1" />
                       Stop
                     </Button>
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              ))}
             </div>
           )}
         </CardContent>

@@ -2,18 +2,14 @@ syntax = "proto3";
 
 package bearrobotics.api.v0.robot;
 
-// Point on the map.
 message Destination {
   string destination_id = 1;
 }
 
-// Area on the map with one or more points where any one point is a valid
-// goal for the robot.
 message Zone {
   string zone_id = 1;
 }
 
-// Place on the map where the robot can be set to navigate towards.
 message Goal {
   oneof goal {
     Destination destination = 1;
@@ -24,15 +20,12 @@ message Goal {
 message Mission {
   enum Type {
     TYPE_UNKNOWN = 0;
-    // Mission with only one goal.
     TYPE_ONEOFF = 1;
   }
   Type type = 1;
-  // Currently only one goal is supported.
   repeated Goal goals = 2;
 }
 
-// Action to update a current mission.
 message MissionCommand {
   string mission_id = 1;
   enum Command {
@@ -45,8 +38,7 @@ message MissionCommand {
 message MissionState {
   string mission_id = 1;
   enum State {
-    STATE_UNKNOWN = 0;
-    // Initial state when no mission has been run (e.g. empty feedback).
+    STATE_UNKNOWN = 0;   // Initial state when no mission has been run (e.g. empty feedback).
     STATE_DEFAULT = 1;
     STATE_RUNNING = 2;
     STATE_PAUSED = 3;

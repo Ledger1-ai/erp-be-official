@@ -114,6 +114,11 @@ export async function testConnection() {
   try {
     await connectDB();
     
+    // Ensure database connection exists
+    if (!mongoose.connection.db) {
+      throw new Error('Database connection not established');
+    }
+    
     // Test basic operations
     const testCollection = mongoose.connection.db.collection('connection_test');
     

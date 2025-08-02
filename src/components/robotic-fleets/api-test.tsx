@@ -12,16 +12,19 @@ import {
   RefreshCw,
   Terminal
 } from "lucide-react";
-import { bearCloudAPI } from "@/lib/services/bear-cloud-api";
+// Client-side component - uses API routes to avoid importing server-side gRPC code
 import { toast } from "react-hot-toast";
 
 export default function APITest() {
   const [isTestingAuth, setIsTestingAuth] = useState(false);
   const [isTestingRobots, setIsTestingRobots] = useState(false);
+  const [isExploring, setIsExploring] = useState(false);
   const [authStatus, setAuthStatus] = useState<'pending' | 'success' | 'error'>('pending');
   const [robotsStatus, setRobotsStatus] = useState<'pending' | 'success' | 'error'>('pending');
+  const [exploreStatus, setExploreStatus] = useState<'pending' | 'success' | 'error'>('pending');
   const [authResult, setAuthResult] = useState<string>('');
   const [robotsResult, setRobotsResult] = useState<string>('');
+  const [exploreResult, setExploreResult] = useState<string>('');
 
   const testAuthentication = async () => {
     setIsTestingAuth(true);
@@ -56,16 +59,17 @@ export default function APITest() {
     setRobotsStatus('pending');
     
     try {
-      console.log('🤖 Testing Bear Cloud API robots fetch...');
-      const robots = await bearCloudAPI.getAllRobots();
+      console.log('🤖 Testing Bear Cloud API robots fetch via server proxy...');
+      const response = await fetch('/api/robots');
+      const result = await response.json();
       
-      if (robots && robots.length > 0) {
+      if (result.success && result.data && result.data.length > 0) {
         setRobotsStatus('success');
-        setRobotsResult(`✅ Successfully fetched ${robots.length} robots:\n${robots.map(r => `- ${r.name} (${r.status})`).join('\n')}`);
-        toast.success(`Found ${robots.length} robots!`);
+        setRobotsResult(`✅ Successfully fetched ${result.data.length} robots:\n${result.data.map((r: any) => `- ${r.name} (${r.status})`).join('\n')}`);
+        toast.success(`Found ${result.data.length} robots!`);
       } else {
         setRobotsStatus('error');
-        setRobotsResult('⚠️ No robots found. API returned empty array.');
+        setRobotsResult('⚠️ No robots found. API returned empty array or failed.');
         toast('⚠️ No robots found in your fleet');
       }
     } catch (error) {
@@ -74,6 +78,52 @@ export default function APITest() {
       toast.error('Failed to fetch robots');
     } finally {
       setIsTestingRobots(false);
+    }
+  };
+
+  const exploreServiceMethods = async () => {
+    setIsExploring(true);
+    setExploreStatus('pending');
+    
+    try {
+      console.log('🔍 Exploring Bear Cloud gRPC service methods via server...');
+      
+      const response = await fetch('/api/test/explore');
+      const result = await response.json();
+      
+      if (result.success) {
+        setExploreStatus('success');
+        let resultText = '🔍 Service Account Exploration Results:\n\n';
+        
+        const data = result.data;
+        if (data.testResults) {
+          Object.entries(data.testResults).forEach(([testName, testResult]: [string, any]) => {
+            resultText += `📋 ${testName}:\n`;
+            if (testResult.error) {
+              resultText += `   ❌ Error: ${testResult.error} (Code: ${testResult.code || 'unknown'})\n`;
+              if (testResult.details) {
+                resultText += `   Details: ${testResult.details}\n`;
+              }
+            } else {
+              resultText += `   ✅ Success: ${JSON.stringify(testResult, null, 2)}\n`;
+            }
+            resultText += '\n';
+          });
+        }
+        
+        setExploreResult(resultText);
+        toast.success('Service exploration completed!');
+      } else {
+        setExploreStatus('error');
+        setExploreResult(`❌ Exploration failed: ${result.message || 'Service exploration failed'}`);
+        toast.error('Service exploration failed');
+      }
+    } catch (error) {
+      setExploreStatus('error');
+      setExploreResult(`❌ Exploration error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      toast.error('Exploration error occurred');
+    } finally {
+      setIsExploring(false);
     }
   };
 
@@ -173,6 +223,20 @@ export default function APITest() {
             </Button>
             
             <Button 
+              onClick={exploreServiceMethods}
+              disabled={isExploring}
+              variant="outline"
+              className="border-purple-200 text-purple-700 hover:bg-purple-50"
+            >
+              {isExploring ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Terminal className="h-4 w-4 mr-2" />
+              )}
+              Explore Service Account
+            </Button>
+            
+            <Button 
               onClick={runAllTests}
               disabled={isTestingAuth || isTestingRobots}
               className="bg-blue-600 hover:bg-blue-700"
@@ -219,6 +283,24 @@ export default function APITest() {
                 {robotsResult && (
                   <div className="bg-muted p-3 rounded text-sm whitespace-pre-line">
                     {robotsResult}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Service Account Exploration Result */}
+            <Card className="border-2 border-purple-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    {getStatusIcon(exploreStatus, isExploring)}
+                    <h4 className="font-semibold text-purple-700">Service Account Exploration</h4>
+                  </div>
+                  {getStatusBadge(exploreStatus)}
+                </div>
+                {exploreResult && (
+                  <div className="bg-muted p-3 rounded text-sm whitespace-pre-line">
+                    {exploreResult}
                   </div>
                 )}
               </CardContent>

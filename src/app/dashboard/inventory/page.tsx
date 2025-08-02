@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, JSXElementConstructor, Key, ReactElement, ReactNode, ReactPortal } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -69,6 +69,8 @@ import { toast } from "react-hot-toast";
 
 // TypeScript interfaces
 interface InventoryItem {
+  dailyUsage: number;
+  sku: any;
   id: string;
   name: string;
   category: string;
@@ -86,6 +88,7 @@ interface InventoryItem {
   description?: string;
   expiryDate?: string;
   waste?: number;
+  wasteReason?: string;
   reorderPoint?: number;
   reorderQuantity?: number;
 }
@@ -1624,7 +1627,7 @@ export default function InventoryPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {getCriticalItems().map((item) => (
+                    {getCriticalItems().map((item: { id: Key | null | undefined; name: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; currentStock: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; unit: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; reorderPoint: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; dailyUsage: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; }) => (
                       <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
                         <div>
                           <p className="font-medium text-foreground">{item.name}</p>
@@ -1665,15 +1668,15 @@ export default function InventoryPage() {
                       <span className="text-lg font-bold text-red-600">${getWeeklyWaste().toFixed(2)}</span>
                     </div>
                     <div className="space-y-3">
-                      {inventoryItems.filter(item => item.waste > 0).map((item) => (
+                      {inventoryItems.filter((item: InventoryItem) => (item.waste || 0) > 0).map((item: InventoryItem) => (
                         <div key={item.id} className="flex items-center justify-between py-2 border-b border-border">
                           <div>
                             <p className="text-sm font-medium text-foreground">{item.name}</p>
                             <p className="text-xs text-muted-foreground">{item.wasteReason}</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-sm font-medium">{item.waste} {item.unit}</p>
-                            <p className="text-xs text-red-600">${(item.waste * item.costPerUnit).toFixed(2)}</p>
+                            <p className="text-sm font-medium">{item.waste || 0} {item.unit}</p>
+                            <p className="text-xs text-red-600">${((item.waste || 0) * item.costPerUnit).toFixed(2)}</p>
                           </div>
                         </div>
                       ))}
@@ -1764,8 +1767,8 @@ export default function InventoryPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredItems.map((item) => {
-                      const daysLeft = Math.floor(item.currentStock / item.dailyUsage);
+                    {filteredItems.map((item: InventoryItem) => {
+                      const daysLeft = item.dailyUsage > 0 ? Math.floor(item.currentStock / item.dailyUsage) : Infinity;
                       return (
                         <TableRow key={item.id}>
                           <TableCell>
@@ -1786,7 +1789,7 @@ export default function InventoryPage() {
                           <TableCell className="text-muted-foreground">{item.dailyUsage} {item.unit}</TableCell>
                           <TableCell>
                             <span className={`font-medium ${daysLeft <= 3 ? 'text-red-600' : daysLeft <= 7 ? 'text-yellow-600' : 'text-green-600'}`}>
-                              {daysLeft} days
+                              {daysLeft === Infinity ? '∞' : `${daysLeft} days`}
                             </span>
                           </TableCell>
                           <TableCell>

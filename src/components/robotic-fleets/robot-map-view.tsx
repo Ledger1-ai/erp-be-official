@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Image from "next/image";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,8 +18,22 @@ import {
   RefreshCw,
   Loader2
 } from "lucide-react";
-import { bearCloudAPI, RobotStatus } from "@/lib/services/bear-cloud-api";
 import { toast } from "react-hot-toast";
+
+interface RobotStatus {
+  id: string;
+  name: string;
+  status: 'active' | 'charging' | 'maintenance' | 'idle';
+  battery: number;
+  position: { x: number; y: number; z?: number };
+  signal: number;
+  task: string;
+  uptime: string;
+  lastUpdate: string;
+  heading?: number;
+  destination?: string; // Real destination from Bear Cloud API
+  location?: string; // Current location description
+}
 
 // Mock facility layout and robot positions
 const facilityMap = {
@@ -63,12 +78,21 @@ export default function RobotMapView() {
   const loadRobots = async () => {
     try {
       console.log('🗺️ Loading robots for map view...');
-      const robotData = await bearCloudAPI.getAllRobots();
-      setRobots(robotData);
-      setIsConnected(true);
-      console.log('✅ Successfully loaded robots for map:', robotData.length);
+      const response = await fetch('/api/robots');
+      const result = await response.json();
+      
+      if (result.success) {
+        setRobots(result.data || []);
+        setIsConnected(true);
+        console.log('✅ Successfully loaded robots for map:', result.data?.length || 0);
+      } else {
+        setRobots([]);
+        setIsConnected(false);
+        console.warn('⚠️ No robots found for map:', result.message);
+      }
     } catch (error) {
       console.error('❌ Failed to load robots for map:', error);
+      setRobots([]);
       setIsConnected(false);
       toast.error('Failed to load robot positions');
     } finally {
@@ -334,36 +358,69 @@ export default function RobotMapView() {
               if (!robot) return null;
               
               return (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <h4 className="font-semibold">Status</h4>
-                    <Badge style={{ backgroundColor: getStatusColor(robot.status) }} className="text-white">
-                      {robot.status}
-                    </Badge>
-                    <p className="text-sm text-muted-foreground">Task: {robot.task}</p>
+                <div className="space-y-4">
+                  {/* Robot Header with Image */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="relative w-16 h-16 flex-shrink-0">
+                        <Image
+                          src="/servi.webp"
+                          alt="Servi Robot"
+                          width={64}
+                          height={64}
+                          className="rounded-lg object-cover"
+                        />
+                        <div className={`absolute -top-1 -right-1 w-5 h-5 rounded-full ${getStatusColor(robot.status)} border-2 border-white`}></div>
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-lg">{robot.name}</h3>
+                        <p className="text-sm text-muted-foreground">{robot.id}</p>
+                        <Badge style={{ backgroundColor: getStatusColor(robot.status) }} className="text-white text-xs mt-1">
+                          {robot.status}
+                        </Badge>
+                      </div>
+                    </div>
                   </div>
-                  
-                  <div className="space-y-2">
-                    <h4 className="font-semibold">Position & Heading</h4>
-                    <div className="flex items-center gap-2 text-sm">
-                      <MapPin className="h-4 w-4" />
-                      ({Math.round(robot.position.x)}, {Math.round(robot.position.y)})
+
+                  {/* Compact Info Grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Battery & Signal */}
+                    <div className="bg-muted/30 rounded-lg p-3 space-y-2">
+                      <h4 className="font-medium text-sm">Systems</h4>
+                      <div className="flex items-center gap-2 text-sm">
+                        <Battery className="h-4 w-4 text-green-600" />
+                        <span>Battery: {robot.battery}%</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm">
+                        <Wifi className="h-4 w-4 text-blue-600" />
+                        <span>Signal: {robot.signal}%</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Navigation className="h-4 w-4" />
-                      {robot.heading || 0}°
+
+                    {/* Location & Task */}
+                    <div className="bg-muted/30 rounded-lg p-3 space-y-2">
+                      <h4 className="font-medium text-sm">Location & Task</h4>
+                      {(robot as any).location && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin className="h-4 w-4 text-green-600" />
+                          <span className="truncate">{(robot as any).location}</span>
+                        </div>
+                      )}
+                      {(robot as any).destination && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <Navigation className="h-4 w-4 text-blue-600" />
+                          <span className="truncate">→ {(robot as any).destination}</span>
+                        </div>
+                      )}
+                      <p className="text-sm text-muted-foreground truncate">Task: {robot.task}</p>
                     </div>
                   </div>
-                  
-                  <div className="space-y-2">
-                    <h4 className="font-semibold">Systems</h4>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Battery className="h-4 w-4" />
-                      Battery: {robot.battery}%
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Wifi className="h-4 w-4" />
-                      Signal: {robot.signal}%
+
+                  {/* Position Info */}
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <div className="flex items-center justify-between text-sm text-muted-foreground">
+                      <span>Map Position (Simulated):</span>
+                      <span>({Math.round(robot.position.x)}, {Math.round(robot.position.y)}) • {robot.heading || 0}°</span>
                     </div>
                   </div>
                 </div>

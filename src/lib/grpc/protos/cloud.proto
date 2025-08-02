@@ -6,45 +6,15 @@ import "common.proto";
 import "robot.proto";
 
 service CloudAPIService {
-  // List all robot IDs that satisfies the given filter options regardless
-  // of robot status.
   rpc ListRobotIDs(ListRobotIDsRequest) returns (ListRobotIDsResponse) {}
-
-  // Creates a mission to go charge a robot regardless of battery state.
-  //
-  // The call will fail if the robot is on a different mission.
-  // Current mission needs to be canceled before the robot can be charged.
-  // Mission can fail if no charger is available.
   rpc ChargeRobot(ChargeRobotRequest) returns (ChargeRobotResponse) {}
-
-  // Creates a mission for a given type.
-  //
-  // Currently only supports ONEOFF which should have only one goal.
-  // The call will fail if the robot cannot go on the requested mission.
   rpc CreateMission(CreateMissionRequest) returns (CreateMissionResponse) {}
-
-  // Updates the specified mission with the given command.
-  //
-  // The call will fail if the robot is not on the specified mission
-  // or cannot execute the command.
-  // Currently only supports CANCEL.
   rpc UpdateMission(UpdateMissionRequest) returns (UpdateMissionResponse) {}
-
-  // Subscribe to the robot mission status.
-  //
-  // Upon subscription, the latest known robot mission status is sent,
-  // followed by updates whenever the mission status changes.
   rpc SubscribeMissionStatus(SubscribeMissionStatusRequest) returns (stream SubscribeMissionStatusResponse) {}
-
-  // Subscribe to the robot battery status.
-  //
-  // Upon subscription, the latest known battery status is sent,
-  // followed by updates whenever the battery status changes.
   rpc SubscribeBatteryStatus(SubscribeBatteryStatusRequest) returns (stream SubscribeBatteryStatusResponse) {}
 }
 
 message RobotFilter {
-  // Empty location_id denotes all locations.
   string location_id = 1;
 }
 
@@ -54,15 +24,12 @@ message ListRobotIDsRequest {
 
 message ListRobotIDsResponse {
   int32 total_robots = 1;
-  // This might not have all the robot IDs if there are too many.
-  // It will have all the robot IDs if the number of robot_ids is same as
-  // total_robots.
   repeated string robot_ids = 2;
 }
 
 message CreateMissionRequest {
   string robot_id = 1;
-  bearrobotics.api.v0.robot.Mission mission = 2;
+  robot.Mission mission = 2;
 }
 
 message CreateMissionResponse {
@@ -71,10 +38,11 @@ message CreateMissionResponse {
 
 message UpdateMissionRequest {
   string robot_id = 1;
-  bearrobotics.api.v0.robot.MissionCommand mission_command = 2;
+  robot.MissionCommand mission_command = 2;
 }
 
-message UpdateMissionResponse {}
+message UpdateMissionResponse {
+}
 
 message ChargeRobotRequest {
   string robot_id = 1;
@@ -89,11 +57,10 @@ message SubscribeMissionStatusRequest {
 }
 
 message SubscribeMissionStatusResponse {
-  bearrobotics.api.v0.common.EventMetadata metadata = 1;
-  bearrobotics.api.v0.robot.MissionState mission_state = 2;
+  common.EventMetadata metadata = 1;
+  robot.MissionState mission_state = 2;
 }
 
-// Filter for list of selected robots.
 message RobotSelector {
   message RobotIDs {
     repeated string ids = 1;
@@ -110,7 +77,7 @@ message SubscribeBatteryStatusRequest {
 }
 
 message SubscribeBatteryStatusResponse {
-  bearrobotics.api.v0.common.EventMetadata metadata = 1;
+  common.EventMetadata metadata = 1;
   string robot_id = 2;
-  bearrobotics.api.v0.robot.BatteryState battery_state = 3;
+  robot.BatteryState battery_state = 3;
 }
