@@ -9,7 +9,7 @@ const inventoryItemSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['Proteins', 'Vegetables', 'Dairy', 'Pantry', 'Beverages', 'Spices', 'Other'],
+    enum: ['Proteins', 'Vegetables', 'Dairy', 'Pantry', 'Beverages', 'Spices', 'Bakery', 'Condiments', 'Packaging', 'Desserts', 'Other'],
     default: 'Other'
   },
   currentStock: {
@@ -69,12 +69,37 @@ const inventoryItemSchema = new mongoose.Schema({
     unique: true,
     sparse: true
   },
+  barcodeMapping: {
+    scannedBarcode: {
+      type: String,
+      sparse: true
+    },
+    mappedAt: {
+      type: Date
+    },
+    mappedBy: {
+      type: String // User who mapped it
+    },
+    confidence: {
+      type: String,
+      enum: ['high', 'medium', 'low'],
+      default: 'high'
+    },
+    verified: {
+      type: Boolean,
+      default: false
+    }
+  },
   qrCode: {
     type: String,
     unique: true,
     sparse: true
   },
   description: {
+    type: String,
+    trim: true
+  },
+  brand: {
     type: String,
     trim: true
   },
@@ -96,6 +121,71 @@ const inventoryItemSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // Sysco-specific ordering fields
+  syscoSKU: {
+    type: String,
+    trim: true,
+    sparse: true
+  },
+  vendorSKU: {
+    type: String,
+    trim: true
+  },
+  casePackSize: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  vendorCode: {
+    type: String,
+    trim: true
+  },
+  syscoCategory: {
+    type: String,
+    trim: true
+  },
+  leadTimeDays: {
+    type: Number,
+    default: 1,
+    min: 0
+  },
+  minimumOrderQty: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  pricePerCase: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  lastOrderDate: {
+    type: Date
+  },
+  preferredVendor: {
+    type: String,
+    trim: true
+  },
+  alternateVendors: [{
+    name: String,
+    sku: String,
+    price: Number,
+    leadTime: Number
+  }],
+  // Additional tracking fields
+  averageDailyUsage: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  seasonalItem: {
+    type: Boolean,
+    default: false
+  },
+  notes: {
+    type: String,
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -110,6 +200,9 @@ inventoryItemSchema.index({ name: 1 });
 inventoryItemSchema.index({ category: 1 });
 inventoryItemSchema.index({ status: 1 });
 inventoryItemSchema.index({ supplier: 1 });
+inventoryItemSchema.index({ syscoSKU: 1 });
+inventoryItemSchema.index({ vendorSKU: 1 });
+inventoryItemSchema.index({ syscoCategory: 1 });
 
 // Virtual for total value
 inventoryItemSchema.virtual('totalValue').get(function() {

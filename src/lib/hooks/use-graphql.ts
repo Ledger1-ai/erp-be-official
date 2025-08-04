@@ -108,6 +108,21 @@ export const GET_INVENTORY_ITEMS = gql`
       waste
       reorderPoint
       reorderQuantity
+      syscoSKU
+      vendorSKU
+      casePackSize
+      vendorCode
+      syscoCategory
+      leadTimeDays
+      minimumOrderQty
+      pricePerCase
+      lastOrderDate
+      preferredVendor
+      alternateVendors
+      averageDailyUsage
+      seasonalItem
+      notes
+      brand
     }
   }
 `;

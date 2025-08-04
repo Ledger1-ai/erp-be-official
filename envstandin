@@ -1,0 +1,26 @@
+JWT_SECRET=your-super-secret-jwt-key-for-development-change-in-production-min-32-chars
+MONGODB_URI=mongodb+srv://skynetpod:Vishnu%40123@varuniengram.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000
+NODE_ENV=development
+NEXT_PUBLIC_GRAPHQL_URL=http://localhost:3000/api/graphql
+
+# Bear Cloud API Configuration
+NEXT_PUBLIC_BEAR_CLOUD_API_URL=api.bearrobotics.ai:443
+NEXT_PUBLIC_BEAR_CLOUD_AUTH_URL=https://api-auth.bearrobotics.ai/authorizeApiAccess
+NEXT_PUBLIC_BEAR_CLOUD_API_KEY=8927a329-55c2-40a3-aeb9-03cfa1229769
+NEXT_PUBLIC_BEAR_CLOUD_SECRET=7d8519ea-5908-408e-badf-fd0183730e9d
+NEXT_PUBLIC_BEAR_CLOUD_SCOPE=LOCAL_GOAT_LLC
+
+# Optional: API timeout settings
+NEXT_PUBLIC_BEAR_CLOUD_TIMEOUT=30000
+
+# Optional: Enable/disable robotics module
+NEXT_PUBLIC_ROBOTICS_ENABLED=true
+
+# Optional: Mock data fallback (for development/testing)
+NEXT_PUBLIC_ROBOTICS_USE_MOCK_FALLBACK=true
+
+# Toast API
+TOAST_CLIENT_SECRET=qK8YBX4Z27oUA8M36Ppw5newpF6GE4zJ8HiqOvQTsN8j6Dsem0LAGSDjF8lCzeIc
+TOAST_CLIENT_ID=ZNt0eJ4SpovBJFqPF2hYHo2FXQT8cesx
+TOAST_API_HOSTNAME=https://ws-api.toasttab.com
+TOAST_USER_ACCESS_TYPE=TOAST_MACHINE_CLIENT

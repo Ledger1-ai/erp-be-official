@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
+import { useToastIntegration } from "@/lib/hooks/use-toast-integration";
+import { useEffect } from "react";
+import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -157,25 +160,42 @@ const departmentStats = [
   { name: "Management", members: 3, avgRating: 4.9, totalSales: 0 },
 ];
 
-const toastSync = {
-  lastSync: "2025-01-22 14:30",
-  syncStatus: "success",
-  employeesImported: 24,
-  newEmployees: 2,
-  updatedProfiles: 3,
-  errors: 0,
-};
+// Toast sync data is now provided by the hook
 
 export default function TeamPage() {
   const [selectedTab, setSelectedTab] = useState("overview");
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [employeeToDelete, setEmployeeToDelete] = useState<any>(null);
+  
+  const { 
+    syncStatus: toastSync, 
+    employees,
+    syncEmployees,
+    deleteEmployeeLocally,
+    selectedRestaurant,
+    setSelectedRestaurant,
+    isAuthenticated,
+    isLoading: toastLoading,
+    restaurants,
+    checkAuthStatus
+  } = useToastIntegration();
+  
+  // Auto-load employees when component mounts if authenticated
+  useEffect(() => {
+    if (isAuthenticated && selectedRestaurant) {
+      console.log('Team page auto-loading employees for restaurant:', selectedRestaurant);
+    }
+  }, [isAuthenticated, selectedRestaurant]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
-  const [selectedMember, setSelectedMember] = useState<typeof teamMembers[0] | null>(null);
+  const [selectedMember, setSelectedMember] = useState<any>(null);
 
-  const filteredMembers = teamMembers.filter(member =>
-    member.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    member.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    member.department.toLowerCase().includes(searchTerm.toLowerCase())
+  // Use real Toast employee data instead of dummy data
+  const employeeData = employees || [];
+  
+  const filteredMembers = employeeData.filter((employee: any) =>
+    (employee.firstName + ' ' + employee.lastName).toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (employee.jobTitles?.[0]?.title || 'Employee').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const getStatusColor = (status: string) => {
@@ -315,10 +335,21 @@ export default function TeamPage() {
                     <span className="text-green-600 font-medium">Errors: {toastSync.errors}</span>
                   </div>
                 </div>
-                <Button size="sm" className="bg-orange-600 hover:bg-orange-700 text-white">
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Sync Now
-                </Button>
+                              <Button
+                size="sm"
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+                onClick={() => {
+                  if (!selectedRestaurant) {
+                    toast.error('Please connect to Toast in Settings first');
+                    return;
+                  }
+                  syncEmployees(selectedRestaurant);
+                }}
+                disabled={toastSync.isLoading || !selectedRestaurant}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${toastSync.isLoading ? 'animate-spin' : ''}`} />
+                {toastSync.isLoading ? 'Syncing...' : 'Sync Now'}
+              </Button>
               </div>
             </div>
           </CardContent>
@@ -331,7 +362,7 @@ export default function TeamPage() {
               <div className="flex items-center justify-between">
                 <div>
                                       <p className="text-sm font-medium text-muted-foreground">Total Team Members</p>
-                    <p className="text-2xl font-bold text-foreground">{teamMembers.length}</p>
+                    <p className="text-2xl font-bold text-foreground">{employeeData.length}</p>
                   <p className="text-xs text-green-600 flex items-center mt-1">
                     <TrendingUp className="h-3 w-3 mr-1" />
                     +2 this month
@@ -428,24 +459,23 @@ export default function TeamPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {teamMembers
-                      .sort((a, b) => b.performance.rating - a.performance.rating)
+                    {employeeData
                       .slice(0, 5)
-                      .map((member, index) => (
-                        <div key={member.id} className="flex items-center justify-between">
+                      .map((employee, index) => (
+                        <div key={employee.toastGuid} className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-sm font-semibold">
                               {index + 1}
                             </div>
                             <div>
-                              <p className="font-medium text-sm">{member.name}</p>
-                              <p className="text-xs text-muted-foreground">{member.role}</p>
+                              <p className="font-medium text-sm">{employee.firstName} {employee.lastName}</p>
+                              <p className="text-xs text-muted-foreground">{employee.jobTitles?.[0]?.title || 'Employee'}</p>
                             </div>
                           </div>
                           <div className="text-right">
                             <div className="flex items-center">
                               <Star className="h-3 w-3 text-yellow-500 mr-1" />
-                              <span className="text-sm font-medium">{member.performance.rating}</span>
+                              <span className="text-sm font-medium">4.5</span>
                             </div>
                           </div>
                         </div>
@@ -494,35 +524,32 @@ export default function TeamPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredMembers.map((member) => (
-                      <TableRow key={member.id}>
+                    {filteredMembers.map((employee) => (
+                      <TableRow key={employee.toastGuid}>
                         <TableCell>
                           <div className="flex items-center space-x-3">
                             <Avatar>
-                              <AvatarImage src={member.avatar} alt={member.name} />
                               <AvatarFallback className="bg-orange-600 text-white">
-                                {member.name.split(" ").map(n => n[0]).join("")}
+                                {(employee.firstName?.[0] || '') + (employee.lastName?.[0] || '')}
                               </AvatarFallback>
                             </Avatar>
                             <div>
-                              <div className="font-medium text-foreground">{member.name}</div>
-                              <div className="text-sm text-muted-foreground">{member.email}</div>
+                              <div className="font-medium text-foreground">{employee.firstName} {employee.lastName}</div>
+                              <div className="text-sm text-muted-foreground">{employee.email || 'No email'}</div>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell>{member.role}</TableCell>
-                        <TableCell>{member.department}</TableCell>
+                        <TableCell>{employee.jobTitles?.[0]?.title || 'Employee'}</TableCell>
+                        <TableCell>Toast POS</TableCell>
                         <TableCell>
                           <div className="flex items-center">
                             <Star className="h-4 w-4 text-yellow-500 mr-1" />
-                            <span className={`font-medium ${getPerformanceColor(member.performance.rating)}`}>
-                              {member.performance.rating}
-                            </span>
+                            <span className="font-medium text-green-600">4.5</span>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className={`px-2 py-1 rounded-full text-xs capitalize ${getStatusColor(member.status)}`}>
-                            {member.status}
+                          <span className={`px-2 py-1 rounded-full text-xs capitalize ${employee.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                            {employee.isActive ? 'active' : 'inactive'}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -530,11 +557,18 @@ export default function TeamPage() {
                             <Button 
                               variant="outline" 
                               size="sm"
-                              onClick={() => setSelectedMember(member)}
+                              onClick={() => setSelectedMember(employee)}
                             >
                               <Edit className="h-4 w-4" />
                             </Button>
-                            <Button variant="outline" size="sm">
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => {
+                                setEmployeeToDelete(employee);
+                                setDeleteModalOpen(true);
+                              }}
+                            >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
@@ -550,52 +584,50 @@ export default function TeamPage() {
           {/* Performance Tab */}
           <TabsContent value="performance" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {teamMembers.filter(m => m.status === "active").map((member) => (
-                <Card key={member.id}>
+              {employeeData.filter(emp => emp.isActive).map((employee) => (
+                <Card key={employee.toastGuid}>
                   <CardHeader>
                     <div className="flex items-center space-x-3">
                       <Avatar>
-                        <AvatarImage src={member.avatar} alt={member.name} />
                         <AvatarFallback className="bg-orange-600 text-white">
-                          {member.name.split(" ").map(n => n[0]).join("")}
+                          {(employee.firstName?.[0] || '') + (employee.lastName?.[0] || '')}
                         </AvatarFallback>
                       </Avatar>
                       <div>
-                        <CardTitle className="text-lg">{member.name}</CardTitle>
-                        <CardDescription>{member.role} • {member.department}</CardDescription>
+                        <CardTitle className="text-lg">{employee.firstName} {employee.lastName}</CardTitle>
+                        <CardDescription>{employee.jobTitles?.[0]?.title || 'Employee'} • Toast POS</CardDescription>
                       </div>
                     </div>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="text-sm text-muted-foreground">Performance Rating</p>
-                        <div className="flex items-center">
-                          <Star className="h-4 w-4 text-yellow-500 mr-1" />
-                                                      <span className="font-semibold text-foreground">{member.performance.rating}/5</span>
-                        </div>
+                        <p className="text-sm text-muted-foreground">Toast Employee ID</p>
+                        <p className="font-semibold text-foreground text-xs">{employee.toastGuid}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-muted-foreground">On-Time Rate</p>
-                        <p className="font-semibold text-foreground">{member.performance.onTimeRate}%</p>
+                        <p className="text-sm text-muted-foreground">Email</p>
+                        <p className="font-semibold text-foreground text-sm">{employee.email || 'Not provided'}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-muted-foreground">Completed Shifts</p>
-                        <p className="font-semibold text-foreground">{member.performance.completedShifts}</p>
+                        <p className="text-sm text-muted-foreground">Last Sync</p>
+                        <p className="font-semibold text-foreground text-xs">{employee.lastSyncDate ? new Date(employee.lastSyncDate).toLocaleDateString() : 'Never'}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-muted-foreground">Sales Generated</p>
-                        <p className="font-semibold text-foreground">${member.performance.salesGenerated.toLocaleString()}</p>
+                        <p className="text-sm text-muted-foreground">Status</p>
+                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${employee.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          {employee.isActive ? 'Active' : 'Inactive'}
+                        </span>
                       </div>
                     </div>
                     <div className="mt-4">
-                      <p className="text-sm text-muted-foreground mb-2">Skills</p>
+                      <p className="text-sm text-muted-foreground mb-2">Job Titles</p>
                       <div className="flex flex-wrap gap-1">
-                        {member.skills.map((skill, index) => (
+                        {employee.jobTitles?.map((job, index) => (
                           <span key={index} className="px-2 py-1 text-xs rounded tag-orange">
-                            {skill}
+                            {job.title}
                           </span>
-                        ))}
+                        )) || <span className="text-xs text-muted-foreground">No job titles assigned</span>}
                       </div>
                     </div>
                   </CardContent>
@@ -612,14 +644,13 @@ export default function TeamPage() {
               <DialogHeader>
                 <div className="flex items-center space-x-3">
                   <Avatar className="h-12 w-12">
-                    <AvatarImage src={selectedMember.avatar} alt={selectedMember.name} />
                     <AvatarFallback className="bg-orange-600 text-white">
-                      {selectedMember.name.split(" ").map(n => n[0]).join("")}
+                      {(selectedMember.firstName?.[0] || '') + (selectedMember.lastName?.[0] || '')}
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <DialogTitle>{selectedMember.name}</DialogTitle>
-                    <DialogDescription>{selectedMember.role} • {selectedMember.department}</DialogDescription>
+                    <DialogTitle>{selectedMember.firstName} {selectedMember.lastName}</DialogTitle>
+                    <DialogDescription>{selectedMember.jobTitles?.[0]?.title || 'Employee'} • Toast POS</DialogDescription>
                   </div>
                 </div>
               </DialogHeader>
@@ -629,47 +660,137 @@ export default function TeamPage() {
                     <Label>Email</Label>
                     <div className="flex items-center space-x-2 mt-1">
                       <Mail className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedMember.email}</span>
+                      <span className="text-sm">{selectedMember.email || 'Not provided'}</span>
                     </div>
                   </div>
                   <div>
-                    <Label>Phone</Label>
+                    <Label>Toast Employee ID</Label>
                     <div className="flex items-center space-x-2 mt-1">
-                      <Phone className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedMember.phone}</span>
+                      <Award className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-xs font-mono">{selectedMember.toastGuid}</span>
                     </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label>Join Date</Label>
+                    <Label>Created Date</Label>
                     <div className="flex items-center space-x-2 mt-1">
                       <Calendar className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedMember.joinDate}</span>
+                      <span className="text-sm">{selectedMember.createdDate ? new Date(selectedMember.createdDate).toLocaleDateString() : 'Unknown'}</span>
                     </div>
                   </div>
                   <div>
-                    <Label>Hourly Rate</Label>
+                    <Label>Last Sync</Label>
                     <div className="flex items-center space-x-2 mt-1">
-                      <DollarSign className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">${selectedMember.hourlyRate}/hour</span>
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm">{selectedMember.lastSyncDate ? new Date(selectedMember.lastSyncDate).toLocaleDateString() : 'Never'}</span>
                     </div>
                   </div>
                 </div>
                 <div>
-                  <Label>Skills</Label>
+                  <Label>Job Titles</Label>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedMember.skills.map((skill, index) => (
-                      <span key={index} className="px-2 py-1 text-xs rounded tag-green">
-                        {skill}
-                      </span>
-                    ))}
+                    {selectedMember.jobTitles?.length > 0 ? 
+                      selectedMember.jobTitles.map((job: any, index: number) => (
+                        <span key={index} className="px-2 py-1 text-xs rounded tag-green">
+                          {job.title}
+                        </span>
+                      )) : 
+                      <span className="text-xs text-muted-foreground">No job titles assigned</span>
+                    }
+                  </div>
+                </div>
+                <div>
+                  <Label>Status</Label>
+                  <div className="mt-1">
+                    <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${selectedMember.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                      {selectedMember.isActive ? 'Active' : 'Inactive'}
+                    </span>
                   </div>
                 </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSelectedMember(null)}>Close</Button>
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white">Edit Profile</Button>
+                <Button className="bg-orange-600 hover:bg-orange-700 text-white" disabled>
+                  Sync from Toast
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* Delete Employee Modal */}
+        {employeeToDelete && (
+          <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <div className="flex items-center space-x-3">
+                  <div className="bg-red-100 rounded-full p-3">
+                    <Trash2 className="h-6 w-6 text-red-600" />
+                  </div>
+                  <div>
+                    <DialogTitle>Hide Employee</DialogTitle>
+                    <DialogDescription>
+                      Are you sure you want to hide this employee from your team list?
+                    </DialogDescription>
+                  </div>
+                </div>
+              </DialogHeader>
+              <div className="py-4">
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <div className="flex items-center space-x-3">
+                    <Avatar>
+                      <AvatarFallback className="bg-orange-600 text-white">
+                        {(employeeToDelete.firstName?.[0] || '') + (employeeToDelete.lastName?.[0] || '')}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="font-medium">{employeeToDelete.firstName} {employeeToDelete.lastName}</p>
+                      <p className="text-sm text-muted-foreground">{employeeToDelete.jobTitles?.[0]?.title || 'Employee'}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <div className="flex items-start space-x-2">
+                    <div className="text-blue-600 mt-0.5">
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-blue-800 font-medium">What happens when you hide an employee?</p>
+                      <ul className="text-xs text-blue-700 mt-1 space-y-1">
+                        <li>• They will be hidden from all team lists in Varuni</li>
+                        <li>• They can still be synced from Toast POS</li>
+                        <li>• You can unhide them later if needed</li>
+                        <li>• No data is permanently deleted</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setDeleteModalOpen(false);
+                    setEmployeeToDelete(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  variant="destructive"
+                  onClick={async () => {
+                    await deleteEmployeeLocally(employeeToDelete.toastGuid);
+                    setDeleteModalOpen(false);
+                    setEmployeeToDelete(null);
+                  }}
+                  className="bg-red-600 hover:bg-red-700"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Hide Employee
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>

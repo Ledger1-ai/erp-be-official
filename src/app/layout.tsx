@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Toaster } from "react-hot-toast";
+import { Toaster } from "sonner";
 import { ApolloWrapper } from "@/components/providers/apollo-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 
@@ -15,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning={true}>
       <body className="antialiased">
         <ThemeProvider>
           <ApolloWrapper>

@@ -51,8 +51,15 @@ export const apolloClient = new ApolloClient({
     typePolicies: {
       Query: {
         fields: {
+          inventoryItems: {
+            merge(existing = [], incoming) {
+              console.log('🔄 Apollo cache merge - existing:', existing?.length, 'incoming:', incoming?.length);
+              return incoming; // Always use fresh data
+            },
+          },
           getInventoryItems: {
             merge(existing = [], incoming) {
+              console.log('🔄 Apollo cache merge - existing:', existing?.length, 'incoming:', incoming?.length);
               return incoming;
             },
           },

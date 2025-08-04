@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
+import { useToastIntegration } from "@/lib/hooks/use-toast-integration";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,14 +104,7 @@ const systemUsers = [
   },
 ];
 
-const toastIntegration = {
-  status: "connected",
-  lastSync: "2025-01-22 14:30",
-  employeesImported: 24,
-  rolesImported: 6,
-  apiKey: "toast_live_...",
-  webhookUrl: "https://api.thegraineledger.com/webhooks/toast",
-};
+// Toast integration data is now provided by the hook
 
 const permissionsList = [
   { id: "dashboard", name: "Dashboard", description: "View dashboard and analytics" },
@@ -126,6 +120,15 @@ export default function SettingsPage() {
   const [selectedTab, setSelectedTab] = useState("permissions");
   const [isCreateRoleOpen, setIsCreateRoleOpen] = useState(false);
   const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  
+  const { 
+    integrationStatus: toastIntegration, 
+    restaurants,
+    selectedRestaurant,
+    setSelectedRestaurant,
+    testConnection,
+    performFullSync 
+  } = useToastIntegration();
 
   return (
     <DashboardLayout>
@@ -376,13 +379,47 @@ export default function SettingsPage() {
                   </div>
                   <div className="flex items-center space-x-2">
                     <span className={`px-2 py-1 rounded-full text-xs ${
-                      toastIntegration.status === "connected" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                      toastIntegration.status === "connected" ? "bg-green-100 text-green-700" : 
+                      toastIntegration.status === "connecting" ? "bg-yellow-100 text-yellow-700" :
+                      "bg-red-100 text-red-700"
                     }`}>
-                      {toastIntegration.status}
+                      {toastIntegration.status === "connecting" ? "Connecting..." : toastIntegration.status}
                     </span>
-                    <Button variant="outline" size="sm">
-                      Configure
-                    </Button>
+                    {toastIntegration.status === "connected" ? (
+                      <div className="flex space-x-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => performFullSync()}
+                          disabled={toastIntegration.isLoading}
+                        >
+                          {toastIntegration.isLoading ? "Syncing..." : "Sync from Toast"}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={async () => {
+                            if (selectedRestaurant) {
+                              await fetch(`/api/toast/employees/clear?restaurantGuid=${selectedRestaurant}`, { method: 'POST' });
+                              await performFullSync();
+                            }
+                          }}
+                          disabled={toastIntegration.isLoading}
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          Clear & Re-sync
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={testConnection}
+                        disabled={toastIntegration.isLoading}
+                      >
+                        {toastIntegration.isLoading ? "Connecting..." : "Connect"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -397,10 +434,41 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{toastIntegration.employeesImported} employees</p>
                   </div>
                   <div className="space-y-2">
-                    <Label>Roles Imported</Label>
-                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{toastIntegration.rolesImported} roles</p>
+                    <Label>Connected Restaurants</Label>
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{restaurants.length} restaurants</p>
                   </div>
                 </div>
+                
+                {/* Restaurant Selection */}
+                {restaurants.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Active Restaurant</Label>
+                    <select 
+                      value={selectedRestaurant || ''} 
+                      onChange={(e) => {
+                        console.log('Restaurant selected:', e.target.value);
+                        setSelectedRestaurant(e.target.value);
+                      }}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      {restaurants.map((restaurant) => (
+                        <option key={restaurant.guid} value={restaurant.guid}>
+                          {restaurant.restaurantName} - {restaurant.locationName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
+                {/* Error Display */}
+                {toastIntegration.error && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                    <div className="flex items-center space-x-2">
+                      <AlertTriangle className="h-4 w-4 text-red-600" />
+                      <p className="text-sm text-red-800">{toastIntegration.error}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 space-y-3">
                   <div>
                     <Label>API Key</Label>

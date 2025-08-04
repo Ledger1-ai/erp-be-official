@@ -73,6 +73,21 @@ export const typeDefs = gql`
     waste: Float
     reorderPoint: Float
     reorderQuantity: Float
+    syscoSKU: String
+    vendorSKU: String
+    casePackSize: String
+    vendorCode: String
+    syscoCategory: String
+    leadTimeDays: Int
+    minimumOrderQty: Int
+    pricePerCase: Float
+    lastOrderDate: Date
+    preferredVendor: String
+    alternateVendors: [String]
+    averageDailyUsage: Float
+    seasonalItem: Boolean
+    notes: String
+    brand: String
   }
 
   type Invoice {

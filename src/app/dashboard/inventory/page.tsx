@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
-import { QRCode } from "react-qrcode-logo";
+import { QRCodeSVG } from "qrcode.react";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import Webcam from "react-webcam";
 import {
@@ -48,13 +48,21 @@ import {
   Camera,
   ScanLine,
   Printer,
+  FileDown,
+  FileSpreadsheet,
   Settings,
-  Target,
   Palette,
   MousePointer2,
   Save,
   RefreshCw,
   Loader2,
+  Target,
+  BarChart as BarChartIcon,
+  Upload,
+  XCircle,
+  AlertCircle,
+  Eye,
+  FileText,
 } from "lucide-react";
 import { 
   useInventoryItems, 
@@ -65,7 +73,7 @@ import {
   useUpdateStock 
 } from "@/lib/hooks/use-graphql";
 import { format } from "date-fns";
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
 
 // TypeScript interfaces
 interface InventoryItem {
@@ -86,11 +94,33 @@ interface InventoryItem {
   barcode?: string;
   qrCode?: string;
   description?: string;
+  brand?: string;
   expiryDate?: string;
   waste?: number;
   wasteReason?: string;
   reorderPoint?: number;
   reorderQuantity?: number;
+  // Sysco-specific ordering fields
+  syscoSKU?: string;
+  vendorSKU?: string;
+  casePackSize?: number;
+  vendorCode?: string;
+  syscoCategory?: string;
+  leadTimeDays?: number;
+  minimumOrderQty?: number;
+  pricePerCase?: number;
+  lastOrderDate?: string;
+  preferredVendor?: string;
+  alternateVendors?: Array<{
+    name: string;
+    sku: string;
+    price: number;
+    leadTime: number;
+  }>;
+  // Additional tracking fields
+  averageDailyUsage?: number;
+  seasonalItem?: boolean;
+  notes?: string;
 }
 
 interface Suggestion {
@@ -173,6 +203,7 @@ export default function InventoryPage() {
   const [isQuantityModifierOpen, setIsQuantityModifierOpen] = useState(false);
   const [isCameraCountingOpen, setIsCameraCountingOpen] = useState(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
+  const [isVendorOrderExportOpen, setIsVendorOrderExportOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
   const [labelTemplate, setLabelTemplate] = useState(defaultLabelTemplate);
   const [dragState, setDragState] = useState<{
@@ -184,8 +215,19 @@ export default function InventoryPage() {
     element: null,
     offset: { x: 0, y: 0 },
   });
-  const [qrScanMode, setQrScanMode] = useState<'add-item' | 'quantity-modify'>('add-item');
+  const [qrScanMode, setQrScanMode] = useState<'add-item' | 'quantity-modify' | 'map-barcode'>('add-item');
   const [scannedData, setScannedData] = useState<string>("");
+  const [itemToMapBarcode, setItemToMapBarcode] = useState<any | null>(null);
+  const [barcodeLoading, setBarcodeLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // CSV Import states
+  const [isCSVImportOpen, setIsCSVImportOpen] = useState(false);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvPreviewData, setCsvPreviewData] = useState<any>(null);
+  const [csvImportLoading, setCsvImportLoading] = useState(false);
+  const [selectedImportItems, setSelectedImportItems] = useState<number[]>([]);
+  const [importStep, setImportStep] = useState<'upload' | 'review' | 'complete'>('upload');
   const [newItemForm, setNewItemForm] = useState({
     name: "",
     category: "",
@@ -201,6 +243,21 @@ export default function InventoryPage() {
     description: "",
     reorderPoint: "",
     reorderQuantity: "",
+    // Sysco-specific fields
+    syscoSKU: "",
+    vendorSKU: "",
+    casePackSize: "",
+    vendorCode: "",
+    syscoCategory: "",
+    leadTimeDays: "",
+    minimumOrderQty: "",
+    pricePerCase: "",
+    lastOrderDate: "",
+    preferredVendor: "",
+    alternateVendors: "",
+    averageDailyUsage: "",
+    seasonalItem: "",
+    notes: "",
   });
 
   // Camera counting state
@@ -241,22 +298,95 @@ export default function InventoryPage() {
   const inventoryItems = inventoryData?.inventoryItems || [];
   const lowStockItems = lowStockData?.lowStockItems || [];
 
+  // Helper functions for analytics
+  const getTotalValue = () => {
+    return inventoryItems.reduce((sum: number, item: any) => 
+      sum + (item.currentStock * item.costPerUnit), 0
+    );
+  };
+
+  const getWeeklyWaste = () => {
+    return inventoryItems.reduce((sum: number, item: any) => 
+      sum + (item.waste || 0) * item.costPerUnit, 0
+    );
+  };
+
   // Role-based access control
   const isAdmin = currentUserRole === "Super Admin" || currentUserRole === "Manager";
   const availableTabs = isAdmin
-    ? ["overview", "items", "suppliers", "analytics"]
-    : ["overview", "items"];
+    ? ["overview", "items", "recipes", "purchase-orders", "receiving", "suppliers", "counts", "analytics", "reports"]
+    : ["overview", "items", "recipes"];
 
-  // Sample data for charts and suppliers (until these are also connected to GraphQL)
-  const stockMovementData = [
-    { date: "Jan 15", usage: 85, received: 120 },
-    { date: "Jan 16", usage: 92, received: 0 },
-    { date: "Jan 17", usage: 78, received: 50 },
-    { date: "Jan 18", usage: 95, received: 0 },
-    { date: "Jan 19", usage: 88, received: 75 },
-    { date: "Jan 20", usage: 102, received: 0 },
-    { date: "Jan 21", usage: 90, received: 100 },
-  ];
+  // Enhanced stock movement data with real transaction data
+  const [movementPeriod, setMovementPeriod] = useState<'daily' | 'weekly' | 'yearly'>('daily');
+  const [movementDateRange, setMovementDateRange] = useState({
+    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days ago
+    end: new Date().toISOString().split('T')[0] // today
+  });
+  const [movementData, setMovementData] = useState<any[]>([]);
+  const [movementLoading, setMovementLoading] = useState(false);
+  const [hasMovementData, setHasMovementData] = useState(false);
+
+  // Fetch real inventory transaction data
+  const fetchMovementData = async () => {
+    setMovementLoading(true);
+    try {
+      const params = new URLSearchParams({
+        period: movementPeriod,
+        startDate: movementDateRange.start,
+        endDate: movementDateRange.end,
+      });
+
+      const response = await fetch(`/api/inventory/transactions?${params}`);
+      const result = await response.json();
+
+      if (result.success) {
+        setMovementData(result.data);
+        setHasMovementData(result.data.length > 0 && result.totalTransactions > 0);
+      } else {
+        console.error('Failed to fetch movement data:', result.error);
+        setMovementData([]);
+        setHasMovementData(false);
+      }
+    } catch (error) {
+      console.error('Error fetching movement data:', error);
+      setMovementData([]);
+      setHasMovementData(false);
+    } finally {
+      setMovementLoading(false);
+    }
+  };
+
+  // Fetch movement data when period or date range changes
+  useEffect(() => {
+    fetchMovementData();
+  }, [movementPeriod, movementDateRange]);
+
+  // Set appropriate date ranges based on period
+  const handlePeriodChange = (period: 'daily' | 'weekly' | 'yearly') => {
+    setMovementPeriod(period);
+    const today = new Date();
+    let startDate: Date;
+
+    switch (period) {
+      case 'daily':
+        startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days
+        break;
+      case 'weekly':
+        startDate = new Date(today.getTime() - 12 * 7 * 24 * 60 * 60 * 1000); // 12 weeks
+        break;
+      case 'yearly':
+        startDate = new Date(today.getFullYear() - 3, 0, 1); // 3 years
+        break;
+      default:
+        startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days
+    }
+
+    setMovementDateRange({
+      start: startDate.toISOString().split('T')[0],
+      end: today.toISOString().split('T')[0]
+    });
+  };
 
   const suppliers = [
     {
@@ -344,6 +474,7 @@ export default function InventoryPage() {
   // Handle form submission for creating new inventory item
   const handleCreateItem = async () => {
     try {
+      setIsLoading(true);
       await createInventoryItem({
         variables: {
           input: {
@@ -381,9 +512,25 @@ export default function InventoryPage() {
         description: "",
         reorderPoint: "",
         reorderQuantity: "",
+        syscoSKU: "",
+        vendorSKU: "",
+        casePackSize: "",
+        vendorCode: "",
+        syscoCategory: "",
+        leadTimeDays: "",
+        minimumOrderQty: "",
+        pricePerCase: "",
+        lastOrderDate: "",
+        preferredVendor: "",
+        alternateVendors: "",
+        averageDailyUsage: "",
+        seasonalItem: "",
+        notes: "",
       });
     } catch (error: any) {
       toast.error(error.message || 'Failed to create inventory item');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -472,6 +619,20 @@ export default function InventoryPage() {
       description: item.description || "",
       reorderPoint: item.reorderPoint?.toString() || "",
       reorderQuantity: item.reorderQuantity?.toString() || "",
+      syscoSKU: item.syscoSKU || "",
+      vendorSKU: item.vendorSKU || "",
+      casePackSize: item.casePackSize?.toString() || "",
+      vendorCode: item.vendorCode || "",
+      syscoCategory: item.syscoCategory || "",
+      leadTimeDays: item.leadTimeDays?.toString() || "",
+      minimumOrderQty: item.minimumOrderQty?.toString() || "",
+      pricePerCase: item.pricePerCase?.toString() || "",
+      lastOrderDate: item.lastOrderDate || "",
+      preferredVendor: item.preferredVendor || "",
+      alternateVendors: item.alternateVendors || "",
+      averageDailyUsage: item.averageDailyUsage?.toString() || "",
+      seasonalItem: item.seasonalItem?.toString() || "",
+      notes: item.notes || "",
     });
     setIsEditItemOpen(true);
   };
@@ -499,10 +660,102 @@ export default function InventoryPage() {
 
   const getCriticalItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "critical");
   const getLowStockItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "low");
-  const getTotalValue = () => inventoryItems.reduce((sum: number, item: InventoryItem) => sum + (item.currentStock * item.costPerUnit), 0);
-  const getWeeklyWaste = () => inventoryItems.reduce((sum: number, item: InventoryItem) => sum + ((item.waste || 0) * item.costPerUnit), 0);
 
 
+
+  // Vendor Order Export Functions
+  const exportVendorOrder = () => {
+    const lowStockItems = inventoryItems.filter((item: any) => 
+      item.currentStock <= (item.reorderPoint || item.minThreshold)
+    );
+    
+    // Group by supplier
+    const ordersBySupplier = lowStockItems.reduce((acc: any, item: any) => {
+      const supplier = item.supplier || 'Unknown Supplier';
+      if (!acc[supplier]) {
+        acc[supplier] = [];
+      }
+      acc[supplier].push(item);
+      return acc;
+    }, {} as Record<string, InventoryItem[]>);
+
+    // Generate order data
+    const orderData = Object.entries(ordersBySupplier).map(([supplier, items]) => {
+      const itemArray = items as any[];
+      return {
+        supplier,
+        items: itemArray.map((item: any) => ({
+          name: item.name,
+          sku: item.sku,
+          syscoSKU: item.syscoSKU,
+          vendorSKU: item.vendorSKU,
+          vendorCode: item.vendorCode,
+          currentStock: item.currentStock,
+          neededQuantity: (item.reorderQuantity || item.maxCapacity) - item.currentStock,
+          unit: item.unit,
+          casePackSize: item.casePackSize,
+          minimumOrderQty: item.minimumOrderQty,
+          costPerUnit: item.costPerUnit,
+          pricePerCase: item.pricePerCase,
+          totalCost: ((item.reorderQuantity || item.maxCapacity) - item.currentStock) * item.costPerUnit,
+          leadTimeDays: item.leadTimeDays,
+          syscoCategory: item.syscoCategory,
+          urgency: item.currentStock <= item.minThreshold ? 'High' : 'Medium',
+          notes: item.notes
+        })),
+        totalItems: itemArray.length,
+        totalCost: itemArray.reduce((sum: number, item: any) => 
+          sum + (((item.reorderQuantity || item.maxCapacity) - item.currentStock) * item.costPerUnit), 0
+        )
+      };
+    });
+
+    return orderData;
+  };
+
+  const downloadCSV = () => {
+    const orderData = exportVendorOrder();
+    
+    let csvContent = "Supplier,Item Name,SKU,Sysco SKU,Vendor SKU,Vendor Code,Current Stock,Needed Quantity,Unit,Case Pack Size,Min Order Qty,Cost Per Unit,Price Per Case,Total Cost,Lead Time (Days),Sysco Category,Urgency,Notes\n";
+    
+    orderData.forEach((order: any) => {
+      (order.items as any[]).forEach((item: any) => {
+        csvContent += `"${order.supplier}","${item.name}","${item.sku || ''}","${item.syscoSKU || ''}","${item.vendorSKU || ''}","${item.vendorCode || ''}",${item.currentStock},${item.neededQuantity},"${item.unit}",${item.casePackSize || 1},${item.minimumOrderQty || 1},${item.costPerUnit.toFixed(2)},${item.pricePerCase?.toFixed(2) || '0.00'},${item.totalCost.toFixed(2)},${item.leadTimeDays || 1},"${item.syscoCategory || ''}","${item.urgency}","${item.notes || ''}"\n`;
+      });
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `sysco-vendor-order-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadJSON = () => {
+    const orderData = exportVendorOrder();
+    
+    const exportData = {
+      generatedDate: new Date().toISOString(),
+      totalSuppliers: orderData.length,
+      totalItems: orderData.reduce((sum, order) => sum + order.totalItems, 0),
+      totalCost: orderData.reduce((sum, order) => sum + order.totalCost, 0),
+      orders: orderData
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `vendor-order-${new Date().toISOString().split('T')[0]}.json`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // QR Code generation function
   const generateQRData = (item: InventoryItem) => {
@@ -519,13 +772,330 @@ export default function InventoryPage() {
     });
   };
 
+  // Lookup barcode in internal database
+  const lookupBarcode = async (barcode: string) => {
+    try {
+      setBarcodeLoading(true);
+      const response = await fetch(`/api/inventory/barcode-mapping?barcode=${encodeURIComponent(barcode)}`);
+      const data = await response.json();
+      
+      if (data.found) {
+        return data.item;
+      }
+      return null;
+    } catch (error) {
+      console.error('Barcode lookup error:', error);
+      return null;
+    } finally {
+      setBarcodeLoading(false);
+    }
+  };
+
+  // Map barcode to existing item
+  const mapBarcodeToItem = async (itemId: string, scannedBarcode: string) => {
+    try {
+      setBarcodeLoading(true);
+      const response = await fetch('/api/inventory/barcode-mapping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId,
+          scannedBarcode,
+          mappedBy: 'user' // Could be current user ID
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success('Barcode mapped successfully! 🎯');
+        return true;
+      } else {
+        toast.error(data.error || 'Failed to map barcode');
+        return false;
+      }
+    } catch (error) {
+      console.error('Barcode mapping error:', error);
+      toast.error('Failed to map barcode');
+      return false;
+    } finally {
+      setBarcodeLoading(false);
+    }
+  };
+
+  // CSV Import functions
+  const handleCSVUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type === 'text/csv') {
+      setCsvFile(file);
+    } else {
+      toast.error('Please select a valid CSV file');
+    }
+  };
+
+  const previewCSVData = async () => {
+    if (!csvFile) return;
+    
+    try {
+      setCsvImportLoading(true);
+      const formData = new FormData();
+      formData.append('csvFile', csvFile);
+      formData.append('action', 'preview');
+
+      const response = await fetch('/api/inventory/csv-import', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        setCsvPreviewData(data);
+        setImportStep('review');
+        toast.success(`Parsed ${data.totalParsed} items successfully! 📊`);
+      } else {
+        toast.error(data.error || 'Failed to parse CSV');
+      }
+    } catch (error) {
+      console.error('CSV preview error:', error);
+      toast.error('Failed to preview CSV data');
+    } finally {
+      setCsvImportLoading(false);
+    }
+  };
+
+  const importSelectedItems = async () => {
+    if (!csvFile || selectedImportItems.length === 0) return;
+    
+    try {
+      setCsvImportLoading(true);
+      const formData = new FormData();
+      formData.append('csvFile', csvFile);
+      formData.append('action', 'import');
+      formData.append('selectedItems', JSON.stringify(selectedImportItems));
+
+      const response = await fetch('/api/inventory/csv-import', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        setImportStep('complete');
+        refetchInventory(); // Refresh inventory list
+        
+        // Show detailed success/error information
+        if (data.imported > 0) {
+          toast.success(`Imported ${data.imported} items successfully! 🎉`);
+        }
+        if (data.errors && data.errors.length > 0) {
+          console.error('Import errors:', data.errors);
+          // Show specific error details
+          const errorDetails = data.errors.map((err: any) => 
+            `${err.item}: ${err.error}`
+          ).join('\n');
+          console.log('Error details:\n', errorDetails);
+          toast.error(`${data.errors.length} items failed to import. See console for details.`);
+        }
+        if (data.imported === 0 && data.errors.length === 0) {
+          toast.warning('No items were imported. All items may already exist.');
+        }
+      } else {
+        console.error('Import response error:', data);
+        toast.error(data.error || 'Failed to import items');
+      }
+    } catch (error) {
+      console.error('CSV import error:', error);
+      toast.error('Failed to import CSV data');
+    } finally {
+      setCsvImportLoading(false);
+    }
+  };
+
+  const resetCSVImport = () => {
+    setCsvFile(null);
+    setCsvPreviewData(null);
+    setSelectedImportItems([]);
+    setImportStep('upload');
+    setIsCSVImportOpen(false);
+  };
+
+  const toggleItemSelection = (index: number) => {
+    setSelectedImportItems(prev => 
+      prev.includes(index) 
+        ? prev.filter(i => i !== index)
+        : [...prev, index]
+    );
+  };
+
+  const selectAllNewItems = () => {
+    if (!csvPreviewData) return;
+    const newItemIndices = csvPreviewData.items
+      .map((item: any, index: number) => ({ item, index }))
+      .filter(({ item }: { item: any }) => !item.isDuplicate)
+      .map(({ index }: { index: number }) => index);
+    setSelectedImportItems(newItemIndices);
+  };
+
+  const debugInventoryDatabase = async () => {
+    try {
+      const response = await fetch('/api/inventory/debug');
+      const data = await response.json();
+      
+      if (response.ok) {
+        console.log('🔍 Database Debug Info:', data);
+        toast.success(`Database has ${data.stats.totalItems} items (${data.stats.itemsCreatedToday} created today)`);
+      } else {
+        toast.error('Failed to fetch debug info');
+      }
+    } catch (error) {
+      console.error('Debug error:', error);
+      toast.error('Failed to fetch debug info');
+    }
+  };
+
+  const testDirectInventoryFetch = async () => {
+    try {
+      const response = await fetch('/api/inventory/list');
+      const data = await response.json();
+      
+      if (response.ok) {
+        console.log('Direct REST API found:', data.total, 'items');
+        console.log('GraphQL hook shows:', inventoryItems.length, 'items');
+        
+        // Force replace the GraphQL data with REST data for testing
+        if (data.items && data.items.length > inventoryItems.length) {
+          toast.success(`REST API has ${data.total} items vs GraphQL ${inventoryItems.length}. Check server logs.`);
+          console.log('First 5 REST items:', data.items.slice(0, 5));
+        }
+      } else {
+        toast.error('REST API failed');
+      }
+    } catch (error) {
+      toast.error('Test failed');
+    }
+  };
+
+  const checkSchema = async () => {
+    try {
+      const response = await fetch('/api/inventory/schema-check');
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('📋 Current schema enum values:', data.categoryEnum);
+        toast.success(`Schema check: ${data.categoryEnum.length} categories available`);
+      } else {
+        toast.error('Schema check failed');
+      }
+    } catch (error) {
+      toast.error('Schema check error');
+    }
+  };
+
+  const clearAllInventory = async () => {
+    if (!confirm('⚠️ This will DELETE ALL inventory items! Are you sure?')) {
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/inventory/clear', {
+        method: 'DELETE'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        toast.success(`✅ Deleted ${data.deleted} items`);
+        refetchInventory(); // Refresh the list
+      } else {
+        toast.error('Failed to clear inventory');
+      }
+    } catch (error) {
+      toast.error('Error clearing inventory');
+    }
+  };
+
+  const forceCacheRefresh = async () => {
+    console.log('🔄 Forcing complete Apollo cache reset...');
+    
+    try {
+      // Clear Apollo cache completely
+      await refetchInventory();
+      
+      // Also clear local cache
+      if (typeof window !== 'undefined' && window.location) {
+        // Force a hard refresh of GraphQL data
+        window.location.reload();
+      }
+      
+      toast.success('Cache cleared! Page will refresh...');
+    } catch (error) {
+      console.error('Cache refresh error:', error);
+      toast.error('Cache refresh failed');
+    }
+  };
+
   // QR Scan handler
-  const handleQRScan = (result: any) => {
+  const handleQRScan = async (result: any) => {
     if (result && result.length > 0) {
       const scannedText = result[0].rawValue;
       setScannedData(scannedText);
       
+      if (qrScanMode === 'map-barcode') {
+        // Map barcode mode - link scanned barcode to existing item
+        if (itemToMapBarcode) {
+          const success = await mapBarcodeToItem(itemToMapBarcode._id, scannedText);
+          if (success) {
+            setItemToMapBarcode(null);
+            refetchInventory(); // Refresh list
+          }
+        }
+        setIsQRScannerOpen(false);
+        return;
+      }
+
+      // First, check if this barcode is already in our internal database
+      const existingItem = await lookupBarcode(scannedText);
+      if (existingItem && qrScanMode === 'add-item') {
+        // Auto-populate from internal mapping
+        setNewItemForm({
+          name: existingItem.name || "",
+          category: existingItem.category || "",
+          sku: existingItem.syscoSKU || existingItem.vendorSKU || "",
+          barcode: scannedText,
+          unit: existingItem.unit || "",
+          costPerUnit: existingItem.costPerUnit?.toString() || "",
+          supplier: existingItem.supplier || "",
+          currentStock: "",
+          minThreshold: "",
+          maxCapacity: "",
+          location: "",
+          description: "",
+          reorderPoint: "",
+          reorderQuantity: "",
+          syscoSKU: existingItem.syscoSKU || "",
+          vendorSKU: existingItem.vendorSKU || "",
+          casePackSize: existingItem.casePackSize?.toString() || "",
+          vendorCode: existingItem.vendorCode || "",
+          syscoCategory: existingItem.syscoCategory || "",
+          leadTimeDays: existingItem.leadTimeDays?.toString() || "",
+          minimumOrderQty: existingItem.minimumOrderQty?.toString() || "",
+          pricePerCase: existingItem.pricePerCase?.toString() || "",
+          lastOrderDate: existingItem.lastOrderDate || "",
+          preferredVendor: existingItem.preferredVendor || "",
+          alternateVendors: existingItem.alternateVendors || "",
+          averageDailyUsage: existingItem.averageDailyUsage?.toString() || "",
+          seasonalItem: existingItem.seasonalItem?.toString() || "",
+          notes: existingItem.notes || "",
+        });
+        toast.success('Item details auto-populated from barcode! 🎯');
+        setIsQRScannerOpen(false);
+        return;
+      }
+      
       try {
+        // Try to parse as QR code JSON data
         const parsedData = JSON.parse(scannedText);
         if (qrScanMode === 'add-item') {
           setNewItemForm({
@@ -543,15 +1113,34 @@ export default function InventoryPage() {
             description: "",
             reorderPoint: "",
             reorderQuantity: "",
+            syscoSKU: parsedData.syscoSKU || "",
+            vendorSKU: parsedData.vendorSKU || "",
+            casePackSize: parsedData.casePackSize?.toString() || "",
+            vendorCode: parsedData.vendorCode || "",
+            syscoCategory: parsedData.syscoCategory || "",
+            leadTimeDays: parsedData.leadTimeDays?.toString() || "",
+            minimumOrderQty: parsedData.minimumOrderQty?.toString() || "",
+            pricePerCase: parsedData.pricePerCase?.toString() || "",
+            lastOrderDate: parsedData.lastOrderDate || "",
+            preferredVendor: parsedData.preferredVendor || "",
+            alternateVendors: parsedData.alternateVendors || "",
+            averageDailyUsage: parsedData.averageDailyUsage?.toString() || "",
+            seasonalItem: parsedData.seasonalItem?.toString() || "",
+            notes: parsedData.notes || "",
           });
         }
       } catch (error) {
         console.error("Failed to parse QR data:", error);
-        // Handle as plain text or barcode
+        // Handle as plain barcode - just populate barcode field
+        if (qrScanMode === 'add-item') {
         setNewItemForm(prev => ({
           ...prev,
           barcode: scannedText,
         }));
+          if (!existingItem) {
+            toast.info('Barcode captured! Fill in the details to create your mapping. 📋');
+          }
+        }
       }
       
       setIsQRScannerOpen(false);
@@ -1346,10 +1935,70 @@ export default function InventoryPage() {
               <Printer className="mr-2 h-4 w-4" />
               Label Designer
             </Button>
+            <div className="relative">
+              <Button 
+                variant="outline"
+                onClick={() => setIsVendorOrderExportOpen(!isVendorOrderExportOpen)}
+              >
+                <FileDown className="mr-2 h-4 w-4" />
+                Export Vendor Orders
+              </Button>
+              {isVendorOrderExportOpen && (
+                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
+                  <div className="p-2">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start"
+                      onClick={() => {
+                        downloadCSV();
+                        setIsVendorOrderExportOpen(false);
+                      }}
+                    >
+                      <FileSpreadsheet className="mr-2 h-4 w-4" />
+                      Export as CSV
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start"
+                      onClick={() => {
+                        downloadJSON();
+                        setIsVendorOrderExportOpen(false);
+                      }}
+                    >
+                      <FileDown className="mr-2 h-4 w-4" />
+                      Export as JSON
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <Button 
+              variant="outline" 
+              onClick={checkSchema}
+              className="border-blue-600 text-blue-600 hover:bg-blue-50"
+            >
+              📋 Check Schema
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={clearAllInventory}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              🗑️ Clear All
+            </Button>
+            <div className="flex space-x-2">
             <Button variant="outline">
               <Download className="mr-2 h-4 w-4" />
               Export Report
             </Button>
+              <Button variant="outline" onClick={testDirectInventoryFetch} size="sm">
+                📡 Test API
+              </Button>
+              <Button variant="outline" onClick={forceCacheRefresh} size="sm">
+                🔄 Refresh
+              </Button>
+            </div>
+            <div className="flex space-x-2">
             <Dialog open={isAddItemOpen} onOpenChange={setIsAddItemOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-orange-600 hover:bg-orange-700 text-white">
@@ -1357,6 +2006,222 @@ export default function InventoryPage() {
                   Add Item
                 </Button>
               </DialogTrigger>
+              </Dialog>
+              
+              <Dialog open={isCSVImportOpen} onOpenChange={setIsCSVImportOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="border-orange-600 text-orange-600 hover:bg-orange-50">
+                    <Upload className="mr-2 h-4 w-4" />
+                    Import CSV
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Import Sysco CSV Order</DialogTitle>
+                    <DialogDescription>
+                      Upload your Sysco order CSV to bulk import items and detect duplicates
+                    </DialogDescription>
+                  </DialogHeader>
+                  
+                  {importStep === 'upload' && (
+                    <div className="py-6">
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+                        <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                        <div className="mt-4">
+                          <label htmlFor="csv-upload" className="cursor-pointer">
+                            <span className="mt-2 block text-sm font-medium text-gray-900">
+                              {csvFile ? csvFile.name : 'Drop your Sysco CSV here or click to browse'}
+                            </span>
+                            <input
+                              id="csv-upload"
+                              type="file"
+                              accept=".csv"
+                              className="hidden"
+                              onChange={handleCSVUpload}
+                            />
+                          </label>
+                          <p className="mt-2 text-xs text-gray-500">
+                            CSV files only. Maximum 10MB.
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {csvFile && (
+                        <div className="mt-4 flex justify-center">
+                          <Button 
+                            onClick={previewCSVData}
+                            disabled={csvImportLoading}
+                            className="bg-orange-600 hover:bg-orange-700"
+                          >
+                            {csvImportLoading ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Eye className="mr-2 h-4 w-4" />
+                            )}
+                            Preview & Analyze
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {importStep === 'review' && csvPreviewData && (
+                    <div className="py-4">
+                      <div className="grid grid-cols-3 gap-4 mb-6">
+                        <div className="bg-blue-50 p-4 rounded-lg">
+                          <div className="flex items-center">
+                            <FileText className="h-6 w-6 text-blue-600" />
+                            <div className="ml-3">
+                              <p className="text-sm font-medium text-blue-900">Total Items</p>
+                              <p className="text-lg font-semibold text-blue-600">{csvPreviewData.totalParsed}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="bg-green-50 p-4 rounded-lg">
+                          <div className="flex items-center">
+                            <CheckCircle className="h-6 w-6 text-green-600" />
+                            <div className="ml-3">
+                              <p className="text-sm font-medium text-green-900">New Items</p>
+                              <p className="text-lg font-semibold text-green-600">{csvPreviewData.summary.new}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="bg-yellow-50 p-4 rounded-lg">
+                          <div className="flex items-center">
+                            <AlertCircle className="h-6 w-6 text-yellow-600" />
+                            <div className="ml-3">
+                              <p className="text-sm font-medium text-yellow-900">Duplicates</p>
+                              <p className="text-lg font-semibold text-yellow-600">{csvPreviewData.summary.duplicates}</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="flex space-x-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={selectAllNewItems}
+                          >
+                            Select All New
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedImportItems([])}
+                          >
+                            Clear Selection
+                          </Button>
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {selectedImportItems.length} items selected for import
+                        </p>
+                      </div>
+                      
+                      <div className="max-h-96 overflow-y-auto border rounded-lg">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                                <input 
+                                  type="checkbox" 
+                                  checked={selectedImportItems.length === csvPreviewData.items.filter((item: any) => !item.isDuplicate).length}
+                                  onChange={selectAllNewItems}
+                                />
+                              </th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">SUPC</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {csvPreviewData.items.map((item: any, index: number) => (
+                              <tr key={index} className={item.isDuplicate ? 'bg-yellow-50' : 'bg-white'}>
+                                <td className="px-3 py-2">
+                                  <input 
+                                    type="checkbox"
+                                    disabled={item.isDuplicate}
+                                    checked={selectedImportItems.includes(index)}
+                                    onChange={() => toggleItemSelection(index)}
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  {item.isDuplicate ? (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                      <AlertCircle className="w-3 h-3 mr-1" />
+                                      Duplicate
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                      <CheckCircle className="w-3 h-3 mr-1" />
+                                      New
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-sm text-gray-900">{item.name}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.syscoSUPC}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.category}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">${item.costPerUnit}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      
+                      <div className="flex justify-between mt-6">
+                        <Button variant="outline" onClick={() => setImportStep('upload')}>
+                          Back
+                        </Button>
+                        <Button 
+                          onClick={importSelectedItems}
+                          disabled={selectedImportItems.length === 0 || csvImportLoading}
+                          className="bg-orange-600 hover:bg-orange-700"
+                        >
+                          {csvImportLoading ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="mr-2 h-4 w-4" />
+                          )}
+                          Import {selectedImportItems.length} Items
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {importStep === 'complete' && (
+                    <div className="py-8 text-center">
+                      <CheckCircle className="mx-auto h-12 w-12 text-green-600" />
+                      <h3 className="mt-4 text-lg font-medium text-gray-900">Import Complete!</h3>
+                      <p className="mt-2 text-sm text-gray-600">
+                        Your Sysco items have been processed. You can now map barcodes to them.
+                      </p>
+                      <div className="mt-6 flex justify-center space-x-2 flex-wrap gap-2">
+                        <Button variant="outline" onClick={debugInventoryDatabase}>
+                          🔍 Debug Database
+                        </Button>
+                        <Button variant="outline" onClick={testDirectInventoryFetch}>
+                          📡 Test Direct Fetch
+                        </Button>
+                        <Button variant="outline" onClick={forceCacheRefresh}>
+                          🔄 Force Refresh
+                        </Button>
+                        <Button variant="outline" onClick={resetCSVImport}>
+                          Import Another CSV
+                        </Button>
+                        <Button onClick={resetCSVImport} className="bg-orange-600 hover:bg-orange-700">
+                          Done
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
+            </div>
+            
+            <Dialog open={isAddItemOpen} onOpenChange={setIsAddItemOpen}>
               <DialogContent className="max-w-4xl">
                 <DialogHeader>
                   <DialogTitle>Add New Inventory Item</DialogTitle>
@@ -1379,7 +2244,14 @@ export default function InventoryPage() {
                           <QrCode className="mr-2 h-4 w-4" />
                           Scan QR Code
                         </Button>
-                        <Button variant="outline" size="sm">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => {
+                            setQrScanMode('add-item');
+                            setIsQRScannerOpen(true);
+                          }}
+                        >
                           <ScanLine className="mr-2 h-4 w-4" />
                           Scan Barcode
                         </Button>
@@ -1510,10 +2382,116 @@ export default function InventoryPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Sysco Ordering Information */}
+                  <div className="border-t pt-4">
+                    <h3 className="font-medium text-foreground mb-4">📦 Sysco Ordering Information</h3>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="sysco-sku">Sysco SKU</Label>
+                          <Input 
+                            id="sysco-sku" 
+                            placeholder="Sysco product number" 
+                            value={newItemForm.syscoSKU || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, syscoSKU: e.target.value }))}
+                          />
                 </div>
-                <DialogFooter>
+                        <div>
+                          <Label htmlFor="vendor-sku">Vendor SKU</Label>
+                          <Input 
+                            id="vendor-sku" 
+                            placeholder="Supplier product number" 
+                            value={newItemForm.vendorSKU || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, vendorSKU: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="vendor-code">Vendor Code</Label>
+                          <Input 
+                            id="vendor-code" 
+                            placeholder="Supplier identifier" 
+                            value={newItemForm.vendorCode || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, vendorCode: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="sysco-category">Sysco Category</Label>
+                          <Input 
+                            id="sysco-category" 
+                            placeholder="Sysco classification" 
+                            value={newItemForm.syscoCategory || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, syscoCategory: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="case-pack-size">Case Pack Size</Label>
+                          <Input 
+                            id="case-pack-size" 
+                            type="number" 
+                            placeholder="Units per case" 
+                            value={newItemForm.casePackSize || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, casePackSize: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="min-order-qty">Min Order Quantity</Label>
+                          <Input 
+                            id="min-order-qty" 
+                            type="number" 
+                            placeholder="Minimum order" 
+                            value={newItemForm.minimumOrderQty || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, minimumOrderQty: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="price-per-case">Price Per Case</Label>
+                          <Input 
+                            id="price-per-case" 
+                            type="number" 
+                            step="0.01" 
+                            placeholder="0.00" 
+                            value={newItemForm.pricePerCase || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, pricePerCase: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="lead-time">Lead Time (Days)</Label>
+                          <Input 
+                            id="lead-time" 
+                            type="number" 
+                            placeholder="Delivery time" 
+                            value={newItemForm.leadTimeDays || ''}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, leadTimeDays: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <Label htmlFor="notes">Notes</Label>
+                      <Textarea 
+                        id="notes" 
+                        placeholder="Additional notes about this item..." 
+                        value={newItemForm.notes || ''}
+                        onChange={(e) => setNewItemForm(prev => ({ ...prev, notes: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter className="flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-2">
+                  <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+                    <ScanLine className="h-4 w-4" />
+                    <span>💡 Tip: Add item first, then map barcode for future scans</span>
+                  </div>
+                  <div className="flex space-x-2">
                   <Button variant="outline" onClick={() => setIsAddItemOpen(false)}>Cancel</Button>
-                  <Button className="bg-orange-600 hover:bg-orange-700 text-white">Add Item & Generate Label</Button>
+                    <Button onClick={handleCreateItem} disabled={isLoading} className="bg-orange-600 hover:bg-orange-700 text-white">
+                      {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                      Add Item
+                    </Button>
+                  </div>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -1686,16 +2664,71 @@ export default function InventoryPage() {
               </Card>
             </div>
 
-            {/* Stock Movement Chart */}
+            {/* Enhanced Stock Movement Chart */}
             {isAdmin && (
               <Card>
                 <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
                   <CardTitle>Stock Movement Trends</CardTitle>
-                  <CardDescription>Daily usage vs. received inventory</CardDescription>
+                      <CardDescription>Real-time inventory flow analysis</CardDescription>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      {/* Period Selection */}
+                      <div className="flex items-center space-x-2">
+                        <Label className="text-sm font-medium">Period:</Label>
+                        <Select value={movementPeriod} onValueChange={(value: 'daily' | 'weekly' | 'yearly') => handlePeriodChange(value)}>
+                          <SelectTrigger className="w-24">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="daily">Daily</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                            <SelectItem value="yearly">Yearly</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      {/* Date Range Selection */}
+                      <div className="flex items-center space-x-2">
+                        <Label className="text-sm font-medium">From:</Label>
+                        <Input
+                          type="date"
+                          value={movementDateRange.start}
+                          onChange={(e) => setMovementDateRange(prev => ({ ...prev, start: e.target.value }))}
+                          className="w-36"
+                        />
+                        <Label className="text-sm font-medium">To:</Label>
+                        <Input
+                          type="date"
+                          value={movementDateRange.end}
+                          onChange={(e) => setMovementDateRange(prev => ({ ...prev, end: e.target.value }))}
+                          className="w-36"
+                        />
+                      </div>
+
+                      {/* Refresh Button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={fetchMovementData}
+                        disabled={movementLoading}
+                      >
+                        {movementLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent>
+                  <div className="relative">
+                    {/* Chart Container */}
+                    <div className={`transition-all duration-300 ${!hasMovementData ? 'blur-sm pointer-events-none' : ''}`}>
                   <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={stockMovementData}>
+                        <LineChart data={hasMovementData ? movementData : []}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
                       <XAxis 
                         dataKey="date" 
@@ -1708,15 +2741,721 @@ export default function InventoryPage() {
                         axisLine={{ stroke: "#e2e8f0" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
-                      <Tooltip content={<CustomChartTooltip />} />
-                      <Line type="monotone" dataKey="usage" stroke="#ef4444" strokeWidth={2} />
-                      <Line type="monotone" dataKey="received" stroke="#22c55e" strokeWidth={2} />
+                          <Tooltip 
+                            content={({ active, payload, label }) => {
+                              if (active && payload && payload.length > 0) {
+                                return (
+                                  <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+                                    <p className="font-medium text-gray-900 dark:text-gray-100">{label}</p>
+                                    {payload.map((entry, index) => (
+                                      <p key={index} style={{ color: entry.color }} className="text-sm">
+                                        {entry.name}: {entry.value} units
+                                      </p>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="usage" 
+                            stroke="#ef4444" 
+                            strokeWidth={2} 
+                            name="Usage"
+                            dot={{ r: 4 }}
+                            activeDot={{ r: 6 }}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="received" 
+                            stroke="#22c55e" 
+                            strokeWidth={2} 
+                            name="Received"
+                            dot={{ r: 4 }}
+                            activeDot={{ r: 6 }}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="netMovement" 
+                            stroke="#3b82f6" 
+                            strokeWidth={2} 
+                            name="Net Movement"
+                            dot={{ r: 4 }}
+                            activeDot={{ r: 6 }}
+                            strokeDasharray="5 5"
+                          />
                     </LineChart>
                   </ResponsiveContainer>
+                    </div>
+
+                    {/* Data Unavailable Overlay */}
+                    {!hasMovementData && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+                        <div className="text-center">
+                          <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center">
+                            <BarChartIcon className="w-8 h-8 text-gray-400" />
+                          </div>
+                          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
+                            More Data Required
+                          </h3>
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 max-w-xs">
+                            {movementLoading 
+                              ? "Loading transaction data..." 
+                              : "No inventory transactions found for the selected period. Start recording transactions to view trends."
+                            }
+                          </p>
+                          {!movementLoading && (
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => setSelectedTab('items')}
+                            >
+                              Manage Inventory
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Loading Overlay */}
+                    {movementLoading && hasMovementData && (
+                      <div className="absolute top-4 right-4">
+                        <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
+                          <div className="flex items-center space-x-2">
+                            <Loader2 className="h-4 w-4 animate-spin text-orange-600" />
+                            <span className="text-sm text-gray-600 dark:text-gray-300">Updating...</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Chart Legend & Summary */}
+                  {hasMovementData && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                        <div className="flex items-center space-x-2">
+                          <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                          <span className="text-gray-600 dark:text-gray-300">Usage (Outbound)</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                          <span className="text-gray-600 dark:text-gray-300">Received (Inbound)</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="w-3 h-0.5 bg-blue-500"></div>
+                          <span className="text-gray-600 dark:text-gray-300">Net Movement</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-gray-500 dark:text-gray-400">
+                            {movementData.length} data points
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
           </TabsContent>
+
+          {/* Recipes Tab */}
+          <TabsContent value="recipes" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center">
+                      <Package className="mr-2 h-5 w-5" />
+                      Recipe Management & Costing
+                    </CardTitle>
+                    <CardDescription>Manage recipes, ingredient costing, and food cost analysis</CardDescription>
+                  </div>
+                  <div className="flex space-x-2">
+                    <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                      <Plus className="mr-2 h-4 w-4" />
+                      New Recipe
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {/* Recipe Cards */}
+                  <div className="bg-card border border-border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-medium">Chicken Fajitas</h3>
+                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Active</span>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost:</span>
+                        <span>$8.50</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Menu Price:</span>
+                        <span>$16.95</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost %:</span>
+                        <span className="text-green-600 font-medium">25.1%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Margin:</span>
+                        <span className="font-medium">$8.45</span>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-border">
+                      <div className="flex space-x-2">
+                        <Button size="sm" variant="outline">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          <Download className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-card border border-border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-medium">Caesar Salad</h3>
+                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Active</span>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost:</span>
+                        <span>$3.25</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Menu Price:</span>
+                        <span>$12.95</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost %:</span>
+                        <span className="text-green-600 font-medium">25.1%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Margin:</span>
+                        <span className="font-medium">$9.70</span>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-border">
+                      <div className="flex space-x-2">
+                        <Button size="sm" variant="outline">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          <Download className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-card border border-border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-medium">House Burger</h3>
+                      <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs">High Cost</span>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost:</span>
+                        <span>$7.80</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Menu Price:</span>
+                        <span>$14.95</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Food Cost %:</span>
+                        <span className="text-red-600 font-medium">52.2%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Margin:</span>
+                        <span className="font-medium">$7.15</span>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-border">
+                      <div className="flex space-x-2">
+                        <Button size="sm" variant="outline">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          <Download className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Purchase Orders Tab */}
+          {isAdmin && (
+            <TabsContent value="purchase-orders" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        <Truck className="mr-2 h-5 w-5" />
+                        Purchase Order Management
+                      </CardTitle>
+                      <CardDescription>Create, track, and manage purchase orders</CardDescription>
+                    </div>
+                    <div className="flex space-x-2">
+                      <Button variant="outline">
+                        <Download className="mr-2 h-4 w-4" />
+                        Export POs
+                      </Button>
+                      <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create PO
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Draft POs</p>
+                            <p className="text-2xl font-bold">3</p>
+                          </div>
+                          <Clock className="h-8 w-8 text-yellow-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Pending</p>
+                            <p className="text-2xl font-bold">7</p>
+                          </div>
+                          <Truck className="h-8 w-8 text-blue-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">This Month</p>
+                            <p className="text-2xl font-bold">$12,450</p>
+                          </div>
+                          <TrendingUp className="h-8 w-8 text-green-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Average PO</p>
+                            <p className="text-2xl font-bold">$890</p>
+                          </div>
+                          <Package className="h-8 w-8 text-purple-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>PO Number</TableHead>
+                        <TableHead>Supplier</TableHead>
+                        <TableHead>Order Date</TableHead>
+                        <TableHead>Expected Delivery</TableHead>
+                        <TableHead>Total</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-medium">PO-2024-001</TableCell>
+                        <TableCell>Sysco Foods</TableCell>
+                        <TableCell>Jan 15, 2024</TableCell>
+                        <TableCell>Jan 17, 2024</TableCell>
+                        <TableCell>$1,245.50</TableCell>
+                        <TableCell>
+                          <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Received</span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex space-x-2">
+                            <Button size="sm" variant="outline">View</Button>
+                            <Button size="sm" variant="outline">Print</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">PO-2024-002</TableCell>
+                        <TableCell>Fresh Farm Co</TableCell>
+                        <TableCell>Jan 16, 2024</TableCell>
+                        <TableCell>Jan 18, 2024</TableCell>
+                        <TableCell>$890.25</TableCell>
+                        <TableCell>
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">Sent</span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex space-x-2">
+                            <Button size="sm" variant="outline">View</Button>
+                            <Button size="sm" variant="outline">Track</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* Receiving Tab */}
+          {isAdmin && (
+            <TabsContent value="receiving" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        <CheckCircle className="mr-2 h-5 w-5" />
+                        Receiving & Quality Control
+                      </CardTitle>
+                      <CardDescription>Receive shipments, perform quality checks, and update inventory</CardDescription>
+                    </div>
+                    <div className="flex space-x-2">
+                      <Button variant="outline">
+                        <Download className="mr-2 h-4 w-4" />
+                        Receiving Report
+                      </Button>
+                      <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Receive Shipment
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <Card>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Expected Today</p>
+                              <p className="text-2xl font-bold">4</p>
+                              <p className="text-xs text-muted-foreground">shipments</p>
+                            </div>
+                            <Clock className="h-8 w-8 text-orange-600" />
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Received Today</p>
+                              <p className="text-2xl font-bold">2</p>
+                              <p className="text-xs text-muted-foreground">shipments</p>
+                            </div>
+                            <CheckCircle className="h-8 w-8 text-green-600" />
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Quality Issues</p>
+                              <p className="text-2xl font-bold">1</p>
+                              <p className="text-xs text-muted-foreground">this week</p>
+                            </div>
+                            <AlertTriangle className="h-8 w-8 text-red-600" />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <div className="bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg p-4">
+                      <h3 className="font-medium text-orange-900 dark:text-orange-100 mb-2">📦 Expected Deliveries Today</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-medium">Sysco Foods - PO-2024-002</p>
+                            <p className="text-sm text-muted-foreground">Expected: 10:00 AM - 12:00 PM</p>
+                          </div>
+                          <Button size="sm" className="bg-orange-600 hover:bg-orange-700">
+                            Start Receiving
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-medium">Fresh Farm Co - PO-2024-003</p>
+                            <p className="text-sm text-muted-foreground">Expected: 2:00 PM - 4:00 PM</p>
+                          </div>
+                          <Button size="sm" variant="outline">
+                            View PO
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* Inventory Counts Tab */}
+          {isAdmin && (
+            <TabsContent value="counts" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        <Scale className="mr-2 h-5 w-5" />
+                        Inventory Counts & Audits
+                      </CardTitle>
+                      <CardDescription>Physical counts, cycle counts, and variance analysis</CardDescription>
+                    </div>
+                    <div className="flex space-x-2">
+                      <Button variant="outline">
+                        <Download className="mr-2 h-4 w-4" />
+                        Count Report
+                      </Button>
+                      <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Schedule Count
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Last Count</p>
+                            <p className="text-lg font-bold">Jan 15</p>
+                            <p className="text-xs text-green-600">98.5% Accuracy</p>
+                          </div>
+                          <Calendar className="h-8 w-8 text-blue-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Variance</p>
+                            <p className="text-lg font-bold text-red-600">-$127.50</p>
+                            <p className="text-xs text-muted-foreground">This month</p>
+                          </div>
+                          <TrendingDown className="h-8 w-8 text-red-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Scheduled</p>
+                            <p className="text-lg font-bold">3</p>
+                            <p className="text-xs text-muted-foreground">Next week</p>
+                          </div>
+                          <Clock className="h-8 w-8 text-orange-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Avg Accuracy</p>
+                            <p className="text-lg font-bold text-green-600">97.2%</p>
+                            <p className="text-xs text-muted-foreground">6 months</p>
+                          </div>
+                          <Target className="h-8 w-8 text-green-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Count Number</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Items</TableHead>
+                        <TableHead>Variance</TableHead>
+                        <TableHead>Accuracy</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-medium">CNT-2024-001</TableCell>
+                        <TableCell>Full Physical</TableCell>
+                        <TableCell>Jan 15, 2024</TableCell>
+                        <TableCell>143</TableCell>
+                        <TableCell className="text-red-600">-$45.20</TableCell>
+                        <TableCell className="text-green-600">98.5%</TableCell>
+                        <TableCell>
+                          <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Completed</span>
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline">View Report</Button>
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">CNT-2024-002</TableCell>
+                        <TableCell>Cycle Count</TableCell>
+                        <TableCell>Jan 20, 2024</TableCell>
+                        <TableCell>28</TableCell>
+                        <TableCell className="text-green-600">+$12.50</TableCell>
+                        <TableCell className="text-green-600">96.8%</TableCell>
+                        <TableCell>
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">In Progress</span>
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline">Continue</Button>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* Enhanced Reports Tab */}
+          {isAdmin && (
+            <TabsContent value="reports" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        <BarChart className="mr-2 h-5 w-5" />
+                        Advanced Reports & Analytics
+                      </CardTitle>
+                      <CardDescription>Comprehensive reporting and business intelligence</CardDescription>
+                    </div>
+                    <div className="flex space-x-2">
+                      <Button variant="outline">
+                        <Download className="mr-2 h-4 w-4" />
+                        Export All Reports
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">Food Cost Analysis</h3>
+                          <TrendingUp className="h-5 w-5 text-green-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Detailed food cost percentages, trends, and variance analysis
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">ABC Analysis</h3>
+                          <Package className="h-5 w-5 text-blue-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Categorize inventory by value and importance for optimization
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">Supplier Performance</h3>
+                          <Truck className="h-5 w-5 text-purple-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          On-time delivery, quality ratings, and cost analysis
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">Waste Analysis</h3>
+                          <TrendingDown className="h-5 w-5 text-red-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Track waste patterns, reasons, and cost impact
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">Recipe Profitability</h3>
+                          <Scale className="h-5 w-5 text-orange-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Menu item margins, food costs, and pricing optimization
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+                      <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-medium">Inventory Turnover</h3>
+                          <Clock className="h-5 w-5 text-teal-600" />
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Track inventory velocity and cash flow optimization
+                        </p>
+                        <Button size="sm" variant="outline" className="w-full">
+                          Generate Report
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
 
           {/* Items Tab - Restaurant Standard Inventory */}
           <TabsContent value="items" className="space-y-6">
@@ -1774,7 +3513,7 @@ export default function InventoryPage() {
                           <TableCell>
                             <div>
                               <p className="font-medium text-foreground">{item.name}</p>
-                              <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>
+                              <p className="text-sm text-muted-foreground">SKU: {item.syscoSKU || item.vendorSKU || 'N/A'}</p>
                               <p className="text-xs text-muted-foreground">${item.costPerUnit}/{item.unit}</p>
                             </div>
                           </TableCell>
@@ -1794,13 +3533,11 @@ export default function InventoryPage() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">
-                              <QRCode
+                              <QRCodeSVG
                                 value={generateQRData(item)}
                                 size={32}
-                                logoImage="/tgl.png"
-                                logoWidth={8}
-                                logoHeight={8}
-                                qrStyle="squares"
+                                includeMargin={true}
+                                level="M"
                               />
                               <Button 
                                 variant="outline" 
@@ -1824,6 +3561,19 @@ export default function InventoryPage() {
                                 onClick={() => setSelectedItem(item)}
                               >
                                 <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => {
+                                  setItemToMapBarcode(item);
+                                  setQrScanMode('map-barcode');
+                                  setIsQRScannerOpen(true);
+                                }}
+                                className={item.barcodeMapping?.scannedBarcode ? "bg-green-50 border-green-200 text-green-700" : ""}
+                                title={item.barcodeMapping?.scannedBarcode ? `Mapped: ${item.barcodeMapping.scannedBarcode}` : "Map Sysco barcode to this item"}
+                              >
+                                <ScanLine className="h-4 w-4" />
                               </Button>
                               {isAdmin && (
                                 <Button variant="outline" size="sm">
@@ -1889,31 +3639,93 @@ export default function InventoryPage() {
                   <CardDescription>Detailed performance metrics and trends</CardDescription>
                 </CardHeader>
                 <CardContent>
+                  {/* Enhanced Analytics Cards */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg">
-                      <p className="text-sm font-medium text-muted-foreground">Inventory Turnover</p>
-                      <p className="text-2xl font-bold text-blue-600">6.2x</p>
-                      <p className="text-xs text-muted-foreground">per year</p>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Total Value</p>
+                            <p className="text-2xl font-bold">${getTotalValue().toLocaleString()}</p>
+                            <p className="text-xs text-green-600">+2.5% month</p>
                     </div>
-                    <div className="bg-green-50 dark:bg-green-950/20 p-4 rounded-lg">
-                      <p className="text-sm font-medium text-muted-foreground">Waste Percentage</p>
-                      <p className="text-2xl font-bold text-green-600">2.1%</p>
-                      <p className="text-xs text-muted-foreground">of total cost</p>
+                          <Package className="h-8 w-8 text-blue-600" />
                     </div>
-                    <div className="bg-yellow-50 dark:bg-yellow-950/20 p-4 rounded-lg">
-                      <p className="text-sm font-medium text-muted-foreground">Avg Days on Hand</p>
-                      <p className="text-2xl font-bold text-yellow-600">5.8</p>
-                      <p className="text-xs text-muted-foreground">days supply</p>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Food Cost %</p>
+                            <p className="text-2xl font-bold">28.5%</p>
+                            <p className="text-xs text-green-600">Target: 30%</p>
                     </div>
-                    <div className="bg-purple-50 dark:bg-purple-950/20 p-4 rounded-lg">
-                      <p className="text-sm font-medium text-muted-foreground">Cost Variance</p>
-                      <p className="text-2xl font-bold text-purple-600">-1.2%</p>
-                      <p className="text-xs text-muted-foreground">vs budget</p>
+                          <TrendingDown className="h-8 w-8 text-green-600" />
+                    </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Weekly Waste</p>
+                            <p className="text-2xl font-bold">${getWeeklyWaste().toFixed(0)}</p>
+                            <p className="text-xs text-red-600">+12% week</p>
+                          </div>
+                          <AlertTriangle className="h-8 w-8 text-red-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Turnover Rate</p>
+                            <p className="text-2xl font-bold">6.2x</p>
+                            <p className="text-xs text-green-600">Above average</p>
+                          </div>
+                          <TrendingUp className="h-8 w-8 text-green-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                  
+                  {/* AI Insights Section */}
+                  <div className="mb-6 p-4 bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+                    <div className="flex items-center mb-3">
+                      <Brain className="mr-2 h-5 w-5 text-orange-600" />
+                      <h3 className="font-medium text-orange-900 dark:text-orange-100">AI-Powered Insights</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
+                        <div className="flex items-center mb-2">
+                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                          <span className="text-sm font-medium">Auto-Reorder Active</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">12 items scheduled for reordering</p>
+                      </div>
+                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
+                        <div className="flex items-center mb-2">
+                          <div className="w-2 h-2 bg-yellow-500 rounded-full mr-2"></div>
+                          <span className="text-sm font-medium">Price Alerts</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">3 items with price increases</p>
+                      </div>
+                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
+                        <div className="flex items-center mb-2">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                          <span className="text-sm font-medium">Usage Forecast</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">15% protein increase predicted</p>
+                      </div>
                     </div>
                   </div>
                   
+                  <div className="relative">
+                    <div className={`transition-all duration-300 ${!hasMovementData ? 'blur-sm pointer-events-none' : ''}`}>
                   <ResponsiveContainer width="100%" height={400}>
-                    <BarChart data={stockMovementData}>
+                        <BarChart data={hasMovementData ? movementData : []}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
                       <XAxis 
                         dataKey="date" 
@@ -1926,11 +3738,53 @@ export default function InventoryPage() {
                         axisLine={{ stroke: "#e2e8f0" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
-                      <Tooltip content={<CustomChartTooltip />} />
-                      <Bar dataKey="usage" fill="#ef4444" />
-                      <Bar dataKey="received" fill="#22c55e" />
+                          <Tooltip 
+                            content={({ active, payload, label }) => {
+                              if (active && payload && payload.length > 0) {
+                                return (
+                                  <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+                                    <p className="font-medium text-gray-900 dark:text-gray-100">{label}</p>
+                                    {payload.map((entry, index) => (
+                                      <p key={index} style={{ color: entry.color }} className="text-sm">
+                                        {entry.name}: {entry.value} units
+                                      </p>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                          <Bar dataKey="usage" fill="#ef4444" name="Daily Usage" />
+                          <Bar dataKey="received" fill="#22c55e" name="Received" />
                     </BarChart>
                   </ResponsiveContainer>
+                    </div>
+
+                    {/* Analytics Data Unavailable Overlay */}
+                    {!hasMovementData && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+                        <div className="text-center">
+                          <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center">
+                            <BarChartIcon className="w-8 h-8 text-gray-400" />
+                          </div>
+                          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
+                            Analytics Unavailable
+                          </h3>
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 max-w-xs">
+                            Advanced analytics require transaction history. Start using the inventory system to generate insights.
+                          </p>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => setSelectedTab('overview')}
+                          >
+                            View Overview
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -2235,13 +4089,11 @@ export default function InventoryPage() {
                          }}
                          onMouseDown={(e) => handleMouseDown(e, 'qrCode')}
                        >
-                         <QRCode
+                         <QRCodeSVG
                            value="sample-inventory-qr-data"
                            size={labelTemplate.elements.qrCode.width}
-                           logoImage="/tgl.png"
-                           logoWidth={labelTemplate.elements.qrCode.width * 0.2}
-                           logoHeight={labelTemplate.elements.qrCode.height * 0.2}
-                           qrStyle="squares"
+                           includeMargin={true}
+                           level="M"
                            bgColor="#ffffff"
                            fgColor="#000000"
                          />
@@ -2930,9 +4782,16 @@ export default function InventoryPage() {
         <Dialog open={isQRScannerOpen} onOpenChange={setIsQRScannerOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>Scan QR Code</DialogTitle>
+              <DialogTitle>
+                {qrScanMode === 'map-barcode' ? 'Map Sysco Barcode' : 'Scan QR Code'}
+              </DialogTitle>
               <DialogDescription>
-                {qrScanMode === 'add-item' ? 'Scan to populate item details' : 'Scan to identify item for quantity update'}
+                {qrScanMode === 'add-item' 
+                  ? 'Scan to auto-populate item details from your internal database or capture new barcode' 
+                  : qrScanMode === 'map-barcode' 
+                  ? `Scan the Sysco barcode to link it with "${itemToMapBarcode?.name}"`
+                  : 'Scan to identify item for quantity update'
+                }
               </DialogDescription>
             </DialogHeader>
             <div className="py-4">
@@ -3026,12 +4885,11 @@ export default function InventoryPage() {
                 <div className="border-t pt-4">
                   <Label>QR Code for this Item</Label>
                   <div className="flex items-center space-x-4 mt-2">
-                    <QRCode
+                    <QRCodeSVG
                       value={generateQRData(selectedItem)}
                       size={80}
-                      logoImage="/tgl.png"
-                      logoWidth={16}
-                      logoHeight={16}
+                      includeMargin={true}
+                      level="M"
                     />
                     <Button onClick={() => printLabel(selectedItem)}>
                       <Printer className="mr-2 h-4 w-4" />

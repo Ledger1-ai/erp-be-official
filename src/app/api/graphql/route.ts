@@ -23,7 +23,15 @@ const globalForApollo = globalThis as unknown as {
   serverStartPromise: Promise<void> | undefined;
 };
 
+// Force clear the Apollo server to pick up schema changes
+if (globalForApollo.apolloServer) {
+  console.log('🔄 Clearing cached Apollo Server for schema refresh');
+  globalForApollo.apolloServer = undefined;
+  globalForApollo.serverStartPromise = undefined;
+}
+
 function createApolloServer() {
+  console.log('🚀 Creating new Apollo Server instance');
   return new ApolloServer<Context>({
     typeDefs,
     resolvers,

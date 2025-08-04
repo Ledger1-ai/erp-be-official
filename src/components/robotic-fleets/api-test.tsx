@@ -13,7 +13,7 @@ import {
   Terminal
 } from "lucide-react";
 // Client-side component - uses API routes to avoid importing server-side gRPC code
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
 
 export default function APITest() {
   const [isTestingAuth, setIsTestingAuth] = useState(false);

@@ -4,6 +4,7 @@ import { Shift } from '../models/Shift';
 import { InventoryItem } from '../models/InventoryItem';
 import { Invoice } from '../models/Invoice';
 import { Analytics } from '../models/Analytics';
+import mongoose from 'mongoose';
 import { 
   requireAuth, 
   requirePermission, 
@@ -122,18 +123,15 @@ export const resolvers = {
     },
 
     // Inventory queries - Allow read access but filter data
-    inventoryItems: async (_: any, __: any, context: AuthContext) => {
+    inventoryItems: async () => {
+      console.log('*** GraphQL inventoryItems resolver called ***');
+      
       try {
-        // If authenticated and has permission, return all data
-        if (context.isAuthenticated && context.hasPermission('inventory')) {
-          return await InventoryItem.find({});
-        }
-        
-        // For demo purposes, return some basic inventory data even without auth
-        // In production, this would return empty array
-        return await InventoryItem.find({}).limit(5);
+        const items = await InventoryItem.find({}).sort({ createdAt: -1 });
+        console.log(`*** GraphQL returning ${items.length} items ***`);
+        return items;
       } catch (error) {
-        console.error('Error fetching inventory items:', error);
+        console.error('*** GraphQL error:', error);
         return [];
       }
     },
