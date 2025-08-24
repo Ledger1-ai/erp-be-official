@@ -172,7 +172,11 @@ export class ToastAPIClient {
    * Get all employees for a restaurant
    */
   public async getEmployees(restaurantGuid: string, page = 1, pageSize = 100): Promise<ToastAPIResponse<ToastEmployee>> {
-    const endpoint = `/labor/v1/employees`;
+    // Prefer v2 if available, fallback to v1
+    const endpoints = [
+      `/labor/v2/employees`,
+      `/labor/v1/employees`,
+    ];
     
     // Toast API - remove employeeIds to get all employees, or pagination might not be supported
     const queryParams: Record<string, string> = {};
@@ -189,8 +193,19 @@ export class ToastAPIClient {
     console.log(`🔍 Employee API call with Toast-Restaurant-External-ID header: ${restaurantGuid}`);
 
     try {
-      // First try with GUID as external-id
-      const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+      // First try v2 then v1
+      let response: any;
+      let lastError: any = null;
+      for (const ep of endpoints) {
+        try {
+          response = await this.makeRequest<any>(ep, 'GET', undefined, queryParams, headers);
+          break;
+        } catch (err) {
+          lastError = err;
+          continue;
+        }
+      }
+      if (!response) throw lastError || new Error('Toast employees request failed');
         
       // Log response for debugging
       if (process.env.NODE_ENV === 'development') {
@@ -211,7 +226,7 @@ export class ToastAPIClient {
       
       console.log(`📊 Total employees from Toast: ${allEmployees.length}, Active: ${activeEmployees.length}`);
       
-      // Use flexible schema for employees
+      // Use flexible schema for employees (v2 adds deleted/archived/jobReferences)
       const flexibleEmployeeSchema = z.object({
         guid: z.string(),
         entityType: z.string().optional(),
@@ -224,6 +239,12 @@ export class ToastAPIClient {
           tip: z.boolean(),
           hourlyRate: z.number().optional(),
         })).optional(),
+        jobReferences: z.array(z.object({
+          guid: z.string().optional(),
+          jobTitleGuid: z.string().optional(),
+          jobTitleName: z.string().optional(),
+          title: z.string().optional(),
+        })).optional(),
         externalId: z.string().optional().nullable(),
         createdDate: z.union([z.string(), z.number()]).optional(),
         modifiedDate: z.union([z.string(), z.number()]).optional(),
@@ -231,26 +252,67 @@ export class ToastAPIClient {
         // Additional fields that might be present
         employeeId: z.string().optional(),
         status: z.string().optional(),
+        deleted: z.boolean().optional(),
+        archived: z.boolean().optional(),
       }).transform((data) => {
+        // Prefer roles from jobReferences if provided
+        let normalizedJobTitles = (data.jobReferences && data.jobReferences.length > 0)
+          ? data.jobReferences.map((r: any) => ({
+              guid: r.jobTitleGuid || r.guid || 'unknown',
+              title: r.jobTitleName || r.title || '',
+              tip: false,
+            }))
+          : (data.jobTitles || []);
+        // If titles came back empty strings, fallback to config endpoint for mapping
+        const hasMissingTitles = normalizedJobTitles.some((jt: any) => !jt.title);
+        // Note: cannot call async inside transform; mapping will be enhanced post-parse below
+
+        const archivedOrDeleted = data.deleted === true || data.archived === true;
+        const computedDeletedDate = archivedOrDeleted
+          ? new Date().toISOString()
+          : (data.deletedDate ? (typeof data.deletedDate === 'number' ? new Date(data.deletedDate).toISOString() : data.deletedDate) : undefined);
         return {
           guid: data.guid,
           entityType: data.entityType || 'Employee',
           firstName: data.firstName,
           lastName: data.lastName,
           email: data.email || undefined,
-          jobTitles: data.jobTitles || [],
+          jobTitles: normalizedJobTitles,
           externalId: data.externalId || undefined,
           createdDate: typeof data.createdDate === 'number' ? new Date(data.createdDate).toISOString() : 
                       data.createdDate || new Date().toISOString(),
           modifiedDate: typeof data.modifiedDate === 'number' ? new Date(data.modifiedDate).toISOString() : 
                        data.modifiedDate || new Date().toISOString(),
-          deletedDate: data.deletedDate ? 
-                      (typeof data.deletedDate === 'number' ? new Date(data.deletedDate).toISOString() : data.deletedDate) : 
-                      undefined,
+          deletedDate: computedDeletedDate,
+          // Pass through flags for downstream logic
+          deletedFlag: data.deleted === true,
+          archivedFlag: data.archived === true,
+          status: data.status || undefined,
         };
       });
       
-      const validatedEmployees = activeEmployees.map((emp: any) => flexibleEmployeeSchema.parse(emp));
+      let validatedEmployeesRaw = activeEmployees.map((emp: any) => flexibleEmployeeSchema.parse(emp));
+
+      // Post-parse enhancement: fill missing job titles via config map
+      const needsRoleMap = validatedEmployeesRaw.some((e: any) => (e.jobTitles || []).some((jt: any) => !jt.title));
+      if (needsRoleMap) {
+        try {
+          const rolesMap = await this.getJobTitlesMap(restaurantGuid);
+          validatedEmployeesRaw = validatedEmployeesRaw.map((e: any) => ({
+            ...e,
+            jobTitles: (e.jobTitles || []).map((jt: any) => ({
+              ...jt,
+              title: jt.title || rolesMap[jt.guid] || 'Employee',
+            })),
+          }));
+        } catch {}
+      }
+
+      // Exclude archived/deleted again post-normalization just in case
+      const validatedEmployees = validatedEmployeesRaw.filter((emp: any) => {
+        const dd = emp.deletedDate;
+        return !dd || (typeof dd === 'string' && dd.includes('1970-01-01'));
+      });
 
       console.log(`Found ${validatedEmployees.length} employees from Toast API`);
 
@@ -267,16 +329,17 @@ export class ToastAPIClient {
         console.log(`❌ Failed with restaurant-external-id header. Trying alternate approaches...`);
         
         // Try with different approaches based on Toast docs
-        const alternativeHeaders = [
+        const alternativeHeaders: Record<string, string | undefined>[] = [
           { 'Toast-Restaurant-External-ID': restaurantGuid }, // Exact format
-          { 'restaurant-external-id': restaurantGuid },
+          { 'restaurant-external-id': restaurantGuid as unknown as string },
           {}, // Try without the header
         ];
         
         for (const altHeaders of alternativeHeaders) {
           try {
             console.log(`🔄 Trying alternative headers:`, altHeaders);
-            const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams, altHeaders);
+            const cleanHeaders = Object.fromEntries(Object.entries(altHeaders).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+            const response = await this.makeRequest<any>(endpoints[0], 'GET', undefined, queryParams, cleanHeaders);
             
             // If successful, process the response the same way
             const allEmployees = Array.isArray(response) ? response : response.data || [];
@@ -287,7 +350,25 @@ export class ToastAPIClient {
                      deletedDate === "1970-01-01T00:00:00.000+0000" ||
                      deletedDate.includes("1970-01-01");
             });
-            const validatedEmployees = activeEmployees.map((emp: any) => flexibleEmployeeSchema.parse(emp));
+            // Basic normalization without schema (fallback path)
+            const validatedEmployees = activeEmployees
+              .map((emp: any) => ({
+                guid: emp.guid,
+                entityType: emp.entityType || 'Employee',
+                firstName: emp.firstName,
+                lastName: emp.lastName,
+                email: emp.email || undefined,
+                jobTitles: (emp.jobReferences || emp.jobTitles || []).map((r: any) => ({
+                  guid: r.jobTitleGuid || r.guid || 'unknown',
+                  title: r.jobTitleName || r.title || 'Employee',
+                  tip: false,
+                })),
+                externalId: emp.externalId || undefined,
+                createdDate: emp.createdDate,
+                modifiedDate: emp.modifiedDate,
+                deletedDate: emp.deleted === true || emp.archived === true ? new Date().toISOString() : emp.deletedDate,
+              }))
+              .filter((emp: any) => !emp.deletedDate || (typeof emp.deletedDate === 'string' && emp.deletedDate.includes('1970-01-01')));
             
             console.log(`✅ Found ${validatedEmployees.length} employees with alternative header approach`);
             
@@ -305,7 +386,7 @@ export class ToastAPIClient {
       }
       
       const errorHandler = ToastErrorHandler.getInstance();
-      const toastError = errorHandler.handleError(error, endpoint, false); // Don't show toast on server
+      const toastError = errorHandler.handleError(error, endpoints[0], false); // Don't show toast on server
       throw new Error(toastError.message);
     }
   }
@@ -344,6 +425,24 @@ export class ToastAPIClient {
   }
 
   // Order Management APIs
+
+  /**
+   * Get job titles/config mapping (jobTitleGuid -> name) for a restaurant
+   */
+  public async getJobTitlesMap(restaurantGuid: string): Promise<Record<string, string>> {
+    // Per Toast docs, jobs are available under Labor v1: /labor/v1/jobs
+    // https://doc.toasttab.com/openapi/labor/operation/jobsGet/
+    const headers = { 'Toast-Restaurant-External-ID': restaurantGuid };
+    const response = await this.makeRequest<any>(`/labor/v1/jobs`, 'GET', undefined, undefined, headers);
+    const items = Array.isArray(response) ? response : response?.data || [];
+    const map: Record<string, string> = {};
+    for (const item of items) {
+      const guid = item.guid || item.jobTitleGuid || item.id;
+      const name = item.title || item.name || item.jobTitleName;
+      if (guid && name) map[guid] = name;
+    }
+    return map;
+  }
 
   /**
    * Get orders for a specific date range
@@ -453,17 +552,19 @@ export class ToastAPIClient {
       isoCreatedDate: z.string().optional(),
       isoModifiedDate: z.string().optional(),
     }).transform((data) => {
+      const address = data.address || {} as any;
       return {
         guid: data.guid || data.restaurantGuid || data.id || restaurantGuid,
         entityType: data.entityType || 'Restaurant',
         restaurantName: data.restaurantName || data.name || 'Unknown Restaurant',
         locationName: data.locationName || data.name || 'Unknown Location',
-        address: data.address || {
-          address1: '',
-          city: '',
-          stateCode: '',
-          zipCode: '',
-          country: 'US',
+        address: {
+          address1: address.address1 || '',
+          address2: address.address2 || undefined,
+          city: address.city || '',
+          stateCode: address.stateCode || '',
+          zipCode: address.zipCode || '',
+          country: address.country || 'US',
         },
         phoneNumber: data.phoneNumber || '',
         emailAddress: data.emailAddress || '',

@@ -260,7 +260,7 @@ export function useToastIntegration() {
   };
 
   // Load employees from database
-  const loadEmployees = async (restaurantGuid?: string | Event) => {
+  const loadEmployees = async (restaurantGuid?: string | Event, options?: { includeInactive?: boolean }) => {
     // Handle case where this is called from an event handler
     let targetRestaurant: string;
     if (typeof restaurantGuid === 'string') {
@@ -273,11 +273,11 @@ export function useToastIntegration() {
 
     console.log('Loading employees for restaurant:', targetRestaurant);
     try {
-      const response = await fetch(`/api/toast/employees?restaurantGuid=${encodeURIComponent(targetRestaurant)}`);
+      const response = await fetch(`/api/toast/employees?restaurantGuid=${encodeURIComponent(targetRestaurant)}${options?.includeInactive ? '&includeInactive=true' : ''}`);
       const data = await response.json();
       
       if (data.success) {
-        console.log(`Loaded ${data.data.length} employees from database:`, data.data.map(emp => `${emp.firstName} ${emp.lastName} (${emp.isLocallyDeleted ? 'HIDDEN' : 'VISIBLE'})`));
+        console.log(`Loaded ${data.data.length} employees from database:`, data.data.map((emp: { firstName: any; lastName: any; isLocallyDeleted: any; }) => `${emp.firstName} ${emp.lastName} (${emp.isLocallyDeleted ? 'HIDDEN' : 'VISIBLE'})`));
         setEmployees(data.data);
       } else {
         console.error('Failed to load employees:', data.error);
@@ -411,6 +411,20 @@ export function useToastIntegration() {
       getSyncStatus(selectedRestaurant);
     }
   }, [selectedRestaurant]);
+
+  // Auto-sync every 30 minutes on client when connected and a restaurant is selected
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!selectedRestaurant) return;
+    if (integrationStatus.status !== 'connected') return;
+
+    const interval = setInterval(() => {
+      // Lightweight employee sync route that updates from Toast
+      syncEmployees(selectedRestaurant);
+    }, 30 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [integrationStatus.status, selectedRestaurant]);
 
   // Enhanced setSelectedRestaurant to persist to localStorage
   const setSelectedRestaurantWithPersistence = (restaurantGuid: string) => {

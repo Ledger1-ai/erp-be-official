@@ -83,7 +83,7 @@ export default function TeamManagementPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -103,7 +103,9 @@ export default function TeamManagementPage() {
   const fetchUsers = async () => {
     try {
       const token = sessionStorage.getItem('accessToken');
-      const response = await fetch('/api/team', {
+      const params = new URLSearchParams();
+      if (statusFilter) params.set('status', statusFilter);
+      const response = await fetch(`/api/team?${params.toString()}` , {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -128,7 +130,7 @@ export default function TeamManagementPage() {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [statusFilter]);
 
   // Create user
   const handleCreateUser = async (e: React.FormEvent) => {

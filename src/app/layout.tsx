@@ -3,6 +3,7 @@ import "./globals.css";
 import { Toaster } from "sonner";
 import { ApolloWrapper } from "@/components/providers/apollo-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
+import { initToastScheduler } from "@/lib/services/toast-scheduler";
 
 export const metadata: Metadata = {
   title: "Varuni Backoffice - Restaurant Management System",
@@ -14,6 +15,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Initialize background scheduler on server/client render once
+  if (typeof window === 'undefined') {
+    // Server-side
+    initToastScheduler();
+  }
   return (
     <html lang="en" suppressHydrationWarning={true}>
       <body className="antialiased">
@@ -21,30 +27,7 @@ export default function RootLayout({
           <ApolloWrapper>
             {children}
           </ApolloWrapper>
-          <Toaster 
-            position="top-right"
-            toastOptions={{
-              duration: 4000,
-              style: {
-                background: '#363636',
-                color: '#fff',
-              },
-              success: {
-                duration: 3000,
-                iconTheme: {
-                  primary: '#4ade80',
-                  secondary: '#fff',
-                },
-              },
-              error: {
-                duration: 5000,
-                iconTheme: {
-                  primary: '#ef4444',
-                  secondary: '#fff',
-                },
-              },
-            }}
-          />
+          <Toaster position="top-right" />
         </ThemeProvider>
       </body>
     </html>

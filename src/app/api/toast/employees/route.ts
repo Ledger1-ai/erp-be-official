@@ -9,7 +9,9 @@ export async function GET(request: NextRequest) {
     const restaurantGuid = searchParams.get('restaurantGuid');
     const page = parseInt(searchParams.get('page') || '1');
     const pageSize = parseInt(searchParams.get('pageSize') || '100');
-    const syncFromToast = searchParams.get('sync') === 'true';
+    const includeInactive = searchParams.get('includeInactive') === 'true';
+    // Accept both legacy and current flags
+    const syncFromToast = (searchParams.get('sync') === 'true') || (searchParams.get('syncFromToast') === 'true');
 
     if (!restaurantGuid) {
       return NextResponse.json({
@@ -18,6 +20,19 @@ export async function GET(request: NextRequest) {
     }
 
     await connectDB();
+
+    // Epoch cutoff for Toast placeholder dates
+    const epochEnd = new Date('1970-01-02T00:00:00.000Z');
+
+    // Normalize any legacy string deletedDate to Date type so comparisons work
+    try {
+      await ToastEmployee.updateMany(
+        { restaurantGuid, deletedDate: { $type: 'string' } },
+        [ { $set: { deletedDate: { $toDate: '$deletedDate' } } } as any ]
+      );
+    } catch (normErr) {
+      console.warn('Normalization (string->date) failed:', normErr);
+    }
 
     if (syncFromToast) {
       // Sync employees from Toast API - ONE WAY ONLY (Toast → Varuni)
@@ -70,8 +85,7 @@ export async function GET(request: NextRequest) {
             existingEmployee.syncStatus = 'synced';
             existingEmployee.syncErrors = [];
             existingEmployee.isActive = !toastEmp.deletedDate || toastEmp.deletedDate === "1970-01-01T00:00:00.000+0000" || toastEmp.deletedDate.includes("1970-01-01");
-            // PRESERVE isLocallyDeleted flag - don't overwrite it during sync
-            // existingEmployee.isLocallyDeleted stays as is
+            // Preserve local hidden flag; do not override user preference
             
             await existingEmployee.save();
             console.log(`Employee saved: ${existingEmployee.toastGuid}`);
@@ -115,25 +129,37 @@ export async function GET(request: NextRequest) {
       }
 
       // Count employees that were deactivated (not found in Toast)
-      const deactivatedCount = await ToastEmployee.countDocuments({
+      const deactivatedPendingFilter = {
         restaurantGuid,
         isActive: false,
         syncStatus: 'pending'
-      });
+      } as const;
+      const deactivatedCount = await ToastEmployee.countDocuments(deactivatedPendingFilter);
       syncResults.deactivated = deactivatedCount;
+
+      // Stamp a real deletedDate for employees missing from Toast so filters exclude them
+      await ToastEmployee.updateMany(
+        { ...deactivatedPendingFilter, deletedDate: { $exists: false } },
+        { $set: { deletedDate: new Date(), syncStatus: 'synced' } }
+      );
 
       console.log(`Sync completed: ${syncResults.created} created, ${syncResults.updated} updated, ${syncResults.overridden} overridden, ${syncResults.deactivated} deactivated`);
 
-      // Get updated employees from database
+      // Get updated employees from database (exclude real deletedDate)
       console.log(`Retrieving employees from database for restaurant: ${restaurantGuid}`);
+      const activeFilter = includeInactive ? {} : { isActive: true };
       const employees = await ToastEmployee.find({ 
-        restaurantGuid, 
-        isActive: true,
-        $or: [
-          { isLocallyDeleted: { $exists: false } },
-          { isLocallyDeleted: false }
-        ] // Exclude locally deleted employees
-      })
+        restaurantGuid,
+        ...activeFilter,
+        $and: [
+          { $or: [ { isLocallyDeleted: { $exists: false } }, { isLocallyDeleted: false } ] },
+          { $or: [
+            { deletedDate: { $exists: false } },
+            { deletedDate: null },
+            { $expr: { $lte: [ { $toDate: '$deletedDate' }, epochEnd ] } }
+          ] }
+        ]
+      } as any)
         .limit(pageSize)
         .skip((page - 1) * pageSize)
         .sort({ lastSyncDate: -1 });
@@ -156,14 +182,19 @@ export async function GET(request: NextRequest) {
     } else {
       // Return employees from local database
       console.log(`Loading employees from database for restaurant: ${restaurantGuid}`);
+      const activeFilter = includeInactive ? {} : { isActive: true };
       const employees = await ToastEmployee.find({ 
-        restaurantGuid, 
-        isActive: true,
-        $or: [
-          { isLocallyDeleted: { $exists: false } },
-          { isLocallyDeleted: false }
-        ] // Exclude locally deleted employees
-      })
+        restaurantGuid,
+        ...activeFilter,
+        $and: [
+          { $or: [ { isLocallyDeleted: { $exists: false } }, { isLocallyDeleted: false } ] },
+          { $or: [
+            { deletedDate: { $exists: false } },
+            { deletedDate: null },
+            { $expr: { $lte: [ { $toDate: '$deletedDate' }, epochEnd ] } }
+          ] }
+        ]
+      } as any)
         .limit(pageSize)
         .skip((page - 1) * pageSize)
         .sort({ lastSyncDate: -1 });
@@ -172,9 +203,14 @@ export async function GET(request: NextRequest) {
 
       const totalCount = await ToastEmployee.countDocuments({
         restaurantGuid,
-        isActive: true,
+        ...(includeInactive ? {} : { isActive: true }),
         isLocallyDeleted: { $ne: true },
-      });
+        $or: [
+          { deletedDate: { $exists: false } },
+          { deletedDate: null },
+          { $expr: { $lte: [ { $toDate: '$deletedDate' }, epochEnd ] } }
+        ]
+      } as any);
 
       return NextResponse.json({
         success: true,
