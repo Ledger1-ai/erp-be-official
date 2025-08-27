@@ -64,16 +64,6 @@ export default function RobotDashboard() {
     }
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "active": return <CheckCircle className="h-4 w-4" />;
-      case "charging": return <Zap className="h-4 w-4" />;
-      case "maintenance": return <AlertTriangle className="h-4 w-4" />;
-      case "idle": return <Pause className="h-4 w-4" />;
-      default: return <Bot className="h-4 w-4" />;
-    }
-  };
-
   // Load robots on component mount
   useEffect(() => {
     loadRobots();
@@ -327,14 +317,14 @@ export default function RobotDashboard() {
                     <div className="flex items-center space-x-1 text-xs">
                       <MapPin className="h-3 w-3 text-green-600 flex-shrink-0" />
                       <span className="text-muted-foreground">Location:</span>
-                      <span className="font-medium truncate">{(robot as any).location || 'Unknown'}</span>
+                      <span className="font-medium truncate">{robot.location || 'Unknown'}</span>
                     </div>
                     
-                    {(robot as any).destination && (
+                    {robot.destination && (
                       <div className="flex items-center space-x-1 text-xs">
                         <Target className="h-3 w-3 text-blue-500 flex-shrink-0" />
                         <span className="text-muted-foreground">Destination:</span>
-                        <span className="font-medium text-blue-600 truncate">{(robot as any).destination}</span>
+                        <span className="font-medium text-blue-600 truncate">{robot.destination}</span>
                       </div>
                     )}
                     

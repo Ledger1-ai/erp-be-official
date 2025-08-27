@@ -95,7 +95,9 @@ const userSchema = new mongoose.Schema({
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
-  }
+  },
+  toastGuid: { type: String, sparse: true },
+  sevenShiftsId: { type: Number, sparse: true },
 }, {
   timestamps: true
 });
@@ -107,7 +109,7 @@ userSchema.index({ lockUntil: 1 });
 
 // Virtual for checking if account is locked
 userSchema.virtual('isLocked').get(function() {
-  return !!(this.lockUntil && this.lockUntil > Date.now());
+  return !!(this.lockUntil && this.lockUntil.getTime() > Date.now());
 });
 
 // Pre-save middleware to hash password
@@ -139,7 +141,7 @@ userSchema.methods.incLoginAttempts = function() {
     });
   }
   
-  const updates: any = { $inc: { loginAttempts: 1 } };
+  const updates: { $inc?: { loginAttempts: number }; $set?: { lockUntil: number } } = { $inc: { loginAttempts: 1 } };
   
   // Lock account after 5 failed attempts for 2 hours
   if (this.loginAttempts + 1 >= 5 && !this.isLocked) {

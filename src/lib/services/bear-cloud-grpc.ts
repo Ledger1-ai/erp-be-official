@@ -48,7 +48,7 @@ interface WorkflowData {
   name: string;
   robots: string[];
   status: 'draft' | 'active' | 'completed';
-  keyframes: any[];
+  keyframes: unknown[];
 }
 
 // gRPC service implementation
@@ -70,7 +70,7 @@ class BearCloudGRPCService {
   }
 
   // Explore available gRPC methods for service account
-  async exploreServiceMethods(): Promise<any> {
+  async exploreServiceMethods(): Promise<unknown> {
     try {
       await this.ensureAuthenticated();
       if (!this.client) {
@@ -85,10 +85,10 @@ class BearCloudGRPCService {
       // Try different approaches to understand your service account permissions
       const explorationResults: {
         testResults: {
-          noFilter?: any;
-          allLocations?: any;
-          emptyStringLocation?: any;
-          scopeAsLocation?: any;
+          noFilter?: unknown;
+          allLocations?: unknown;
+          emptyStringLocation?: unknown;
+          scopeAsLocation?: unknown;
         }
       } = {
         testResults: {}
@@ -97,8 +97,8 @@ class BearCloudGRPCService {
       // Test 1: ListRobotIDs with no filter at all
       try {
         console.log('🧪 Test 1: ListRobotIDs with no filter...');
-        const noFilterResult = await new Promise((resolve, reject) => {
-          this.client.ListRobotIDs({}, this.createMetadata(), (error: any, response: any) => {
+        const noFilterResult = await new Promise((resolve) => {
+          this.client.ListRobotIDs({}, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
             if (error) {
               resolve({ error: error.message, code: error.code, details: error.details });
             } else {
@@ -115,8 +115,8 @@ class BearCloudGRPCService {
       // Test 2: ListRobotIDs with empty filter object (should return ALL locations per documentation)
       try {
         console.log('🧪 Test 2: ListRobotIDs with empty filter (ALL LOCATIONS)...');
-        const emptyFilterResult = await new Promise((resolve, reject) => {
-          this.client.ListRobotIDs({ filter: {} }, this.createMetadata(), (error: any, response: any) => {
+        const emptyFilterResult = await new Promise((resolve) => {
+          this.client.ListRobotIDs({ filter: {} }, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
             if (error) {
               resolve({ error: error.message, code: error.code, details: error.details });
             } else {
@@ -128,7 +128,7 @@ class BearCloudGRPCService {
         console.log('   Result (ALL LOCATIONS):', JSON.stringify(emptyFilterResult, null, 2));
         
         // Important: If this returns 0 robots, it means NO robots exist across ANY location
-        if (emptyFilterResult && !(emptyFilterResult as any).error && (emptyFilterResult as any).total_robots === 0) {
+        if (emptyFilterResult && !(emptyFilterResult as {error: string}).error && (emptyFilterResult as {total_robots: number}).total_robots === 0) {
           console.log('⚠️ CRITICAL: Empty location_id returned 0 robots - this means NO robots exist across ALL locations in your account');
         }
       } catch (error) {
@@ -138,8 +138,8 @@ class BearCloudGRPCService {
       // Test 3: ListRobotIDs with empty string location_id (should also mean all locations)
       try {
         console.log('🧪 Test 3: ListRobotIDs with empty string location_id...');
-        const emptyStringResult = await new Promise((resolve, reject) => {
-          this.client.ListRobotIDs({ filter: { location_id: "" } }, this.createMetadata(), (error: any, response: any) => {
+        const emptyStringResult = await new Promise((resolve) => {
+          this.client.ListRobotIDs({ filter: { location_id: "" } }, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
             if (error) {
               resolve({ error: error.message, code: error.code, details: error.details });
             } else {
@@ -156,10 +156,10 @@ class BearCloudGRPCService {
       // Test 4: Try with scope as location_id
       try {
         console.log('🧪 Test 4: ListRobotIDs with scope as location_id...');
-        const scopeResult = await new Promise((resolve, reject) => {
+        const scopeResult = await new Promise((resolve) => {
           this.client.ListRobotIDs({ 
             filter: { location_id: this.config.scope } 
-          }, this.createMetadata(), (error: any, response: any) => {
+          }, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
             if (error) {
               resolve({ error: error.message, code: error.code, details: error.details });
             } else {
@@ -238,7 +238,7 @@ class BearCloudGRPCService {
           expiresAt = payload.exp * 1000; // Convert seconds to milliseconds
           console.log(`🕒 JWT expires at: ${new Date(expiresAt).toISOString()}`);
         }
-      } catch (error) {
+      } catch {
         console.warn('⚠️ Could not parse JWT expiration, using default 1 hour');
       }
 
@@ -298,7 +298,7 @@ class BearCloudGRPCService {
         throw new Error(`Package loading failed: ${packageError instanceof Error ? packageError.message : 'Unknown error'}`);
       }
 
-      const cloudAPI = (protoDescriptor.bearrobotics as any)?.api?.v0?.cloud;
+      const cloudAPI = (protoDescriptor.bearrobotics as { api?: { v0?: { cloud?: unknown } } })?.api?.v0?.cloud;
       if (!cloudAPI) {
         console.error('❌ CloudAPI service not found in proto descriptor');
         console.log('📋 Available descriptors:', Object.keys(protoDescriptor));
@@ -310,7 +310,7 @@ class BearCloudGRPCService {
       const sslCredentials = grpc.credentials.createSsl();
       
       // Create gRPC client with SSL credentials
-      this.client = new cloudAPI.CloudAPIService(
+      this.client = new (cloudAPI as { CloudAPIService: new (apiUrl: string, creds: grpc.ChannelCredentials) => unknown }).CloudAPIService(
         this.config.apiUrl,
         sslCredentials
       );
@@ -371,18 +371,18 @@ class BearCloudGRPCService {
     const robotStatuses: RobotStatus[] = robotIds.map((id, index) => {
       const batteryData = batteryDataMap.get(id);
       const missionData = missionDataMap.get(id);
-      const destination = this.extractDestination(missionData);
-      const location = this.getLocationDescription(batteryData, missionData);
+      const destination = this.extractDestination(missionData as { goals: { destination: { destination_id: string; }; }[]; });
+      const location = this.getLocationDescription(batteryData as { state: string; }, missionData as { state: string; goals: { destination: { destination_id: string; }; }[]; });
       
       return {
         id,
         name: `Pennybot ${id.split('-')[1]?.toUpperCase() || id}`,
-        status: this.determineBotStatus(batteryData, missionData),
-        battery: batteryData?.charge_percent || 0,
+        status: this.determineBotStatus(batteryData as { state: string; charge_percent: number; }, missionData as { state: string; }),
+        battery: (batteryData as { charge_percent: number })?.charge_percent || 0,
         position: this.getRealisticPosition(destination, id, index), // Use real destination if available
         signal: batteryData ? 95 : 0, // Signal based on connection status
-        task: this.getCurrentTask(missionData),
-        uptime: this.calculateRealisticUptime(batteryData, missionData),
+        task: this.getCurrentTask(missionData as { state: string; goals: { destination: { destination_id: string; }; }[]; }),
+        uptime: this.calculateRealisticUptime(batteryData as { state: string; charge_percent: number; }, missionData as { state: string; }),
         lastUpdate: new Date().toISOString(),
         heading: this.getConsistentHeading(id),
         destination: destination || undefined, // Real destination from API
@@ -395,15 +395,15 @@ class BearCloudGRPCService {
   }
 
   // Get battery status for multiple robots in bulk
-  private async getBulkBatteryStatus(robotIds: string[]): Promise<Map<string, any>> {
-    const batteryDataMap = new Map<string, any>();
+  private async getBulkBatteryStatus(robotIds: string[]): Promise<Map<string, unknown>> {
+    const batteryDataMap = new Map<string, unknown>();
     
     if (robotIds.length === 0) return batteryDataMap;
     
     try {
       console.log(`🔋 Requesting bulk battery status for ${robotIds.length} robots...`);
       
-      return await new Promise((resolve, reject) => {
+      return await new Promise((resolve) => {
         const request = {
           selector: {
             robot_ids: {
@@ -414,16 +414,16 @@ class BearCloudGRPCService {
 
         const stream = this.client.SubscribeBatteryStatus(request, this.createMetadata());
         
-        let timeout = setTimeout(() => {
+        const timeout = setTimeout(() => {
           stream.destroy();
           console.log(`⏱️ Bulk battery status timeout - received ${batteryDataMap.size}/${robotIds.length} responses`);
           resolve(batteryDataMap);
         }, 8000); // Longer timeout for bulk request
 
-        stream.on('data', (response: any) => {
+        stream.on('data', (response: { robot_id: string; battery_state: unknown; }) => {
           if (response.robot_id && response.battery_state) {
             batteryDataMap.set(response.robot_id, response.battery_state);
-            console.log(`✅ Battery status received for ${response.robot_id}: ${response.battery_state.charge_percent}%`);
+            console.log(`✅ Battery status received for ${response.robot_id}: ${(response.battery_state as { charge_percent: number }).charge_percent}%`);
             
             // If we got all responses, resolve early
             if (batteryDataMap.size === robotIds.length) {
@@ -434,7 +434,7 @@ class BearCloudGRPCService {
           }
         });
 
-        stream.on('error', (error: any) => {
+        stream.on('error', (error: grpc.ServiceError) => {
           console.warn(`⚠️ Bulk battery status error:`, error.message);
           clearTimeout(timeout);
           resolve(batteryDataMap); // Return partial data
@@ -453,8 +453,8 @@ class BearCloudGRPCService {
   }
 
   // Get mission status for multiple robots in bulk
-  private async getBulkMissionStatus(robotIds: string[]): Promise<Map<string, any>> {
-    const missionDataMap = new Map<string, any>();
+  private async getBulkMissionStatus(robotIds: string[]): Promise<Map<string, unknown>> {
+    const missionDataMap = new Map<string, unknown>();
     
     if (robotIds.length === 0) return missionDataMap;
     
@@ -468,7 +468,7 @@ class BearCloudGRPCService {
           if (missionData) {
             missionDataMap.set(robotId, missionData);
           }
-        } catch (error) {
+        } catch {
           console.warn(`⚠️ Failed to get mission status for ${robotId}`);
         }
       });
@@ -484,9 +484,9 @@ class BearCloudGRPCService {
   }
 
   // Get real battery status for a robot
-  private async getRobotBatteryStatus(robotId: string): Promise<any> {
+  private async getRobotBatteryStatus(robotId: string): Promise<unknown> {
     try {
-      return await new Promise((resolve, reject) => {
+      return await new Promise((resolve) => {
         const request = {
           selector: {
             robot_ids: {
@@ -499,7 +499,7 @@ class BearCloudGRPCService {
         const stream = this.client.SubscribeBatteryStatus(request, this.createMetadata());
         
         let resolved = false;
-        let timeout = setTimeout(() => {
+        const timeout = setTimeout(() => {
           if (!resolved) {
             resolved = true;
             stream.destroy(); // Use destroy instead of cancel
@@ -508,7 +508,7 @@ class BearCloudGRPCService {
           }
         }, 5000); // Increased timeout to 5 seconds
 
-        stream.on('data', (response: any) => {
+        stream.on('data', (response: { battery_state: unknown; }) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
@@ -519,7 +519,7 @@ class BearCloudGRPCService {
           }
         });
 
-        stream.on('error', (error: any) => {
+        stream.on('error', (error: grpc.ServiceError) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
@@ -544,9 +544,9 @@ class BearCloudGRPCService {
   }
 
   // Get real mission status for a robot
-  private async getRobotMissionStatus(robotId: string): Promise<any> {
+  private async getRobotMissionStatus(robotId: string): Promise<unknown> {
     try {
-      return await new Promise((resolve, reject) => {
+      return await new Promise((resolve) => {
         const request = {
           robot_id: robotId
         };
@@ -555,7 +555,7 @@ class BearCloudGRPCService {
         const stream = this.client.SubscribeMissionStatus(request, this.createMetadata());
         
         let resolved = false;
-        let timeout = setTimeout(() => {
+        const timeout = setTimeout(() => {
           if (!resolved) {
             resolved = true;
             stream.destroy(); // Use destroy instead of cancel
@@ -564,7 +564,7 @@ class BearCloudGRPCService {
           }
         }, 5000); // Increased timeout to 5 seconds
 
-        stream.on('data', (response: any) => {
+        stream.on('data', (response: { mission_state: unknown; }) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
@@ -575,7 +575,7 @@ class BearCloudGRPCService {
           }
         });
 
-        stream.on('error', (error: any) => {
+        stream.on('error', (error: grpc.ServiceError) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
@@ -600,7 +600,7 @@ class BearCloudGRPCService {
   }
 
   // Determine robot status based on battery and mission data
-  private determineBotStatus(batteryData: any, missionData: any): 'active' | 'charging' | 'idle' | 'maintenance' {
+  private determineBotStatus(batteryData: { state: string; charge_percent: number; }, missionData: { state: string; } | null | undefined): 'active' | 'charging' | 'idle' | 'maintenance' {
     if (!batteryData) return 'idle';
     
     // Check if charging
@@ -619,7 +619,7 @@ class BearCloudGRPCService {
   }
 
   // Extract destination from mission data
-  private extractDestination(missionData: any): string | null {
+  private extractDestination(missionData: { goals: { destination: { destination_id: string; }; }[]; } | null | undefined): string | null {
     if (!missionData || !missionData.goals || missionData.goals.length === 0) {
       return null;
     }
@@ -633,7 +633,7 @@ class BearCloudGRPCService {
   }
 
   // Get location description based on robot state
-  private getLocationDescription(batteryData: any, missionData: any): string {
+  private getLocationDescription(batteryData: { state: string; }, missionData: { state: string; goals: { destination: { destination_id: string; }; }[]; } | null | undefined): string {
     // If charging, robot is at charging station
     if (batteryData && batteryData.state === 'STATE_CHARGING') {
       return 'Charging Station';
@@ -705,7 +705,7 @@ class BearCloudGRPCService {
   }
 
   // Get current task description
-  private getCurrentTask(missionData: any): string {
+  private getCurrentTask(missionData: { state: string; goals: { destination: { destination_id: string; }; }[]; } | null | undefined): string {
     if (!missionData) return 'Idle';
     
     const destination = this.extractDestination(missionData);
@@ -766,7 +766,7 @@ class BearCloudGRPCService {
   }
 
   // Calculate realistic uptime based on battery and mission data
-  private calculateRealisticUptime(batteryData: any, missionData: any): string {
+  private calculateRealisticUptime(batteryData: { state: string; charge_percent: number; }, missionData: { state: string; } | null | undefined): string {
     if (!batteryData) return '0h 0m';
     
     // Base uptime calculation on battery level and status
@@ -801,7 +801,7 @@ class BearCloudGRPCService {
   }
 
   // Legacy function - keeping for backward compatibility
-  private calculateUptime(batteryData: any): string {
+  private calculateUptime(batteryData: { state: string; charge_percent: number; }): string {
     return this.calculateRealisticUptime(batteryData, null);
   }
 
@@ -830,7 +830,7 @@ class BearCloudGRPCService {
       console.log('📋 Request metadata:', this.createMetadata().getMap());
 
       const response = await new Promise((resolve, reject) => {
-        this.client.ListRobotIDs(request, this.createMetadata(), (error: any, response: any) => {
+        this.client.ListRobotIDs(request, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
           if (error) {
             console.error(`❌ gRPC ListRobotIDs error for location_id "${this.config.locationId}":`, error);
             console.error('   Error code:', error.code);
@@ -852,15 +852,15 @@ class BearCloudGRPCService {
 
       console.log('✅ Successfully fetched robot IDs from gRPC:');
       console.log('   Raw response:', JSON.stringify(response, null, 2));
-      console.log('   Total robots:', (response as any).total_robots);
-      console.log('   Robot IDs array:', (response as any).robot_ids);
+      console.log('   Total robots:', (response as { total_robots: number }).total_robots);
+      console.log('   Robot IDs array:', (response as { robot_ids: string[] }).robot_ids);
       
       // Transform robot IDs to RobotStatus objects
-      const robotIds = (response as any).robot_ids || [];
+      const robotIds = (response as { robot_ids: string[] }).robot_ids || [];
       
       // If still no robots, try alternative request formats
-      if (robotIds.length === 0 && (response as any).total_robots === 0) {
-        if ((response as any).permission_denied) {
+      if (robotIds.length === 0 && (response as { total_robots: number }).total_robots === 0) {
+        if ((response as { permission_denied: boolean }).permission_denied) {
           console.log(`🔄 Location "${this.config.locationId}" permission denied, trying alternative approaches...`);
         } else {
           console.log(`🔄 No robots found with location_id "${this.config.locationId}", trying alternative approaches...`);
@@ -875,8 +875,8 @@ class BearCloudGRPCService {
             }
           };
           
-          const emptyResponse = await new Promise((resolve, reject) => {
-            this.client.ListRobotIDs(emptyRequest, this.createMetadata(), (error: any, response: any) => {
+          const emptyResponse = await new Promise((resolve) => {
+            this.client.ListRobotIDs(emptyRequest, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
               if (error) {
                 console.log('❌ Empty location_id request failed:', error.message);
                 resolve(null);
@@ -888,8 +888,8 @@ class BearCloudGRPCService {
           
           if (emptyResponse) {
             console.log('✅ Empty location_id (ALL LOCATIONS) request successful:', JSON.stringify(emptyResponse, null, 2));
-            const emptyRobotIds = (emptyResponse as any).robot_ids || [];
-            const totalRobots = (emptyResponse as any).total_robots || 0;
+            const emptyRobotIds = (emptyResponse as { robot_ids: string[] }).robot_ids || [];
+            const totalRobots = (emptyResponse as { total_robots: number }).total_robots || 0;
             
             if (emptyRobotIds.length > 0) {
               console.log(`🎉 Found ${emptyRobotIds.length} robots across ALL locations!`);
@@ -898,7 +898,7 @@ class BearCloudGRPCService {
               console.log('⚠️ CRITICAL: Empty location_id returned 0 robots - NO robots exist across ANY location in your account');
             }
           }
-        } catch (error) {
+        } catch {
           console.log('⚠️ Empty location_id request approach failed');
         }
         
@@ -907,8 +907,8 @@ class BearCloudGRPCService {
           console.log('📤 Trying request without filter...');
           const altRequest = {};
           
-          const altResponse = await new Promise((resolve, reject) => {
-            this.client.ListRobotIDs(altRequest, this.createMetadata(), (error: any, response: any) => {
+          const altResponse = await new Promise((resolve) => {
+            this.client.ListRobotIDs(altRequest, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
               if (error) {
                 console.log('❌ No filter request failed:', error.message);
                 resolve(null);
@@ -920,12 +920,12 @@ class BearCloudGRPCService {
           
           if (altResponse) {
             console.log('✅ No filter request successful:', JSON.stringify(altResponse, null, 2));
-            const altRobotIds = (altResponse as any).robot_ids || [];
+            const altRobotIds = (altResponse as { robot_ids: string[] }).robot_ids || [];
             if (altRobotIds.length > 0) {
               return await this.transformRobotIds(altRobotIds);
             }
           }
-        } catch (error) {
+        } catch {
           console.log('⚠️ No filter request approach failed');
         }
         
@@ -953,8 +953,8 @@ class BearCloudGRPCService {
               }
             };
             
-            const locResponse = await new Promise((resolve, reject) => {
-              this.client.ListRobotIDs(locRequest, this.createMetadata(), (error: any, response: any) => {
+            const locResponse = await new Promise((resolve) => {
+              this.client.ListRobotIDs(locRequest, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
                 if (error) {
                   if (error.code === 7) { // PERMISSION_DENIED
                     console.log(`❌ Location "${locationId}" permission denied`);
@@ -970,13 +970,13 @@ class BearCloudGRPCService {
             
             if (locResponse) {
               console.log(`✅ Location "${locationId}" response:`, JSON.stringify(locResponse, null, 2));
-              const locRobotIds = (locResponse as any).robot_ids || [];
+              const locRobotIds = (locResponse as { robot_ids: string[] }).robot_ids || [];
               if (locRobotIds.length > 0) {
                 console.log(`🎉 Found ${locRobotIds.length} robots in location "${locationId}"!`);
                 return await this.transformRobotIds(locRobotIds);
               }
             }
-          } catch (error) {
+          } catch {
             console.log(`⚠️ Location "${locationId}" request failed`);
           }
         }
@@ -1038,7 +1038,7 @@ class BearCloudGRPCService {
           };
 
           const createResponse = await new Promise((resolve, reject) => {
-            this.client.CreateMission(createRequest, this.createMetadata(), (error: any, response: any) => {
+            this.client.CreateMission(createRequest, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
               if (error) {
                 reject(error);
               } else {
@@ -1063,7 +1063,7 @@ class BearCloudGRPCService {
           };
 
           const chargeResponse = await new Promise((resolve, reject) => {
-            this.client.ChargeRobot(chargeRequest, this.createMetadata(), (error: any, response: any) => {
+            this.client.ChargeRobot(chargeRequest, this.createMetadata(), (error: grpc.ServiceError, response: unknown) => {
               if (error) {
                 reject(error);
               } else {
@@ -1086,7 +1086,7 @@ class BearCloudGRPCService {
   }
 
   // Subscribe to battery status (streaming gRPC)
-  async subscribeToBatteryStatus(robotIds: string[], callback: (data: any) => void): Promise<void> {
+  async subscribeToBatteryStatus(robotIds: string[], callback: (data: unknown) => void): Promise<void> {
     try {
       console.log('🔋 Subscribing to battery status updates via gRPC...');
       
@@ -1107,12 +1107,12 @@ class BearCloudGRPCService {
 
       const stream = this.client.SubscribeBatteryStatus(request, this.createMetadata());
       
-      stream.on('data', (response: any) => {
+      stream.on('data', (response: unknown) => {
         console.log('📡 Battery status update:', response);
         callback(response);
       });
 
-      stream.on('error', (error: any) => {
+      stream.on('error', (error: grpc.ServiceError) => {
         console.error('❌ Battery status stream error:', error);
       });
 
@@ -1126,7 +1126,7 @@ class BearCloudGRPCService {
   }
 
   // Subscribe to mission status (streaming gRPC)
-  async subscribeToMissionStatus(robotId: string, callback: (data: any) => void): Promise<void> {
+  async subscribeToMissionStatus(robotId: string, callback: (data: unknown) => void): Promise<void> {
     try {
       console.log(`🎯 Subscribing to mission status for robot ${robotId} via gRPC...`);
       
@@ -1143,12 +1143,12 @@ class BearCloudGRPCService {
 
       const stream = this.client.SubscribeMissionStatus(request, this.createMetadata());
       
-      stream.on('data', (response: any) => {
+      stream.on('data', (response: unknown) => {
         console.log('📡 Mission status update:', response);
         callback(response);
       });
 
-      stream.on('error', (error: any) => {
+      stream.on('error', (error: grpc.ServiceError) => {
         console.error('❌ Mission status stream error:', error);
       });
 
@@ -1177,7 +1177,7 @@ class BearCloudGRPCService {
     return false;
   }
 
-  async getFacilityMap(): Promise<any> {
+  async getFacilityMap(): Promise<unknown> {
     console.log('⚠️ Facility map not yet implemented in gRPC API');
     return null;
   }

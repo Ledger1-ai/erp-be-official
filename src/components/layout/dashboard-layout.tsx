@@ -260,12 +260,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="p-4 h-80 overflow-y-auto">
             <div className="bg-primary/10 rounded-lg p-3 mb-3">
               <p className="text-sm text-primary">
-                Hi! I'm Varuni, your AI assistant. How can I help you manage your restaurant today?
+                Hi! I&apos;m Varuni, your AI assistant. How can I help you manage your restaurant today?
               </p>
             </div>
             <div className="space-y-3">
               <Button variant="outline" size="sm" className="w-full text-left justify-start">
-                📊 Show me today's analytics
+                📊 Show me today&apos;s analytics
               </Button>
               <Button variant="outline" size="sm" className="w-full text-left justify-start">
                 👥 Help with staff scheduling

@@ -1,6 +1,33 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Schema } from 'mongoose';
 
-const performanceSchema = new mongoose.Schema({
+export interface IPerformance extends Document {
+  rating: number;
+  completedShifts: number;
+  onTimeRate: number;
+  customerRating: number;
+  salesGenerated: number;
+}
+
+export interface ITeamMember extends Document {
+  name: string;
+  email: string;
+  phone?: string;
+  role: string;
+  department: 'Kitchen' | 'Front of House' | 'Management' | 'Support';
+  status: 'active' | 'inactive' | 'suspended';
+  joinDate: Date;
+  hourlyRate: number;
+  availability: 'Full-time' | 'Part-time' | 'Seasonal' | 'On-call';
+  skills: string[];
+  performance?: IPerformance;
+  toastId?: string;
+  avatar?: string;
+  lastLogin?: Date;
+  userId?: string;
+  createdBy?: string;
+}
+
+const performanceSchema = new Schema<IPerformance>({
   rating: {
     type: Number,
     min: 0,
@@ -29,7 +56,7 @@ const performanceSchema = new mongoose.Schema({
   }
 });
 
-const teamMemberSchema = new mongoose.Schema({
+const teamMemberSchema = new Schema<ITeamMember>({
   name: {
     type: String,
     required: true,
@@ -105,4 +132,4 @@ const teamMemberSchema = new mongoose.Schema({
 teamMemberSchema.index({ department: 1 });
 teamMemberSchema.index({ status: 1 });
 
-export const TeamMember = mongoose.models.TeamMember || mongoose.model('TeamMember', teamMemberSchema); 
+export const TeamMember = mongoose.models.TeamMember || mongoose.model<ITeamMember>('TeamMember', teamMemberSchema); 

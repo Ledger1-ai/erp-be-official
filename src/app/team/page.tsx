@@ -45,12 +45,10 @@ import {
   Shield,
   ShieldCheck,
   AlertCircle,
-  Eye,
-  EyeOff,
   Copy,
   CheckCircle,
 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 interface User {
   _id: string;
@@ -67,7 +65,23 @@ interface User {
     name: string;
     email: string;
   };
+  toastGuid?: string;
+  onTimeRate?: number;
 }
+
+interface TimeEntry {
+  guid: string;
+  inDate: string;
+  outDate: string;
+  employeeReference: {
+    guid: string;
+  };
+  shiftReference?: {
+    guid: string;
+    scheduledInTime: string;
+  };
+}
+
 
 interface CreateUserData {
   name: string;
@@ -89,7 +103,6 @@ export default function TeamManagementPage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [showTempPassword, setShowTempPassword] = useState(false);
-  const { toast } = useToast();
 
   const [newUser, setNewUser] = useState<CreateUserData>({
     name: "",
@@ -114,18 +127,33 @@ export default function TeamManagementPage() {
       if (response.ok) {
         const data = await response.json();
         setUsers(data.data.users);
+        fetchOnTimeRates(data.data.users);
       } else {
         throw new Error('Failed to fetch users');
       }
-    } catch (error) {
-      toast({
-        title: "Error",
+    } catch {
+      toast.error("Error", {
         description: "Failed to fetch team members",
-        variant: "destructive",
       });
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchOnTimeRates = async (userList: User[]) => {
+    const usersWithRates = await Promise.all(userList.map(async user => {
+      try {
+        const response = await fetch(`/api/team/on-time-rate?userId=${user._id}`);
+        if (response.ok) {
+          const data = await response.json();
+          return { ...user, onTimeRate: data.onTimeRate };
+        }
+      } catch (error) {
+        console.error(`Failed to fetch on-time rate for user ${user._id}:`, error);
+      }
+      return { ...user, onTimeRate: null };
+    }));
+    setUsers(usersWithRates);
   };
 
   useEffect(() => {
@@ -160,18 +188,15 @@ export default function TeamManagementPage() {
           isActive: true,
           mustChangePassword: true,
         });
-        toast({
-          title: "Success",
+        toast.success("Success", {
           description: "Team member created successfully",
         });
       } else {
         throw new Error(data.error || 'Failed to create user');
       }
     } catch (error) {
-      toast({
-        title: "Error",
+      toast.error("Error", {
         description: error instanceof Error ? error.message : "Failed to create team member",
-        variant: "destructive",
       });
     }
   };
@@ -206,18 +231,15 @@ export default function TeamManagementPage() {
         ));
         setIsEditDialogOpen(false);
         setSelectedUser(null);
-        toast({
-          title: "Success",
+        toast.success("Success", {
           description: "Team member updated successfully",
         });
       } else {
         throw new Error(data.error || 'Failed to update user');
       }
     } catch (error) {
-      toast({
-        title: "Error",
+      toast.error("Error", {
         description: error instanceof Error ? error.message : "Failed to update team member",
-        variant: "destructive",
       });
     }
   };
@@ -238,18 +260,15 @@ export default function TeamManagementPage() {
       if (response.ok) {
         setTemporaryPassword(data.data.temporaryPassword);
         setShowTempPassword(true);
-        toast({
-          title: "Success",
+        toast.success("Success", {
           description: "Password reset successfully",
         });
       } else {
         throw new Error(data.error || 'Failed to reset password');
       }
     } catch (error) {
-      toast({
-        title: "Error",
+      toast.error("Error", {
         description: error instanceof Error ? error.message : "Failed to reset password",
-        variant: "destructive",
       });
     }
   };
@@ -269,8 +288,7 @@ export default function TeamManagementPage() {
         setUsers(users.map(user => 
           user._id === userId ? { ...user, isActive: false } : user
         ));
-        toast({
-          title: "Success",
+        toast.success("Success", {
           description: "Team member deactivated successfully",
         });
       } else {
@@ -278,10 +296,8 @@ export default function TeamManagementPage() {
         throw new Error(data.error || 'Failed to deactivate user');
       }
     } catch (error) {
-      toast({
-        title: "Error",
+      toast.error("Error", {
         description: error instanceof Error ? error.message : "Failed to deactivate team member",
-        variant: "destructive",
       });
     }
   };
@@ -289,8 +305,7 @@ export default function TeamManagementPage() {
   // Copy password to clipboard
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast({
-      title: "Copied",
+    toast.success("Copied", {
       description: "Password copied to clipboard",
     });
   };
@@ -452,6 +467,7 @@ export default function TeamManagementPage() {
                 <TableHead>Status</TableHead>
                 <TableHead>2FA</TableHead>
                 <TableHead>Last Login</TableHead>
+                <TableHead>On-Time Rate</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -492,6 +508,17 @@ export default function TeamManagementPage() {
                       ? new Date(user.lastLogin).toLocaleDateString()
                       : 'Never'
                     }
+                  </TableCell>
+                  <TableCell>
+                    {user.onTimeRate === undefined ? (
+                      <span className="text-gray-400">Loading...</span>
+                    ) : user.onTimeRate === -1 ? (
+                      <span className="text-gray-500">N/A</span>
+                    ) : (
+                      <span className={`${user.onTimeRate >= 90 ? 'text-green-600' : user.onTimeRate >= 70 ? 'text-orange-500' : 'text-red-600'}`}>
+                        {user.onTimeRate}%
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>

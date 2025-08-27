@@ -9,8 +9,8 @@ const httpLink = createHttpLink({
 
 // Auth Link
 const authLink = setContext((_, { headers }) => {
-  // Get the authentication token from local storage if it exists
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  // Get the authentication token from session storage if it exists
+  const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
   
   return {
     headers: {
@@ -21,7 +21,7 @@ const authLink = setContext((_, { headers }) => {
 });
 
 // Error Link
-const errorLink = onError(({ graphQLErrors, networkError, operation, forward }) => {
+const errorLink = onError(({ graphQLErrors, networkError }) => {
   if (graphQLErrors) {
     graphQLErrors.forEach(({ message, locations, path }) => {
       console.error(
@@ -64,12 +64,12 @@ export const apolloClient = new ApolloClient({
             },
           },
           getTeamMembers: {
-            merge(existing = [], incoming) {
+            merge(_, incoming) {
               return incoming;
             },
           },
           getLowStockItems: {
-            merge(existing = [], incoming) {
+            merge(_, incoming) {
               return incoming;
             },
           },

@@ -15,6 +15,17 @@ import {
 // Client-side component - uses API routes to avoid importing server-side gRPC code
 import { toast } from "sonner";
 
+interface Robot {
+  name: string;
+  status: string;
+}
+
+interface TestResult {
+  error?: string;
+  code?: string;
+  details?: string;
+}
+
 export default function APITest() {
   const [isTestingAuth, setIsTestingAuth] = useState(false);
   const [isTestingRobots, setIsTestingRobots] = useState(false);
@@ -65,7 +76,7 @@ export default function APITest() {
       
       if (result.success && result.data && result.data.length > 0) {
         setRobotsStatus('success');
-        setRobotsResult(`✅ Successfully fetched ${result.data.length} robots:\n${result.data.map((r: any) => `- ${r.name} (${r.status})`).join('\n')}`);
+        setRobotsResult(`✅ Successfully fetched ${result.data.length} robots:\n${result.data.map((r: Robot) => `- ${r.name} (${r.status})`).join('\n')}`);
         toast.success(`Found ${result.data.length} robots!`);
       } else {
         setRobotsStatus('error');
@@ -97,15 +108,16 @@ export default function APITest() {
         
         const data = result.data;
         if (data.testResults) {
-          Object.entries(data.testResults).forEach(([testName, testResult]: [string, any]) => {
+          Object.entries(data.testResults).forEach(([testName, testResult]: [string, unknown]) => {
+            const result = testResult as TestResult;
             resultText += `📋 ${testName}:\n`;
-            if (testResult.error) {
-              resultText += `   ❌ Error: ${testResult.error} (Code: ${testResult.code || 'unknown'})\n`;
-              if (testResult.details) {
-                resultText += `   Details: ${testResult.details}\n`;
+            if (result.error) {
+              resultText += `   ❌ Error: ${result.error} (Code: ${result.code || 'unknown'})\n`;
+              if (result.details) {
+                resultText += `   Details: ${result.details}\n`;
               }
             } else {
-              resultText += `   ✅ Success: ${JSON.stringify(testResult, null, 2)}\n`;
+              resultText += `   ✅ Success: ${JSON.stringify(result, null, 2)}\n`;
             }
             resultText += '\n';
           });

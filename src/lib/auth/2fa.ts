@@ -38,7 +38,7 @@ export async function generateQRCode(otpauthUrl: string): Promise<string> {
       }
     });
     return qrCodeDataURL;
-  } catch (error) {
+  } catch {
     throw new Error('Failed to generate QR code');
   }
 }
@@ -55,7 +55,7 @@ export function verifyTOTP(token: string, secret: string, window: number = 1): b
       window: window, // Allow for slight time drift
       step: 30 // 30-second time step
     });
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -84,7 +84,7 @@ export function encrypt(text: string): string {
   try {
     const encrypted = CryptoJS.AES.encrypt(text, ENCRYPTION_KEY).toString();
     return encrypted;
-  } catch (error) {
+  } catch {
     throw new Error('Encryption failed');
   }
 }
@@ -102,7 +102,7 @@ export function decrypt(encryptedText: string): string {
     }
     
     return decrypted;
-  } catch (error) {
+  } catch {
     throw new Error('Decryption failed');
   }
 }
@@ -153,7 +153,7 @@ export function verify2FA(
     if (verifyTOTP(token, secret)) {
       return { success: true, isBackupCode: false };
     }
-  } catch (error) {
+  } catch {
     // If TOTP fails, try backup codes
   }
   
@@ -168,7 +168,7 @@ export function verify2FA(
           usedBackupCode: encryptedCode 
         };
       }
-    } catch (error) {
+    } catch {
       continue;
     }
   }
@@ -194,7 +194,7 @@ export function validate2FASetup(encryptedSecret: string, testToken: string): bo
   try {
     const secret = decrypt(encryptedSecret);
     return verifyTOTP(testToken, secret);
-  } catch (error) {
+  } catch {
     return false;
   }
 }

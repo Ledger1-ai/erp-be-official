@@ -18,7 +18,7 @@ export interface IToastOrder extends Document {
     openedDate: Date;
     closedDate?: Date;
     deletedDate?: Date;
-    selections?: any[];
+    selections?: unknown[];
     customer?: {
       guid: string;
       firstName?: string;

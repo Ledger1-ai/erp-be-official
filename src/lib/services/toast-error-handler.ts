@@ -15,7 +15,7 @@ export interface ToastError {
   type: ToastErrorType;
   message: string;
   code?: string;
-  details?: any;
+  details?: unknown;
   timestamp: Date;
   endpoint?: string;
   requestId?: string;
@@ -36,7 +36,7 @@ export class ToastErrorHandler {
   /**
    * Handle and categorize Toast API errors
    */
-  public handleError(error: any, endpoint?: string, showToast = true): ToastError {
+  public handleError(error: unknown, endpoint?: string, showToast = true): ToastError {
     const toastError = this.categorizeError(error, endpoint);
     
     // Log the error
@@ -58,12 +58,12 @@ export class ToastErrorHandler {
   /**
    * Categorize error based on type and content
    */
-  private categorizeError(error: any, endpoint?: string): ToastError {
+  private categorizeError(error: unknown, endpoint?: string): ToastError {
     const timestamp = new Date();
     let type = ToastErrorType.UNKNOWN;
     let message = 'An unknown error occurred';
     let code: string | undefined;
-    let details: any;
+    let details: unknown;
 
     if (error instanceof Error) {
       message = error.message;
@@ -100,10 +100,11 @@ export class ToastErrorHandler {
     }
     
     // HTTP response errors
-    else if (typeof error === 'object' && error.status) {
-      code = error.status.toString();
+    else if (typeof error === 'object' && error !== null && 'status' in error) {
+      const httpError = error as { status: number; message?: string; body?: unknown; details?: unknown };
+      code = httpError.status.toString();
       
-      switch (error.status) {
+      switch (httpError.status) {
         case 401:
           type = ToastErrorType.AUTHENTICATION;
           message = 'Authentication failed. Please check your Toast API credentials.';
@@ -114,7 +115,7 @@ export class ToastErrorHandler {
           break;
         case 400:
           type = ToastErrorType.VALIDATION;
-          message = error.message || 'Invalid request data.';
+          message = httpError.message || 'Invalid request data.';
           break;
         case 429:
           type = ToastErrorType.RATE_LIMIT;
@@ -128,10 +129,10 @@ export class ToastErrorHandler {
           break;
         default:
           type = ToastErrorType.UNKNOWN;
-          message = error.message || `HTTP ${error.status} error occurred.`;
+          message = httpError.message || `HTTP ${httpError.status} error occurred.`;
       }
       
-      details = error.body || error.details;
+      details = httpError.body || httpError.details;
     }
     
     // String errors

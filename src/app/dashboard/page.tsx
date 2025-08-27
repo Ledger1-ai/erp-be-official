@@ -36,7 +36,12 @@ import {
   Loader2,
 } from "lucide-react";
 import { useTeamMembers, useInventoryItems, useAnalytics, useLowStockItems } from "@/lib/hooks/use-graphql";
-import { format } from "date-fns";
+
+interface TeamMember {
+  name: string;
+  role: string;
+  status: string;
+}
 
 // Sample data for charts (fallback)
 const salesData = [
@@ -92,15 +97,13 @@ export default function DashboardPage() {
   const [selectedMetric, setSelectedMetric] = useState("sales");
 
   // Fetch real data from GraphQL
-  const { data: teamData, loading: teamLoading, error: teamError } = useTeamMembers();
-  const { data: inventoryApiData, loading: inventoryLoading, error: inventoryError } = useInventoryItems();
-  const { data: analyticsData, loading: analyticsLoading, error: analyticsError } = useAnalytics("daily");
-  const { data: lowStockData, loading: lowStockLoading, error: lowStockError } = useLowStockItems();
+  const { data: teamData, loading: teamLoading } = useTeamMembers();
+  const { data: inventoryApiData } = useInventoryItems();
+  const { data: analyticsData, loading: analyticsLoading } = useAnalytics("daily");
+  const { data: lowStockData } = useLowStockItems();
 
   // Calculate metrics from real data
-  const activeStaff = teamData?.teamMembers?.filter((member: any) => member.status === 'active').length || 0;
-  const totalInventoryItems = inventoryApiData?.inventoryItems?.length || 0;
-  const lowStockCount = lowStockData?.lowStockItems?.length || 0;
+  const activeStaff = teamData?.teamMembers?.filter((member: TeamMember) => member.status === 'active').length || 0;
   const revenue = analyticsData?.analytics?.revenue || 0;
   const orders = analyticsData?.analytics?.orders || 0;
   const tableTurnover = analyticsData?.analytics?.tableTurnover || 0;
@@ -141,7 +144,7 @@ export default function DashboardPage() {
   ];
 
   // Generate staff schedule from real data
-  const staffSchedule = teamData?.teamMembers?.slice(0, 4).map((member: any) => ({
+  const staffSchedule = teamData?.teamMembers?.slice(0, 4).map((member: TeamMember) => ({
     name: member.name,
     role: member.role,
     shift: "2:00 PM - 10:00 PM", // This would come from shifts data
@@ -155,7 +158,7 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
-            <p className="text-muted-foreground mt-1">Welcome back! Here's what's happening at your restaurant today.</p>
+            <p className="text-muted-foreground mt-1">Welcome back! Here&apos;s what&apos;s happening at your restaurant today.</p>
           </div>
           <Button className="bg-orange-600 hover:bg-orange-700 text-white">
             <Brain className="mr-2 h-4 w-4" />
@@ -173,7 +176,7 @@ export default function DashboardPage() {
               <div className="flex-1">
                 <h3 className="font-semibold text-foreground mb-2">🧠 Varuni AI Insights</h3>
                 <p className="text-muted-foreground text-sm mb-3">
-                  Based on current trends, I recommend increasing staff for tomorrow's dinner rush. 
+                  Based on current trends, I recommend increasing staff for tomorrow&apos;s dinner rush. 
                   Your inventory for chicken breast is running low - consider reordering soon.
                 </p>
                 <div className="flex space-x-2">
@@ -304,12 +307,12 @@ export default function DashboardPage() {
             {/* Current Staff Schedule */}
             <Card>
               <CardHeader>
-                <CardTitle>Today's Staff Schedule</CardTitle>
+                <CardTitle>Today&apos;s Staff Schedule</CardTitle>
                 <CardDescription>Current and upcoming shifts</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {staffSchedule.map((staff: any, index: number) => (
+                  {staffSchedule.map((staff: { name: string; role: string; shift: string; status: string }, index: number) => (
                                                                 <div key={index} className="flex items-center justify-between p-4 bg-card rounded-lg border-2 border-border shadow-md hover:shadow-lg transition-shadow">
                         <div className="flex items-center space-x-3">
                           <div className="bg-orange-600 rounded-full w-10 h-10 flex items-center justify-center text-white font-semibold">
@@ -362,7 +365,7 @@ export default function DashboardPage() {
                       outerRadius={80}
                       dataKey="value"
                     >
-                      {inventoryData.map((entry: any, index: number) => (
+                      {inventoryData.map((entry: { color: string | undefined }, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -370,7 +373,7 @@ export default function DashboardPage() {
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="mt-4 space-y-2">
-                  {inventoryData.map((item: any, index: number) => (
+                  {inventoryData.map((item: { color: string | undefined; name: string; value: number }, index: number) => (
                     <div key={index} className="flex items-center justify-between">
                       <div className="flex items-center">
                         <div

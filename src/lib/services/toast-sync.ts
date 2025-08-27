@@ -63,26 +63,26 @@ export async function syncEmployeesForRestaurant(restaurantGuid: string, options
             existingEmployee.syncStatus = 'synced';
             existingEmployee.syncErrors = [];
             // Derive isActive strictly from server flags
-            const deletedDateValue = (toastEmp as any).deletedDate;
-            const deletedFlag = (toastEmp as any).deletedFlag === true;
-            const archivedFlag = (toastEmp as any).archivedFlag === true;
+            const deletedDateValue = (toastEmp as { deletedDate?: string }).deletedDate;
+            const deletedFlag = (toastEmp as { deletedFlag?: boolean }).deletedFlag === true;
+            const archivedFlag = (toastEmp as { archivedFlag?: boolean }).archivedFlag === true;
             existingEmployee.isActive = !(deletedFlag || archivedFlag || (!!deletedDateValue && typeof deletedDateValue === 'string' && !deletedDateValue.includes('1970-01-01')));
 
             await existingEmployee.save();
             results.updated++;
           } else {
             // Even if no data field changed, reactivate and mark synced so pending ones remain only for missing employees
-            const deletedDateValue2 = (toastEmp as any).deletedDate;
-            const deletedFlag2 = (toastEmp as any).deletedFlag === true;
-            const archivedFlag2 = (toastEmp as any).archivedFlag === true;
+            const deletedDateValue2 = (toastEmp as { deletedDate?: string }).deletedDate;
+            const deletedFlag2 = (toastEmp as { deletedFlag?: boolean }).deletedFlag === true;
+            const archivedFlag2 = (toastEmp as { archivedFlag?: boolean }).archivedFlag === true;
             existingEmployee.isActive = !(deletedFlag2 || archivedFlag2 || (!!deletedDateValue2 && typeof deletedDateValue2 === 'string' && !deletedDateValue2.includes('1970-01-01')));
             existingEmployee.syncStatus = 'synced';
             await existingEmployee.save();
           }
         } else {
-          const deletedDateValue3 = (toastEmp as any).deletedDate;
-          const deletedFlag3 = (toastEmp as any).deletedFlag === true;
-          const archivedFlag3 = (toastEmp as any).archivedFlag === true;
+          const deletedDateValue3 = (toastEmp as { deletedDate?: string }).deletedDate;
+          const deletedFlag3 = (toastEmp as { deletedFlag?: boolean }).deletedFlag === true;
+          const archivedFlag3 = (toastEmp as { archivedFlag?: boolean }).archivedFlag === true;
           const newEmployee = new ToastEmployee({
             toastGuid: toastEmp.guid,
             restaurantGuid,

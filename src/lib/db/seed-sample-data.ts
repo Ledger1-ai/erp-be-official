@@ -2,7 +2,6 @@ import { connectDB } from './connection';
 import { InventoryItem } from '../models/InventoryItem';
 import { TeamMember } from '../models/TeamMember';
 import { Analytics } from '../models/Analytics';
-import { Shift } from '../models/Shift';
 import { User } from '../models/User';
 
 export async function seedSampleData() {

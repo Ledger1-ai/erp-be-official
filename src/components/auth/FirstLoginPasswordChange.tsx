@@ -7,11 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Eye, EyeOff, Lock, User, AlertCircle, CheckCircle } from "lucide-react";
 
+interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  permissions: string[];
+}
+
 interface FirstLoginPasswordChangeProps {
   tempToken: string;
   userEmail: string;
   isFirstLogin?: boolean;
-  onSuccess: (accessToken: string, user: any) => void;
+  onSuccess: (accessToken: string, user: User) => void;
 }
 
 export default function FirstLoginPasswordChange({
@@ -69,7 +77,7 @@ export default function FirstLoginPasswordChange({
       } else {
         setError(data.error || 'Failed to change password');
       }
-    } catch (error) {
+    } catch {
       setError('An error occurred. Please try again.');
     } finally {
       setLoading(false);
@@ -210,7 +218,7 @@ export default function FirstLoginPasswordChange({
                   ) : (
                     <>
                       <AlertCircle className="h-3 w-3 text-red-600" />
-                      <span className="text-red-600">Passwords don't match</span>
+                      <span className="text-red-600">Passwords don&apos;t match</span>
                     </>
                   )}
                 </div>

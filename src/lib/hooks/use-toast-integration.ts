@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 
 export interface ToastIntegrationStatus {
@@ -36,6 +36,13 @@ export interface ToastEmployee {
   isActive: boolean;
   lastSyncDate: string;
   syncStatus: 'pending' | 'synced' | 'error';
+  isLocallyDeleted?: boolean;
+}
+
+export interface Restaurant {
+  guid: string;
+  restaurantName: string;
+  locationName: string;
 }
 
 export function useToastIntegration() {
@@ -59,7 +66,7 @@ export function useToastIntegration() {
   });
 
   const [employees, setEmployees] = useState<ToastEmployee[]>([]);
-  const [restaurants, setRestaurants] = useState<any[]>([]);
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [selectedRestaurant, setSelectedRestaurant] = useState<string>(() => {
     // Persist restaurant selection in localStorage
     if (typeof window !== 'undefined') {
@@ -68,8 +75,36 @@ export function useToastIntegration() {
     return '';
   });
 
+  // Load connected restaurants
+  const loadRestaurants = useCallback(async () => {
+    try {
+      const response = await fetch('/api/toast/restaurants');
+      const data = await response.json();
+      
+      if (data.success) {
+        setRestaurants(data.data);
+        if (data.data.length > 0) {
+          const restaurant = data.data[0];
+          const restaurantGuid = restaurant.guid;
+          console.log('Setting selected restaurant:', restaurantGuid, 'Full restaurant:', restaurant);
+          
+          // Only set if no restaurant is already selected (from localStorage)
+          if (!selectedRestaurant) {
+            setSelectedRestaurant(restaurantGuid);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('toast-selected-restaurant', restaurantGuid);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading restaurants:', error);
+      toast.error('Failed to load restaurants');
+    }
+  }, [selectedRestaurant]);
+
   // Check authentication status
-  const checkAuthStatus = async () => {
+  const checkAuthStatus = useCallback(async () => {
     try {
       const response = await fetch('/api/toast/auth');
       const data = await response.json();
@@ -99,38 +134,39 @@ export function useToastIntegration() {
         isLoading: false,
       }));
     }
-  };
+  }, [loadRestaurants]);
 
-  // Load connected restaurants
-  const loadRestaurants = async () => {
+  // Load employees from database
+  const loadEmployees = useCallback(async (restaurantGuid?: string | Event, options?: { includeInactive?: boolean }) => {
+    // Handle case where this is called from an event handler
+    let targetRestaurant: string;
+    if (typeof restaurantGuid === 'string') {
+      targetRestaurant = restaurantGuid;
+    } else {
+      targetRestaurant = selectedRestaurant;
+    }
+    
+    if (!targetRestaurant) return;
+
+    console.log('Loading employees for restaurant:', targetRestaurant);
     try {
-      const response = await fetch('/api/toast/restaurants');
+      const response = await fetch(`/api/toast/employees?restaurantGuid=${encodeURIComponent(targetRestaurant)}${options?.includeInactive ? '&includeInactive=true' : ''}`);
       const data = await response.json();
       
       if (data.success) {
-        setRestaurants(data.data);
-        if (data.data.length > 0) {
-          const restaurant = data.data[0];
-          const restaurantGuid = restaurant.guid;
-          console.log('Setting selected restaurant:', restaurantGuid, 'Full restaurant:', restaurant);
-          
-          // Only set if no restaurant is already selected (from localStorage)
-          if (!selectedRestaurant) {
-            setSelectedRestaurant(restaurantGuid);
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('toast-selected-restaurant', restaurantGuid);
-            }
-          }
-        }
+        console.log(`Loaded ${data.data.length} employees from database:`, data.data.map((emp: ToastEmployee) => `${emp.firstName} ${emp.lastName} (${emp.isLocallyDeleted ? 'HIDDEN' : 'VISIBLE'})`));
+        setEmployees(data.data);
+      } else {
+        console.error('Failed to load employees:', data.error);
       }
     } catch (error) {
-      console.error('Error loading restaurants:', error);
-      toast.error('Failed to load restaurants');
+      console.error('Error loading employees:', error);
+      toast.error('Failed to load employees');
     }
-  };
+  }, [selectedRestaurant]);
 
   // Test Toast API connection
-  const testConnection = async () => {
+  const testConnection = useCallback(async () => {
     setIntegrationStatus(prev => ({ ...prev, status: 'connecting', isLoading: true }));
     
     try {
@@ -171,10 +207,10 @@ export function useToastIntegration() {
       
       toast.error('Failed to test connection');
     }
-  };
+  }, [loadRestaurants]);
 
   // Sync employees from Toast
-  const syncEmployees = async (restaurantGuid?: string | Event) => {
+  const syncEmployees = useCallback(async (restaurantGuid?: string | Event) => {
     // Handle case where this is called from an event handler
     let targetRestaurant: string;
     if (typeof restaurantGuid === 'string') {
@@ -233,10 +269,10 @@ export function useToastIntegration() {
       setSyncStatus(prev => ({ ...prev, isLoading: false }));
       toast.error('Failed to sync employees');
     }
-  };
+  }, [selectedRestaurant, loadEmployees]);
 
   // Delete employee locally (hide but keep for Toast sync)
-  const deleteEmployeeLocally = async (employeeId: string) => {
+  const deleteEmployeeLocally = useCallback(async (employeeId: string) => {
     try {
       const response = await fetch(`/api/toast/employees/${employeeId}/delete`, {
         method: 'POST',
@@ -257,39 +293,10 @@ export function useToastIntegration() {
       console.error('Error hiding employee:', error);
       toast.error('Failed to hide employee');
     }
-  };
-
-  // Load employees from database
-  const loadEmployees = async (restaurantGuid?: string | Event, options?: { includeInactive?: boolean }) => {
-    // Handle case where this is called from an event handler
-    let targetRestaurant: string;
-    if (typeof restaurantGuid === 'string') {
-      targetRestaurant = restaurantGuid;
-    } else {
-      targetRestaurant = selectedRestaurant;
-    }
-    
-    if (!targetRestaurant) return;
-
-    console.log('Loading employees for restaurant:', targetRestaurant);
-    try {
-      const response = await fetch(`/api/toast/employees?restaurantGuid=${encodeURIComponent(targetRestaurant)}${options?.includeInactive ? '&includeInactive=true' : ''}`);
-      const data = await response.json();
-      
-      if (data.success) {
-        console.log(`Loaded ${data.data.length} employees from database:`, data.data.map((emp: { firstName: any; lastName: any; isLocallyDeleted: any; }) => `${emp.firstName} ${emp.lastName} (${emp.isLocallyDeleted ? 'HIDDEN' : 'VISIBLE'})`));
-        setEmployees(data.data);
-      } else {
-        console.error('Failed to load employees:', data.error);
-      }
-    } catch (error) {
-      console.error('Error loading employees:', error);
-      toast.error('Failed to load employees');
-    }
-  };
+  }, [selectedRestaurant, loadEmployees]);
 
   // Perform full sync (employees and orders)
-  const performFullSync = async (restaurantGuid?: string | Event) => {
+  const performFullSync = useCallback(async (restaurantGuid?: string | Event) => {
     // Handle case where this is called from an event handler
     let targetRestaurant: string;
     if (typeof restaurantGuid === 'string') {
@@ -299,7 +306,7 @@ export function useToastIntegration() {
     }
     
     if (!targetRestaurant) {
-      toast.error('Please select a restaurant first');
+      console.error('Please select a restaurant first');
       return;
     }
 
@@ -355,10 +362,10 @@ export function useToastIntegration() {
       setSyncStatus(prev => ({ ...prev, isLoading: false }));
       toast.error('Failed to perform full sync');
     }
-  };
+  }, [selectedRestaurant, loadEmployees]);
 
   // Get sync status
-  const getSyncStatus = async (restaurantGuid?: string | Event) => {
+  const getSyncStatus = useCallback(async (restaurantGuid?: string | Event) => {
     // Handle case where this is called from an event handler
     let targetRestaurant: string;
     if (typeof restaurantGuid === 'string') {
@@ -387,14 +394,14 @@ export function useToastIntegration() {
     } catch (error) {
       console.error('Error getting sync status:', error);
     }
-  };
+  }, [selectedRestaurant]);
 
   useEffect(() => {
     // Only run on client side
     if (typeof window !== 'undefined') {
       checkAuthStatus();
     }
-  }, []);
+  }, [checkAuthStatus]);
 
   // Load employees automatically if we have a persisted restaurant selection
   useEffect(() => {
@@ -402,7 +409,7 @@ export function useToastIntegration() {
       console.log('Auto-loading employees for persisted restaurant:', selectedRestaurant);
       loadEmployees(selectedRestaurant);
     }
-  }, [integrationStatus.status]);
+  }, [integrationStatus.status, loadEmployees, selectedRestaurant]);
 
   useEffect(() => {
     // Only run on client side
@@ -410,7 +417,7 @@ export function useToastIntegration() {
       loadEmployees(selectedRestaurant);
       getSyncStatus(selectedRestaurant);
     }
-  }, [selectedRestaurant]);
+  }, [selectedRestaurant, getSyncStatus, loadEmployees]);
 
   // Auto-sync every 30 minutes on client when connected and a restaurant is selected
   useEffect(() => {
@@ -424,7 +431,7 @@ export function useToastIntegration() {
     }, 30 * 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [integrationStatus.status, selectedRestaurant]);
+  }, [integrationStatus.status, selectedRestaurant, syncEmployees]);
 
   // Enhanced setSelectedRestaurant to persist to localStorage
   const setSelectedRestaurantWithPersistence = (restaurantGuid: string) => {

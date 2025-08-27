@@ -11,8 +11,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -25,7 +23,6 @@ import {
   Cell,
 } from "recharts";
 import {
-  FileText,
   Plus,
   Brain,
   DollarSign,
@@ -37,7 +34,6 @@ import {
   Eye,
   Edit,
   Send,
-  CheckCircle,
   Clock,
   AlertTriangle,
   Calendar,
@@ -251,7 +247,7 @@ export default function InvoicingPage() {
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Financial Insights</h3>
+                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni&apos;s Financial Insights</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {aiInsights.map((insight, index) => (
                     <div key={index} className="bg-card rounded-lg p-4 border border-border">

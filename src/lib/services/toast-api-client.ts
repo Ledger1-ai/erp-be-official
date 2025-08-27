@@ -107,28 +107,26 @@ export interface ToastAPIResponse<T> {
 
 export class ToastAPIClient {
   private authService: ToastAuthService;
-  private apiHostname: string;
 
   constructor() {
     this.authService = ToastAuthService.getInstance();
-    this.apiHostname = process.env.TOAST_API_HOSTNAME!;
   }
 
   /**
    * Make authenticated API request
    */
-  private async makeRequest<T>(
+  public async makeRequest<T>(
     endpoint: string,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-    body?: any,
+    body?: string,
     queryParams?: Record<string, string>,
-    additionalHeaders?: Record<string, string>
+    extraHeaders?: Record<string, string>
   ): Promise<T> {
     try {
       const baseHeaders = await this.authService.getAuthHeaders();
-      const headers = { ...baseHeaders, ...additionalHeaders };
+      const headers = { ...baseHeaders, ...extraHeaders };
       
-      let url = `${this.apiHostname}${endpoint}`;
+      let url = `${process.env.TOAST_API_HOSTNAME}${endpoint}`;
       
       // Add query parameters
       if (queryParams) {
@@ -138,11 +136,14 @@ export class ToastAPIClient {
 
       console.log(`Making Toast API request: ${method} ${url}`);
       console.log('Headers:', { ...headers, Authorization: headers.Authorization ? `${headers.Authorization.substring(0, 20)}...` : 'None' });
+      if (body) {
+        console.log('Body:', body);
+      }
 
-      const response = await fetch(url, {
+      const response = await fetch(url.toString(), {
         method,
         headers,
-        body: body ? JSON.stringify(body) : undefined,
+        body: body, // body is already a string, so no need to stringify
       });
 
       console.log(`Toast API response: ${response.status} ${response.statusText}`);
@@ -194,11 +195,11 @@ export class ToastAPIClient {
 
     try {
       // First try v2 then v1
-      let response: any;
-      let lastError: any = null;
+      let response: unknown;
+      let lastError: unknown = null;
       for (const ep of endpoints) {
         try {
-          response = await this.makeRequest<any>(ep, 'GET', undefined, queryParams, headers);
+          response = await this.makeRequest<unknown>(ep, 'GET', undefined, queryParams, headers);
           break;
         } catch (err) {
           lastError = err;
@@ -213,10 +214,10 @@ export class ToastAPIClient {
       }
       
       // Validate and transform response
-      const allEmployees = Array.isArray(response) ? response : response.data || [];
+      const allEmployees = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
       
       // Filter for ACTIVE employees only (no deletedDate or epoch date)
-      const activeEmployees = allEmployees.filter((emp: any) => {
+      const activeEmployees = allEmployees.filter((emp: { deletedDate: string | null; }) => {
         const deletedDate = emp.deletedDate;
         return !deletedDate || 
                deletedDate === null || 
@@ -256,15 +257,15 @@ export class ToastAPIClient {
         archived: z.boolean().optional(),
       }).transform((data) => {
         // Prefer roles from jobReferences if provided
-        let normalizedJobTitles = (data.jobReferences && data.jobReferences.length > 0)
-          ? data.jobReferences.map((r: any) => ({
+        const normalizedJobTitles = (data.jobReferences && data.jobReferences.length > 0)
+          ? data.jobReferences.map((r: { jobTitleGuid?: string; guid?: string; jobTitleName?: string; title?: string; }) => ({
               guid: r.jobTitleGuid || r.guid || 'unknown',
               title: r.jobTitleName || r.title || '',
               tip: false,
             }))
           : (data.jobTitles || []);
         // If titles came back empty strings, fallback to config endpoint for mapping
-        const hasMissingTitles = normalizedJobTitles.some((jt: any) => !jt.title);
+        (normalizedJobTitles as {title: string}[]).some((jt) => !jt.title);
         // Note: cannot call async inside transform; mapping will be enhanced post-parse below
 
         const archivedOrDeleted = data.deleted === true || data.archived === true;
@@ -291,25 +292,25 @@ export class ToastAPIClient {
         };
       });
       
-      let validatedEmployeesRaw = activeEmployees.map((emp: any) => flexibleEmployeeSchema.parse(emp));
+      let validatedEmployeesRaw = activeEmployees.map((emp) => flexibleEmployeeSchema.parse(emp));
 
       // Post-parse enhancement: fill missing job titles via config map
-      const needsRoleMap = validatedEmployeesRaw.some((e: any) => (e.jobTitles || []).some((jt: any) => !jt.title));
+      const needsRoleMap = validatedEmployeesRaw.some((e) => (e.jobTitles || []).some((jt) => !jt.title));
       if (needsRoleMap) {
         try {
           const rolesMap = await this.getJobTitlesMap(restaurantGuid);
-          validatedEmployeesRaw = validatedEmployeesRaw.map((e: any) => ({
+          validatedEmployeesRaw = validatedEmployeesRaw.map((e) => ({
             ...e,
-            jobTitles: (e.jobTitles || []).map((jt: any) => ({
+            jobTitles: (e.jobTitles || []).map((jt) => ({
               ...jt,
               title: jt.title || rolesMap[jt.guid] || 'Employee',
             })),
           }));
-        } catch {}
+        } catch { /* empty */ }
       }
 
       // Exclude archived/deleted again post-normalization just in case
-      const validatedEmployees = validatedEmployeesRaw.filter((emp: any) => {
+      const validatedEmployees = validatedEmployeesRaw.filter((emp) => {
         const dd = emp.deletedDate;
         return !dd || (typeof dd === 'string' && dd.includes('1970-01-01'));
       });
@@ -323,9 +324,9 @@ export class ToastAPIClient {
         hasMore: validatedEmployees.length === pageSize,
       };
       
-    } catch (error: any) {
+    } catch (error: unknown) {
       // If it fails with restaurant-external-id error, try other approaches
-      if (error.message && error.message.includes('restaurant-external-id')) {
+      if (error instanceof Error && error.message && error.message.includes('restaurant-external-id')) {
         console.log(`❌ Failed with restaurant-external-id header. Trying alternate approaches...`);
         
         // Try with different approaches based on Toast docs
@@ -339,11 +340,11 @@ export class ToastAPIClient {
           try {
             console.log(`🔄 Trying alternative headers:`, altHeaders);
             const cleanHeaders = Object.fromEntries(Object.entries(altHeaders).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
-            const response = await this.makeRequest<any>(endpoints[0], 'GET', undefined, queryParams, cleanHeaders);
+            const response = await this.makeRequest<unknown>(endpoints[0], 'GET', undefined, queryParams, cleanHeaders);
             
             // If successful, process the response the same way
-            const allEmployees = Array.isArray(response) ? response : response.data || [];
-            const activeEmployees = allEmployees.filter((emp: any) => {
+            const allEmployees = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
+            const activeEmployees = allEmployees.filter((emp: { deletedDate: string | null; }) => {
               const deletedDate = emp.deletedDate;
               return !deletedDate || 
                      deletedDate === null || 
@@ -352,15 +353,15 @@ export class ToastAPIClient {
             });
             // Basic normalization without schema (fallback path)
             const validatedEmployees = activeEmployees
-              .map((emp: any) => ({
+              .map((emp: { guid: string; entityType: string; firstName: string; lastName: string; email: string; jobReferences: unknown[]; jobTitles: unknown[]; externalId: string; createdDate: string; modifiedDate: string; deleted: boolean; archived: boolean; deletedDate: string; }) => ({
                 guid: emp.guid,
                 entityType: emp.entityType || 'Employee',
                 firstName: emp.firstName,
                 lastName: emp.lastName,
                 email: emp.email || undefined,
-                jobTitles: (emp.jobReferences || emp.jobTitles || []).map((r: any) => ({
-                  guid: r.jobTitleGuid || r.guid || 'unknown',
-                  title: r.jobTitleName || r.title || 'Employee',
+                jobTitles: (emp.jobReferences || emp.jobTitles || []).map((r: unknown) => ({
+                  guid: (r as { jobTitleGuid?: string; guid?: string }).jobTitleGuid || (r as { jobTitleGuid?: string; guid?: string }).guid || 'unknown',
+                  title: (r as { jobTitleName?: string; title?: string }).jobTitleName || (r as { jobTitleName?: string; title?: string }).title || 'Employee',
                   tip: false,
                 })),
                 externalId: emp.externalId || undefined,
@@ -368,7 +369,7 @@ export class ToastAPIClient {
                 modifiedDate: emp.modifiedDate,
                 deletedDate: emp.deleted === true || emp.archived === true ? new Date().toISOString() : emp.deletedDate,
               }))
-              .filter((emp: any) => !emp.deletedDate || (typeof emp.deletedDate === 'string' && emp.deletedDate.includes('1970-01-01')));
+              .filter((emp: { deletedDate: string; }) => !emp.deletedDate || (typeof emp.deletedDate === 'string' && emp.deletedDate.includes('1970-01-01')));
             
             console.log(`✅ Found ${validatedEmployees.length} employees with alternative header approach`);
             
@@ -398,7 +399,7 @@ export class ToastAPIClient {
     const endpoint = `/labor/v1/employees/${employeeGuid}`;
     const queryParams = { restaurantGuid };
 
-    const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams);
+    const response = await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams);
     return ToastEmployeeSchema.parse(response);
   }
 
@@ -409,7 +410,7 @@ export class ToastAPIClient {
     const endpoint = `/labor/v1/employees`;
     const queryParams = { restaurantGuid };
 
-    const response = await this.makeRequest<any>(endpoint, 'POST', employeeData, queryParams);
+    const response = await this.makeRequest<unknown>(endpoint, 'POST', JSON.stringify(employeeData), queryParams);
     return ToastEmployeeSchema.parse(response);
   }
 
@@ -420,7 +421,7 @@ export class ToastAPIClient {
     const endpoint = `/labor/v1/employees/${employeeGuid}`;
     const queryParams = { restaurantGuid };
 
-    const response = await this.makeRequest<any>(endpoint, 'PUT', employeeData, queryParams);
+    const response = await this.makeRequest<unknown>(endpoint, 'PUT', JSON.stringify(employeeData), queryParams);
     return ToastEmployeeSchema.parse(response);
   }
 
@@ -433,10 +434,10 @@ export class ToastAPIClient {
     // Per Toast docs, jobs are available under Labor v1: /labor/v1/jobs
     // https://doc.toasttab.com/openapi/labor/operation/jobsGet/
     const headers = { 'Toast-Restaurant-External-ID': restaurantGuid };
-    const response = await this.makeRequest<any>(`/labor/v1/jobs`, 'GET', undefined, undefined, headers);
-    const items = Array.isArray(response) ? response : response?.data || [];
+    const response = await this.makeRequest<unknown>(`/labor/v1/jobs`, 'GET', undefined, undefined, headers);
+    const items = Array.isArray(response) ? response : (response as {data?: unknown[]})?.data || [];
     const map: Record<string, string> = {};
-    for (const item of items) {
+    for (const item of (items as { guid?: string; jobTitleGuid?: string; id?: string; title?: string; name?: string; jobTitleName?: string; }[])) {
       const guid = item.guid || item.jobTitleGuid || item.id;
       const name = item.title || item.name || item.jobTitleName;
       if (guid && name) map[guid] = name;
@@ -468,10 +469,10 @@ export class ToastAPIClient {
       'Toast-Restaurant-External-ID': restaurantGuid,
     };
 
-    const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+    const response = await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams, headers);
     
-    const orders = Array.isArray(response) ? response : response.data || [];
-    const validatedOrders = orders.map((order: any) => ToastOrderSchema.parse(order));
+    const orders = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
+    const validatedOrders = orders.map((order) => ToastOrderSchema.parse(order));
 
     return {
       data: validatedOrders,
@@ -488,7 +489,7 @@ export class ToastAPIClient {
     const endpoint = `/orders/v2/orders/${orderGuid}`;
     const queryParams = { restaurantGuid };
 
-    const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams);
+    const response = await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams);
     return ToastOrderSchema.parse(response);
   }
 
@@ -501,10 +502,10 @@ export class ToastAPIClient {
     const endpoint = `/menus/v2/menus`;
     const queryParams = { restaurantGuid };
 
-    const response = await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams);
+    const response = await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams);
     
-    const menus = Array.isArray(response) ? response : response.data || [];
-    const validatedMenus = menus.map((menu: any) => ToastMenuSchema.parse(menu));
+    const menus = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
+    const validatedMenus = menus.map((menu) => ToastMenuSchema.parse(menu));
 
     return {
       data: validatedMenus,
@@ -519,7 +520,7 @@ export class ToastAPIClient {
   public async getRestaurant(restaurantGuid: string): Promise<ToastRestaurant> {
     const endpoint = `/restaurants/v1/restaurants/${restaurantGuid}`;
 
-    const response = await this.makeRequest<any>(endpoint, 'GET');
+    const response = await this.makeRequest<unknown>(endpoint, 'GET');
     
     // Log response for debugging
     if (process.env.NODE_ENV === 'development') {
@@ -552,19 +553,19 @@ export class ToastAPIClient {
       isoCreatedDate: z.string().optional(),
       isoModifiedDate: z.string().optional(),
     }).transform((data) => {
-      const address = data.address || {} as any;
+      const address = data.address || {};
       return {
         guid: data.guid || data.restaurantGuid || data.id || restaurantGuid,
         entityType: data.entityType || 'Restaurant',
         restaurantName: data.restaurantName || data.name || 'Unknown Restaurant',
         locationName: data.locationName || data.name || 'Unknown Location',
         address: {
-          address1: address.address1 || '',
-          address2: address.address2 || undefined,
-          city: address.city || '',
-          stateCode: address.stateCode || '',
-          zipCode: address.zipCode || '',
-          country: address.country || 'US',
+          address1: (address as { address1?: string }).address1 || '',
+          address2: (address as { address2?: string }).address2 || undefined,
+          city: (address as { city?: string }).city || '',
+          stateCode: (address as { stateCode?: string }).stateCode || '',
+          zipCode: (address as { zipCode?: string }).zipCode || '',
+          country: (address as { country?: string }).country || 'US',
         },
         phoneNumber: data.phoneNumber || '',
         emailAddress: data.emailAddress || '',
@@ -588,14 +589,14 @@ export class ToastAPIClient {
   public async getConnectedRestaurants(): Promise<ToastAPIResponse<ToastRestaurant>> {
     const endpoint = `/partners/v1/restaurants`;
 
-    const response = await this.makeRequest<any>(endpoint, 'GET');
+    const response = await this.makeRequest<unknown>(endpoint, 'GET');
     
     // Log response for debugging
     if (process.env.NODE_ENV === 'development') {
       console.log('Toast Restaurants Response:', JSON.stringify(response, null, 2));
     }
     
-    const restaurants = Array.isArray(response) ? response : response.data || [];
+    const restaurants = Array.isArray(response) ? response : (response as { data?: unknown[] }).data || [];
     
     // Use a more flexible schema for restaurant validation
     const flexibleRestaurantSchema = z.object({
@@ -631,17 +632,19 @@ export class ToastAPIClient {
       isoModifiedDate: z.string().optional(),
     }).transform((data) => {
       // Normalize restaurant data
+      const address = data.address || { address1: '', city: '', stateCode: '', zipCode: '', country: 'US' };
       return {
         guid: data.guid || data.restaurantGuid || data.id || 'unknown',
         entityType: data.entityType || 'Restaurant',
         restaurantName: data.restaurantName || data.name || 'Unknown Restaurant',
         locationName: data.locationName || data.name || 'Unknown Location',
-        address: data.address || {
-          address1: '',
-          city: '',
-          stateCode: '',
-          zipCode: '',
-          country: 'US',
+        address: {
+          address1: address.address1 || '',
+          address2: address.address2,
+          city: address.city || '',
+          stateCode: address.stateCode || '',
+          zipCode: address.zipCode || '',
+          country: address.country || 'US',
         },
         phoneNumber: data.phoneNumber || '',
         emailAddress: data.emailAddress || '',
@@ -656,11 +659,15 @@ export class ToastAPIClient {
       };
     });
     
-    const validatedRestaurants = restaurants.map((restaurant: any) => flexibleRestaurantSchema.parse(restaurant));
+    const validatedRestaurants = restaurants.map((restaurant: unknown) => flexibleRestaurantSchema.parse(restaurant));
 
     return {
-      data: validatedRestaurants,
+      data: validatedRestaurants as ToastRestaurant[],
     };
+  }
+
+  async listRestaurants(): Promise<any[]> {
+    return this.makeRequest<any[]>('/partners/v1/restaurants', 'GET');
   }
 
   // Analytics APIs
@@ -671,14 +678,14 @@ export class ToastAPIClient {
   public async getSalesSummary(
     restaurantGuid: string,
     businessDate: string
-  ): Promise<any> {
+  ): Promise<unknown> {
     const endpoint = `/reports/v1/reports/salesSummary`;
     const queryParams = {
       restaurantGuid,
       businessDate,
     };
 
-    return await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams);
+    return await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams);
   }
 
   /**
@@ -687,14 +694,52 @@ export class ToastAPIClient {
   public async getLaborSummary(
     restaurantGuid: string,
     businessDate: string
-  ): Promise<any> {
+  ): Promise<unknown> {
     const endpoint = `/reports/v1/reports/laborSummary`;
     const queryParams = {
       restaurantGuid,
       businessDate,
     };
 
-    return await this.makeRequest<any>(endpoint, 'GET', undefined, queryParams);
+    return await this.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams);
+  }
+
+  /**
+   * Get time entries for employees
+   */
+  public async getTimeEntries(
+    restaurantGuid: string,
+    startDate: string,
+    endDate: string
+  ): Promise<any[]> {
+    const endpoint = `/labor/v1/timeEntries`;
+    const queryParams = {
+      startDate,
+      endDate,
+    };
+    const headers = {
+      'Toast-Restaurant-External-ID': restaurantGuid,
+    };
+
+    return await this.makeRequest<any[]>(endpoint, 'GET', undefined, queryParams, headers);
+  }
+
+  async requestEraReport(restaurantGuid: string, startDate: string, endDate: string): Promise<string> {
+    const response = await this.makeRequest<{ reportRequestGuid: string }>(
+      '/era/v1/metrics/time-series',
+      'POST',
+      JSON.stringify({
+        startBusinessDate: startDate,
+        endBusinessDate: endDate,
+        restaurantIds: [restaurantGuid],
+        groupBy: ['REVENUE_CENTER'],
+      })
+    );
+    return response.reportRequestGuid;
+  }
+
+  async getEraReport<T>(reportRequestGuid: string): Promise<T> {
+    return this.makeRequest<T>(`/era/v1/metrics/${reportRequestGuid}`);
   }
 
   // Utility Methods
@@ -706,8 +751,8 @@ export class ToastAPIClient {
     try {
       await this.getConnectedRestaurants();
       return true;
-    } catch (error) {
-      console.error('Toast API connection test failed:', error);
+    } catch {
+      console.error('Toast API connection test failed:');
       return false;
     }
   }
@@ -717,12 +762,12 @@ export class ToastAPIClient {
    */
   public async getHealthStatus(): Promise<{ status: string; timestamp: string }> {
     try {
-      const restaurants = await this.getConnectedRestaurants();
+      await this.getConnectedRestaurants();
       return {
         status: 'healthy',
         timestamp: new Date().toISOString(),
       };
-    } catch (error) {
+    } catch {
       return {
         status: 'unhealthy',
         timestamp: new Date().toISOString(),

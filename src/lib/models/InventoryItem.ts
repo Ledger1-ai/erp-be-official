@@ -116,6 +116,17 @@ const inventoryItemSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // Restock planning
+  restockPeriod: {
+    type: String,
+    enum: ['daily', 'weekly', 'monthly', 'custom'],
+    default: 'weekly'
+  },
+  restockDays: {
+    type: Number,
+    min: 1,
+    default: 7
+  },
   reorderQuantity: {
     type: Number,
     default: 0,
@@ -186,6 +197,13 @@ const inventoryItemSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  wasteLogs: [{
+    date: { type: Date, default: Date.now },
+    quantity: { type: Number, required: true },
+    reason: { type: String, required: true },
+    notes: { type: String, trim: true },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

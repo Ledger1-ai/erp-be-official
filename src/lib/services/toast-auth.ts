@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import ToastErrorHandler from './toast-error-handler';
 
+// Global cache for the auth service instance
+let authServiceInstance: ToastAuthService | null = null;
+
 // Toast API authentication service
 export class ToastAuthService {
-  private static instance: ToastAuthService;
   private accessToken: string | null = null;
   private tokenExpiry: Date | null = null;
   private refreshToken: string | null = null;
@@ -13,7 +15,12 @@ export class ToastAuthService {
   private readonly apiHostname = process.env.TOAST_API_HOSTNAME!;
   private readonly userAccessType = process.env.TOAST_USER_ACCESS_TYPE!;
 
+  private static instance: ToastAuthService;
+
   public static getInstance(): ToastAuthService {
+    if (typeof window !== 'undefined') {
+      throw new Error('ToastAuthService should not be instantiated on the client-side.');
+    }
     if (!ToastAuthService.instance) {
       ToastAuthService.instance = new ToastAuthService();
     }
@@ -44,7 +51,7 @@ export class ToastAuthService {
     if (this.refreshToken) {
       try {
         return await this.refreshAccessToken();
-      } catch (error) {
+      } catch {
         // If refresh fails, fall back to re-authentication
         console.log('Refresh failed, re-authenticating...');
         return await this.authenticate();
@@ -118,15 +125,18 @@ export class ToastAuthService {
 
       const validatedData = authSchema.parse(data);
       
-      this.accessToken = validatedData.token.accessToken;
-      this.refreshToken = validatedData.token.refreshToken || null;
-      
-      // Calculate expiry time
-      this.tokenExpiry = new Date();
-      this.tokenExpiry.setSeconds(this.tokenExpiry.getSeconds() + validatedData.token.expiresIn);
+      if (validatedData.token) {
+        this.accessToken = validatedData.token.accessToken;
+        this.refreshToken = validatedData.token.refreshToken || null;
+        
+        // Calculate expiry time
+        this.tokenExpiry = new Date();
+        this.tokenExpiry.setSeconds(this.tokenExpiry.getSeconds() + validatedData.token.expiresIn);
 
-      console.log('Toast authentication successful');
-      return this.accessToken;
+        console.log('Toast authentication successful');
+        return this.accessToken;
+      }
+      throw new Error("Invalid auth response from Toast");
     } catch (error) {
       const errorHandler = ToastErrorHandler.getInstance();
       const toastError = errorHandler.handleError(error, authUrl, false); // Don't show toast on server
@@ -200,15 +210,18 @@ export class ToastAuthService {
 
       const validatedData = refreshSchema.parse(data);
       
-      this.accessToken = validatedData.token.accessToken;
-      this.refreshToken = validatedData.token.refreshToken || null;
-      
-      // Calculate expiry time
-      this.tokenExpiry = new Date();
-      this.tokenExpiry.setSeconds(this.tokenExpiry.getSeconds() + validatedData.token.expiresIn);
+      if (validatedData.token) {
+        this.accessToken = validatedData.token.accessToken;
+        this.refreshToken = validatedData.token.refreshToken || null;
+        
+        // Calculate expiry time
+        this.tokenExpiry = new Date();
+        this.tokenExpiry.setSeconds(this.tokenExpiry.getSeconds() + validatedData.token.expiresIn);
 
-      console.log('Toast token refreshed successfully');
-      return this.accessToken;
+        console.log('Toast token refreshed successfully');
+        return this.accessToken;
+      }
+      throw new Error("Invalid refresh response from Toast");
     } catch (error) {
       const errorHandler = ToastErrorHandler.getInstance();
       errorHandler.handleError(error, refreshUrl, false); // Don't show toast for refresh errors

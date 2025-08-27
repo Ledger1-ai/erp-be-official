@@ -23,7 +23,7 @@ interface RobotStatus {
 interface WorkflowData {
   id: string;
   name: string;
-  keyframes: any[];
+  keyframes: unknown[];
   status: 'draft' | 'active' | 'paused' | 'completed';
   created: string;
   updated: string;
@@ -106,7 +106,7 @@ class BearCloudAPIService {
     }
   }
 
-  async sendRobotCommand(robotId: string, command: string, params?: any): Promise<boolean> {
+  async sendRobotCommand(robotId: string, command: string, params?: unknown): Promise<boolean> {
     try {
       console.log(`🎮 Client sending command '${command}' to robot ${robotId} via API route...`);
       
@@ -115,7 +115,7 @@ class BearCloudAPIService {
         params,
       };
 
-      const response = await this.makeRequest<any>(`/robots/${robotId}/command`, {
+      const response = await this.makeRequest<unknown>(`/robots/${robotId}/command`, {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -178,11 +178,11 @@ class BearCloudAPIService {
   }
 
   // Facility & Mapping
-  async getFacilityMap(): Promise<any> {
+  async getFacilityMap(): Promise<unknown> {
     try {
       console.log('🗺️ Client fetching facility map via API route...');
       
-      const response = await this.makeRequest<any>('/facility/map');
+      const response = await this.makeRequest<unknown>('/facility/map');
       
       console.log('✅ Successfully fetched facility map from API route:', response.data);
       return response.data || this.getMockFacilityMap();
@@ -287,7 +287,7 @@ class BearCloudAPIService {
     ];
   }
 
-  private getMockFacilityMap(): any {
+  private getMockFacilityMap(): unknown {
     return {
       width: 600,
       height: 400,

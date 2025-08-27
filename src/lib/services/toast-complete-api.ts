@@ -11,6 +11,8 @@ export interface ToastAnalyticsData {
   orders: number;
   averageCheck: number;
   period: string;
+  laborHours?: number;
+  timeEntriesCount?: number;
 }
 
 export interface ToastMenuItem {
@@ -68,17 +70,16 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+      const response = await this.apiClient.makeRequest<unknown[]>(endpoint, 'GET', undefined, queryParams, headers);
       
       // Transform labor data to analytics format
-      const timeEntries = Array.isArray(response) ? response : response.data || [];
+      const timeEntries = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
       return {
         revenue: 0, // Labor API doesn't provide revenue directly
         orders: 0,
         averageCheck: 0,
         period: `${startDate} to ${endDate}`,
-        laborHours: timeEntries.length,
-        timeEntriesCount: timeEntries.length,
+        laborHours: timeEntries.length
       };
     } catch (error) {
       console.error('Analytics API error:', error);
@@ -101,17 +102,17 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+      const response = await this.apiClient.makeRequest<unknown[]>(endpoint, 'GET', undefined, queryParams, headers);
       
-      const menus = Array.isArray(response) ? response : response.data || [];
+      const menus = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
       const menuItems: ToastMenuItem[] = [];
 
       // Extract items from all menus
-      menus.forEach((menu: any) => {
+      (menus as { menuGroups?: { name: string; menuItems?: { guid: string; name: string; description: string; pricing: { basePrice: number; }; disabled: boolean; }[] }[] }[]).forEach((menu) => {
         if (menu.menuGroups) {
-          menu.menuGroups.forEach((group: any) => {
+          menu.menuGroups.forEach((group) => {
             if (group.menuItems) {
-              group.menuItems.forEach((item: any) => {
+              group.menuItems.forEach((item) => {
                 menuItems.push({
                   guid: item.guid,
                   name: item.name,
@@ -157,11 +158,11 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+      const response = await this.apiClient.makeRequest<unknown[]>(endpoint, 'GET', undefined, queryParams, headers);
       
-      const orders = Array.isArray(response) ? response : response.data || [];
+      const orders = Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
       
-      return orders.map((order: any) => ({
+      return (orders as { guid: string; orderNumber: string; totalAmount: number; orderStatus: string; createdDate: string; customer: { firstName: string; lastName: string; email: string; }; selections: { item: { name: string; }; quantity: number; price: number; }[]; }[]).map((order) => ({
         guid: order.guid,
         orderNumber: order.orderNumber || '',
         total: order.totalAmount || 0,
@@ -172,7 +173,7 @@ export class ToastCompleteAPI {
           lastName: order.customer.lastName || '',
           email: order.customer.email || '',
         } : undefined,
-        items: (order.selections || []).map((item: any) => ({
+        items: (order.selections || []).map((item) => ({
           name: item.item?.name || 'Unknown Item',
           quantity: item.quantity || 1,
           price: item.price || 0,
@@ -188,7 +189,7 @@ export class ToastCompleteAPI {
    * Stock API - Get inventory levels
    * Reference: https://doc.toasttab.com/openapi/#tag/Stock
    */
-  async getStockLevels(restaurantGuid: string): Promise<any[]> {
+  async getStockLevels(restaurantGuid: string): Promise<unknown[]> {
     const endpoint = `/stock/v1/inventory`;
     const queryParams = {
       restaurantGuid,
@@ -199,8 +200,8 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
-      return Array.isArray(response) ? response : response.data || [];
+      const response = await this.apiClient.makeRequest<unknown[]>(endpoint, 'GET', undefined, queryParams, headers);
+      return Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
     } catch (error) {
       console.error('Stock API error:', error);
       throw error;
@@ -211,7 +212,7 @@ export class ToastCompleteAPI {
    * Kitchen API - Get kitchen orders
    * Reference: https://doc.toasttab.com/openapi/#tag/Kitchen
    */
-  async getKitchenOrders(restaurantGuid: string): Promise<any[]> {
+  async getKitchenOrders(restaurantGuid: string): Promise<unknown[]> {
     const endpoint = `/kitchen/v1/orders`;
     const queryParams = {
       restaurantGuid,
@@ -222,8 +223,8 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
-      return Array.isArray(response) ? response : response.data || [];
+      const response = await this.apiClient.makeRequest<unknown[]>(endpoint, 'GET', undefined, queryParams, headers);
+      return Array.isArray(response) ? response : (response as {data?: unknown[]}).data || [];
     } catch (error) {
       console.error('Kitchen API error:', error);
       throw error;
@@ -234,7 +235,7 @@ export class ToastCompleteAPI {
    * Cash Management API - Get cash drawer info
    * Reference: https://doc.toasttab.com/openapi/#tag/Cash-Management
    */
-  async getCashDrawerInfo(restaurantGuid: string): Promise<any> {
+  async getCashDrawerInfo(restaurantGuid: string): Promise<unknown> {
     const endpoint = `/cashmgmt/v1/cashDrawers`;
     const queryParams = {
       restaurantGuid,
@@ -245,7 +246,7 @@ export class ToastCompleteAPI {
     };
 
     try {
-      const response = await (this.apiClient as any).makeRequest<any>(endpoint, 'GET', undefined, queryParams, headers);
+      const response = await this.apiClient.makeRequest<unknown>(endpoint, 'GET', undefined, queryParams, headers);
       return response;
     } catch (error) {
       console.error('Cash Management API error:', error);

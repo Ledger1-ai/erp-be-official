@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
 import { QRCodeSVG } from "qrcode.react";
@@ -62,18 +63,29 @@ import {
   XCircle,
   AlertCircle,
   Eye,
+  ChevronLeft,
+  ChevronRight,
   FileText,
+  HelpCircle,
 } from "lucide-react";
+import React from "react";
 import { 
   useInventoryItems, 
   useLowStockItems, 
   useCreateInventoryItem, 
   useUpdateInventoryItem, 
   useDeleteInventoryItem,
-  useUpdateStock 
+  useUpdateStock,
+  useRecordWaste,
+  useVendors,
+  useCreateVendor,
+  useUpdateVendor,
+  useDeleteVendor,
+  useUpdateVendorRepresentative
 } from "@/lib/hooks/use-graphql";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // TypeScript interfaces
 interface InventoryItem {
@@ -121,6 +133,19 @@ interface InventoryItem {
   averageDailyUsage?: number;
   seasonalItem?: boolean;
   notes?: string;
+  barcodeMapping?: {
+    scannedBarcode: string;
+  };
+  lastCount?: number;
+  countDate?: string;
+  countBy?: string;
+  wasteLogs?: Array<{
+    id: string;
+    date: string;
+    quantity: number;
+    reason: string;
+    notes?: string;
+  }>;
 }
 
 interface Suggestion {
@@ -131,6 +156,27 @@ interface Suggestion {
   description: string;
   action: string;
   costImpact: string;
+}
+
+interface CsvItem {
+  isDuplicate: boolean;
+  name: string;
+  syscoSUPC: string;
+  category: string;
+  costPerUnit: string;
+}
+
+interface CsvPreviewData {
+  totalParsed: number;
+  summary: {
+    new: number;
+    duplicates: number;
+  };
+  items: CsvItem[];
+}
+
+interface ScanResult {
+  rawValue: string;
 }
 
 // Sample current user role - In real app, this would come from auth context
@@ -172,7 +218,7 @@ const defaultLabelTemplate = {
       height: 30,
       fontSize: 16,
       fontWeight: "bold",
-      textAlign: "center",
+      textAlign: "center" as const,
       dragging: false,
     },
     metadata: {
@@ -197,14 +243,540 @@ const AZURE_SAM_CONFIG = {
 export default function InventoryPage() {
   const [selectedTab, setSelectedTab] = useState("overview");
   const [searchTerm, setSearchTerm] = useState("");
+  const [sortKey, setSortKey] = useState<string>("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [isQuickCountOpen, setIsQuickCountOpen] = useState(false);
+  const [quickCountIndex, setQuickCountIndex] = useState(0);
+  const [detailViewItem, setDetailViewItem] = useState<Partial<InventoryItem> | null>(null);
+  const [quickCountValue, setQuickCountValue] = useState<string>("");
+  const [quickParValue, setQuickParValue] = useState<string>("");
+  const [quickSearch, setQuickSearch] = useState("");
+  const [quickTouchStartX, setQuickTouchStartX] = useState<number | null>(null);
   const [isAddItemOpen, setIsAddItemOpen] = useState(false);
   const [isEditItemOpen, setIsEditItemOpen] = useState(false);
+  const [wasteQuantity, setWasteQuantity] = useState<string>("");
+  const [wasteReason, setWasteReason] = useState<string>("");
+  const [wasteNotes, setWasteNotes] = useState<string>("");
   const [isLabelDesignerOpen, setIsLabelDesignerOpen] = useState(false);
   const [isQuantityModifierOpen, setIsQuantityModifierOpen] = useState(false);
   const [isCameraCountingOpen, setIsCameraCountingOpen] = useState(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
   const [isVendorOrderExportOpen, setIsVendorOrderExportOpen] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmProcessing, setConfirmProcessing] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{ 
+    title: string; 
+    message: string; 
+    confirmText?: string; 
+    danger?: boolean; 
+    onConfirm: null | (() => Promise<void> | void);
+  }>({ title: "", message: "", confirmText: "Confirm", danger: false, onConfirm: null });
+
+  // Nested help state for Par/On-hand tutorial
+  const [isParHelpOpen, setIsParHelpOpen] = useState(false);
+
+  const openAddItemDialog = () => {
+    setNewItemForm({
+      name: "",
+      category: "",
+      sku: "",
+      barcode: "",
+      unit: "unit",
+      costPerUnit: "",
+      supplier: "",
+      currentStock: "0",
+      minThreshold: "0",
+      maxCapacity: "0",
+      location: "",
+      description: "",
+      reorderPoint: "",
+      reorderQuantity: "",
+      syscoSKU: "",
+      vendorSKU: "",
+      casePackSize: "",
+      vendorCode: "",
+      syscoCategory: "",
+      leadTimeDays: "",
+      minimumOrderQty: "",
+      pricePerCase: "",
+      lastOrderDate: "",
+      preferredVendor: "",
+      alternateVendors: "",
+      averageDailyUsage: "",
+      seasonalItem: "",
+      notes: "",
+      restockPeriod: "weekly",
+      restockDays: "7",
+    });
+    setIsAddItemOpen(true);
+  };
+
+  const VendorsPanel: React.FC = () => {
+    const { data, loading, error } = useVendors();
+    const [createVendor, { loading: creatingVendor }] = useCreateVendor();
+    const [updateVendor, { loading: updatingVendor }] = useUpdateVendor();
+    const [deleteVendor, { loading: deletingVendor }] = useDeleteVendor();
+    const [updateVendorRep, { loading: updatingRep }] = useUpdateVendorRepresentative();
+
+    const [vendorFormOpen, setVendorFormOpen] = useState(false);
+    const [editingVendor, setEditingVendor] = useState<any>(null);
+    const [vendorForm, setVendorForm] = useState({
+      name: "",
+      companyName: "",
+      supplierCode: "",
+      type: "Primary",
+      categories: [] as string[],
+      status: "Active",
+      notes: "",
+      isPreferred: false,
+      address: { street: "", city: "", state: "", zipCode: "", country: "US" },
+      paymentTerms: { terms: "Net 30", customTerms: "", creditLimit: 0, currentBalance: 0, currency: "USD" },
+      deliveryInfo: { deliveryDays: [] as string[], deliveryWindow: "", minimumOrder: 0, deliveryFee: 0, freeDeliveryThreshold: 0, leadTimeDays: 1 },
+      contacts: [] as any[],
+      certifications: [] as string[],
+    });
+
+    const vendors = data?.vendors || [];
+
+    const openNewVendor = () => {
+      setEditingVendor(null);
+      setVendorForm({
+        name: "", companyName: "", supplierCode: "", type: "Primary", categories: [], status: "Active", notes: "", isPreferred: false,
+        address: { street: "", city: "", state: "", zipCode: "", country: "US" },
+        paymentTerms: { terms: "Net 30", customTerms: "", creditLimit: 0, currentBalance: 0, currency: "USD" },
+        deliveryInfo: { deliveryDays: [], deliveryWindow: "", minimumOrder: 0, deliveryFee: 0, freeDeliveryThreshold: 0, leadTimeDays: 1 },
+        contacts: [], certifications: []
+      });
+      setVendorFormOpen(true);
+    };
+
+    const openEditVendor = (vendor: any) => {
+      setEditingVendor(vendor);
+      setVendorForm({
+        name: vendor.name || "",
+        companyName: vendor.companyName || "",
+        supplierCode: vendor.supplierCode || "",
+        type: vendor.type || "Primary",
+        categories: vendor.categories || [],
+        status: vendor.status || "Active",
+        notes: vendor.notes || "",
+        isPreferred: !!vendor.isPreferred,
+        address: vendor.address || { street: "", city: "", state: "", zipCode: "", country: "US" },
+        paymentTerms: vendor.paymentTerms || { terms: "Net 30", customTerms: "", creditLimit: 0, currentBalance: 0, currency: "USD" },
+        deliveryInfo: vendor.deliveryInfo || { deliveryDays: [], deliveryWindow: "", minimumOrder: 0, deliveryFee: 0, freeDeliveryThreshold: 0, leadTimeDays: 1 },
+        contacts: vendor.contacts || [],
+        certifications: vendor.certifications || [],
+      });
+      setVendorFormOpen(true);
+    };
+
+    const saveVendor = async () => {
+      try {
+        if (editingVendor) {
+          await updateVendor({ variables: { id: editingVendor.id, input: vendorForm } });
+          toast.success('Vendor updated');
+        } else {
+          await createVendor({ variables: { input: vendorForm } });
+          toast.success('Vendor created');
+        }
+        setVendorFormOpen(false);
+      } catch (e: any) {
+        toast.error(e.message || 'Failed to save vendor');
+      }
+    };
+
+    const confirmDeleteVendor = (vendor: any) => {
+      openConfirm({
+        title: 'Delete Vendor',
+        message: `Delete vendor "${vendor.name}"? This cannot be undone.`,
+        confirmText: 'Delete',
+        danger: true,
+        onConfirm: async () => {
+          await deleteVendor({ variables: { id: vendor.id } });
+          toast.success('Vendor deleted');
+        }
+      });
+    };
+
+    const [repDialogOpen, setRepDialogOpen] = useState(false);
+    const [repVendor, setRepVendor] = useState<any>(null);
+    const [repForm, setRepForm] = useState({ name: '', title: '', email: '', phone: '', mobile: '', startDate: '', notes: '' });
+    const [repReason, setRepReason] = useState('');
+
+    const openRepDialog = (vendor: any) => {
+      setRepVendor(vendor);
+      setRepForm({
+        name: vendor.currentRepresentative?.name || '',
+        title: vendor.currentRepresentative?.title || '',
+        email: vendor.currentRepresentative?.email || '',
+        phone: vendor.currentRepresentative?.phone || '',
+        mobile: vendor.currentRepresentative?.mobile || '',
+        startDate: new Date().toISOString().split('T')[0],
+        notes: ''
+      });
+      setRepReason('Replacement');
+      setRepDialogOpen(true);
+    };
+
+    const saveRepresentative = async () => {
+      if (!repVendor) return;
+      try {
+        await updateVendorRep({ variables: { id: repVendor.id, input: { representative: { ...repForm, startDate: repForm.startDate ? new Date(repForm.startDate).toISOString() : null }, reason: repReason } } });
+        toast.success('Vendor representative updated');
+        setRepDialogOpen(false);
+      } catch (e: any) {
+        toast.error(e.message || 'Failed to update representative');
+      }
+    };
+
+    const printVendors = () => {
+      const vendors = data?.vendors || [];
+      const win = window.open('', '_blank');
+      if (!win) return;
+      const styles = `
+        <style>
+          body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; padding: 24px; color: #111827; }
+          .header { display:flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+          .title { font-size: 20px; font-weight: 700; }
+          .meta { color:#6B7280; font-size:12px; }
+          .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+          .card { border:1px solid #E5E7EB; border-radius:10px; padding:12px; background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(249,250,251,0.9)); }
+          .name { font-weight:600; margin-bottom:4px; }
+          .muted { color:#6B7280; font-size:12px; }
+          .row { display:flex; gap:8px; flex-wrap: wrap; margin-top:6px; }
+          .tag { font-size:11px; background:#F3F4F6; border-radius:6px; padding:2px 6px; }
+          .section { font-size:12px; margin-top:8px; }
+          .small { font-size:11px; color:#374151; }
+          @media print { .card { break-inside: avoid; } }
+        </style>
+      `;
+      const html = [`<div class="header"><div class="title">Vendor Directory</div><div class="meta">Generated ${new Date().toLocaleString()}</div></div>`,
+        `<div class="grid">`,
+        ...vendors.map((v: any) => `
+          <div class="card">
+            <div class="name">${v.name}${v.supplierCode ? ` • ${v.supplierCode}` : ''}</div>
+            <div className="muted">${v.companyName || ''}</div>
+            <div className="row small">
+              <span className="tag">${v.type || '—'}</span>
+              <span className="tag">${v.status || '—'}</span>
+              ${Array.isArray(v.categories) ? v.categories.slice(0,3).map((c:string) => `<span className="tag">${c}</span>`).join('') : ''}
+            </div>
+            <div className="section small">
+              <strong>Delivery:</strong> ${(Array.isArray(v.deliveryInfo?.deliveryDays) ? v.deliveryInfo.deliveryDays.join(', ') : v.deliveryInfo?.deliveryDays) || '—'}
+              ${v.deliveryInfo?.deliveryWindow ? ` • ${v.deliveryInfo.deliveryWindow}` : ''}
+            </div>
+            <div className="section small">
+              <strong>Rep:</strong> ${v.currentRepresentative?.name || '—'} ${v.currentRepresentative?.title ? `(${v.currentRepresentative.title})` : ''}
+              ${v.currentRepresentative?.email ? ` • ${v.currentRepresentative.email}` : ''}
+            </div>
+            <div className="section small">
+              <strong>Address:</strong> ${[v.address?.street, v.address?.city, v.address?.state, v.address?.zipCode].filter(Boolean).join(', ') || '—'}
+            </div>
+            ${v.notes ? `<div className="section small"><strong>Notes:</strong> ${v.notes}</div>` : ''}
+          </div>
+        `),
+        `</div>`
+      ].join('');
+      const doc = `<html><head><title>Vendors</title>${styles}</head><body>${html}</body></html>`;
+      win.document.write(doc);
+      win.document.close();
+      win.focus();
+      win.print();
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-muted-foreground">Track preferred partners and delivery details</p>
+          </div>
+          <div className="space-x-2">
+            <Button variant="outline" size="sm" onClick={printVendors}><Printer className="h-4 w-4" /></Button>
+            <Button onClick={openNewVendor} className="bg-orange-600 hover:bg-orange-700 text-white" size="sm">
+              <Plus className="mr-2 h-4 w-4" /> New Vendor
+            </Button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="text-sm text-muted-foreground">Loading vendors...</div>
+        ) : error ? (
+          <div className="text-sm text-red-600">Failed to load vendors</div>
+        ) : vendors.length === 0 ? (
+          <div className="text-sm text-muted-foreground">No vendors yet. Add your first vendor.</div>
+        ) : (
+          <div className="grid gap-4">
+            {vendors.map((v: any) => (
+              <div key={v.id} className="p-4 border border-border rounded-lg">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start space-x-4">
+                    <div className="bg-orange-100 dark:bg-orange-900/30 rounded-full p-3">
+                      <Truck className="h-6 w-6 text-orange-600" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <h3 className="font-medium text-foreground">{v.name}</h3>
+                        {v.isPreferred ? (<span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">Preferred</span>) : null}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{v.companyName}{v.supplierCode ? ` • ${v.supplierCode}` : ''}</p>
+                      <p className="text-sm text-muted-foreground">{Array.isArray(v.deliveryInfo?.deliveryDays) ? v.deliveryInfo.deliveryDays.join(', ') : v.deliveryInfo?.deliveryDays}</p>
+                      {v.notes ? (
+                        <p className="mt-2 text-sm text-foreground"><span className="text-muted-foreground">Notes:</span> {v.notes}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="text-right space-x-2">
+                    <Button variant="outline" size="sm" onClick={() => openEditVendor(v)}>
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => confirmDeleteVendor(v)} disabled={deletingVendor}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                    
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-3 rounded-lg border border-border">
+                    <p className="text-xs text-muted-foreground mb-1">Delivery Window</p>
+                    <p className="text-sm">{v.deliveryInfo?.deliveryWindow || '—'}</p>
+                    <p className="text-xs text-muted-foreground mt-2">Minimum Order</p>
+                    <p className="text-sm">{v.deliveryInfo?.minimumOrder ?? '—'}</p>
+                    <p className="text-xs text-muted-foreground mt-2">Lead Time (days)</p>
+                    <p className="text-sm">{v.deliveryInfo?.leadTimeDays ?? '—'}</p>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border">
+                    <p className="text-xs text-muted-foreground mb-1">Performance</p>
+                    <p className="text-sm">On-time: {v.performanceMetrics?.onTimeDeliveryRate ?? 0}% • Quality: {v.performanceMetrics?.qualityRating ?? 0}/5</p>
+                    <p className="text-xs text-muted-foreground mt-2">Totals</p>
+                    <p className="text-sm">Orders: {v.performanceMetrics?.totalOrders ?? 0} • Spent: ${v.performanceMetrics?.totalSpent?.toFixed?.(2) ?? '0.00'}</p>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">Representative</p>
+                      <Button variant="outline" size="sm" onClick={() => openRepDialog(v)}>Replace</Button>
+                    </div>
+                    {v.currentRepresentative ? (
+                      <div className="mt-1 text-sm">
+                        <p className="font-medium">{v.currentRepresentative.name}{v.currentRepresentative.title ? ` • ${v.currentRepresentative.title}` : ''}</p>
+                        <p className="text-muted-foreground">{v.currentRepresentative.email || '—'}{v.currentRepresentative.phone ? ` • ${v.currentRepresentative.phone}` : ''}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm">No representative set</p>
+                    )}
+                    {Array.isArray(v.representativeHistory) && v.representativeHistory.length > 0 ? (
+                      <div className="mt-3">
+                        <p className="text-xs text-muted-foreground mb-1">History</p>
+                        <div className="max-h-24 overflow-auto space-y-1 pr-1">
+                          {v.representativeHistory.slice().reverse().map((h: any, idx: number) => (
+                            <div key={idx} className="text-xs text-muted-foreground">
+                              {h.representative?.name} → {new Date(h.toDate).toLocaleDateString()} ({h.reason || 'Change'})
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Vendor create/edit modal */}
+        <Dialog open={vendorFormOpen} onOpenChange={setVendorFormOpen}>
+          <DialogContent className="max-w-3xl backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+            <DialogHeader>
+              <DialogTitle>{editingVendor ? 'Edit Vendor' : 'New Vendor'}</DialogTitle>
+              <DialogDescription>Maintain vendor details and notes</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label>Name</Label>
+                  <Input value={vendorForm.name} onChange={(e) => setVendorForm(prev => ({ ...prev, name: e.target.value }))} />
+                </div>
+                <div>
+                  <Label>Company</Label>
+                  <Input value={vendorForm.companyName} onChange={(e) => setVendorForm(prev => ({ ...prev, companyName: e.target.value }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label>Supplier Code</Label>
+                  <Input value={vendorForm.supplierCode ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, supplierCode: e.target.value }))} />
+                  <p className="text-xs text-muted-foreground mt-1">Your vendor account identifier with this supplier.</p>
+                </div>
+                <div>
+                  <Label>Type</Label>
+                  <Input value={vendorForm.type ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, type: e.target.value }))} />
+                  <p className="text-xs text-muted-foreground mt-1">Example: Primary, Secondary, Emergency, or Specialty.</p>
+                </div>
+                <div>
+                  <Label>Status</Label>
+                  <Input value={vendorForm.status ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, status: e.target.value }))} />
+                  <p className="text-xs text-muted-foreground mt-1">Set vendor activation state. Example: Active or Inactive.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Address</p>
+                  <Input placeholder="Street" value={vendorForm.address?.street ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, address: { ...prev.address, street: e.target.value } }))} />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input placeholder="City" value={vendorForm.address?.city ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, address: { ...prev.address, city: e.target.value } }))} />
+                    <Input placeholder="State" value={vendorForm.address?.state ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, address: { ...prev.address, state: e.target.value } }))} />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input placeholder="ZIP" value={vendorForm.address?.zipCode ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, address: { ...prev.address, zipCode: e.target.value } }))} />
+                    <Input placeholder="Country" value={vendorForm.address?.country ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, address: { ...prev.address, country: e.target.value } }))} />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Used on POs and for deliveries/paperwork.</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Payment Terms</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input placeholder="Terms (e.g., Net 30)" value={vendorForm.paymentTerms?.terms ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, paymentTerms: { ...prev.paymentTerms, terms: e.target.value } }))} />
+                    <Input placeholder="Currency" value={vendorForm.paymentTerms?.currency ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, paymentTerms: { ...prev.paymentTerms, currency: e.target.value } }))} />
+                  </div>
+                  <Input placeholder="Custom Terms" value={vendorForm.paymentTerms?.customTerms ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, paymentTerms: { ...prev.paymentTerms, customTerms: e.target.value } }))} />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <Input type="number" step="0.01" min="0" placeholder="Credit Limit (USD)" value={vendorForm.paymentTerms?.creditLimit ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, paymentTerms: { ...prev.paymentTerms, creditLimit: parseFloat(e.target.value) || 0 } }))} />
+                      <p className="text-xs text-muted-foreground mt-1">Maximum credit extended by vendor. Enter amount in USD (e.g., 2500).</p>
+                    </div>
+                    <div>
+                      <Input type="number" step="0.01" min="0" placeholder="Current Balance (USD)" value={vendorForm.paymentTerms?.currentBalance ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, paymentTerms: { ...prev.paymentTerms, currentBalance: parseFloat(e.target.value) || 0 } }))} />
+                      <p className="text-xs text-muted-foreground mt-1">Outstanding payable balance today. Enter amount in USD.</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Capture billing terms and credit details for this vendor.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Delivery Info</p>
+                  <Input placeholder="Delivery Window (e.g., 8 AM – 12 PM)" value={vendorForm.deliveryInfo?.deliveryWindow ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, deliveryWindow: e.target.value } }))} />
+                  <p className="text-xs text-muted-foreground mt-1">Typical receiving window for deliveries.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                    <div>
+                      <Input type="number" step="0.01" min="0" placeholder="Min Order (USD)" value={vendorForm.deliveryInfo?.minimumOrder ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, minimumOrder: parseFloat(e.target.value) || 0 } }))} />
+                      <p className="text-xs text-muted-foreground mt-1">Minimum invoice amount to place an order.</p>
+                    </div>
+                    <div>
+                      <Input type="number" step="0.01" min="0" placeholder="Delivery Fee (USD)" value={vendorForm.deliveryInfo?.deliveryFee ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, deliveryFee: parseFloat(e.target.value) || 0 } }))} />
+                      <p className="text-xs text-muted-foreground mt-1">Typical delivery charge, if any.</p>
+                    </div>
+                    <div>
+                      <Input type="number" step="0.01" min="0" placeholder="Free Delivery Threshold (USD)" value={vendorForm.deliveryInfo?.freeDeliveryThreshold ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, freeDeliveryThreshold: parseFloat(e.target.value) || 0 } }))} />
+                      <p className="text-xs text-muted-foreground mt-1">Order total at which delivery fee is waived.</p>
+                    </div>
+                  </div>
+                  <Input type="number" min="0" placeholder="Lead Time (days)" value={vendorForm.deliveryInfo?.leadTimeDays ?? 0} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, leadTimeDays: parseInt(e.target.value || '0') || 0 } }))} />
+                  <p className="text-xs text-muted-foreground mt-1">Number of days between order placement and delivery.</p>
+                  <Input placeholder="Delivery Days (comma-separated, e.g., Mon, Wed, Fri)" value={Array.isArray(vendorForm.deliveryInfo?.deliveryDays) ? vendorForm.deliveryInfo.deliveryDays.join(', ') : ''} onChange={(e) => setVendorForm(prev => ({ ...prev, deliveryInfo: { ...prev.deliveryInfo, deliveryDays: e.target.value.split(',').map(d => d.trim()).filter(Boolean) } }))} />
+                  <p className="text-xs text-muted-foreground">Use day names or abbreviations, separated by commas.</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Certifications</p>
+                  <Input placeholder="Add certification (press Enter)" onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const value = (e.target as HTMLInputElement).value.trim();
+                      if (value) {
+                        setVendorForm(prev => ({ ...prev, certifications: Array.from(new Set([...(prev.certifications || []), value])) }));
+                        (e.target as HTMLInputElement).value = '';
+                      }
+                    }
+                  }} />
+                  <div className="flex flex-wrap gap-2">
+                    {(vendorForm.certifications || []).map((c, idx) => (
+                      <span key={idx} className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-slate-800 border border-border">
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Notes</p>
+                <Textarea value={vendorForm.notes ?? ""} onChange={(e) => setVendorForm(prev => ({ ...prev, notes: e.target.value }))} />
+                <p className="text-xs text-muted-foreground">Internal notes for this vendor (not shared externally).</p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setVendorFormOpen(false)}>Cancel</Button>
+              <Button onClick={saveVendor} disabled={creatingVendor || updatingVendor} className="bg-orange-600 hover:bg-orange-700 text-white">
+                {(creatingVendor || updatingVendor) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Representative replace dialog */}
+        <Dialog open={repDialogOpen} onOpenChange={setRepDialogOpen}>
+          <DialogContent className="max-w-lg backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+            <DialogHeader>
+              <DialogTitle>Replace Representative</DialogTitle>
+              <DialogDescription>Set a new vendor representative and record the change</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Name</Label>
+                  <Input value={repForm.name} onChange={(e) => setRepForm(prev => ({ ...prev, name: e.target.value }))} />
+                </div>
+                <div>
+                  <Label>Title</Label>
+                  <Input value={repForm.title} onChange={(e) => setRepForm(prev => ({ ...prev, title: e.target.value }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Email</Label>
+                  <Input value={repForm.email} onChange={(e) => setRepForm(prev => ({ ...prev, email: e.target.value }))} />
+                </div>
+                <div>
+                  <Label>Phone</Label>
+                  <Input value={repForm.phone} onChange={(e) => setRepForm(prev => ({ ...prev, phone: e.target.value }))} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Mobile</Label>
+                  <Input value={repForm.mobile} onChange={(e) => setRepForm(prev => ({ ...prev, mobile: e.target.value }))} />
+                </div>
+                <div>
+                  <Label>Start Date</Label>
+                  <Input type="date" value={repForm.startDate} onChange={(e) => setRepForm(prev => ({ ...prev, startDate: e.target.value }))} />
+                </div>
+              </div>
+              <div>
+                <Label>Notes</Label>
+                <Textarea value={repForm.notes} onChange={(e) => setRepForm(prev => ({ ...prev, notes: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Reason for change</Label>
+                <Input value={repReason} onChange={(e) => setRepReason(e.target.value)} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRepDialogOpen(false)}>Cancel</Button>
+              <Button onClick={saveRepresentative} disabled={updatingRep} className="bg-orange-600 hover:bg-orange-700 text-white">
+                {updatingRep ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  };
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [labelTemplate, setLabelTemplate] = useState(defaultLabelTemplate);
   const [dragState, setDragState] = useState<{
     isDragging: boolean;
@@ -217,14 +789,14 @@ export default function InventoryPage() {
   });
   const [qrScanMode, setQrScanMode] = useState<'add-item' | 'quantity-modify' | 'map-barcode'>('add-item');
   const [scannedData, setScannedData] = useState<string>("");
-  const [itemToMapBarcode, setItemToMapBarcode] = useState<any | null>(null);
+  const [itemToMapBarcode, setItemToMapBarcode] = useState<InventoryItem | null>(null);
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
   // CSV Import states
   const [isCSVImportOpen, setIsCSVImportOpen] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [csvPreviewData, setCsvPreviewData] = useState<any>(null);
+  const [csvPreviewData, setCsvPreviewData] = useState<CsvPreviewData | null>(null);
   const [csvImportLoading, setCsvImportLoading] = useState(false);
   const [selectedImportItems, setSelectedImportItems] = useState<number[]>([]);
   const [importStep, setImportStep] = useState<'upload' | 'review' | 'complete'>('upload');
@@ -258,6 +830,8 @@ export default function InventoryPage() {
     averageDailyUsage: "",
     seasonalItem: "",
     notes: "",
+    restockPeriod: "weekly",
+    restockDays: "7",
   });
 
   // Camera counting state
@@ -293,6 +867,28 @@ export default function InventoryPage() {
   const [updateInventoryItem, { loading: updating }] = useUpdateInventoryItem();
   const [deleteInventoryItem, { loading: deleting }] = useDeleteInventoryItem();
   const [updateStock, { loading: updatingStock }] = useUpdateStock();
+  const [recordWaste, { loading: recordingWaste }] = useRecordWaste();
+  const openConfirm = (config: { title: string; message: string; confirmText?: string; danger?: boolean; onConfirm: () => Promise<void> | void }) => {
+    setConfirmConfig(config);
+    setConfirmOpen(true);
+  };
+
+  const executeConfirm = async () => {
+    if (!confirmConfig.onConfirm) {
+      setConfirmOpen(false);
+      return;
+    }
+    try {
+      setConfirmProcessing(true);
+      await confirmConfig.onConfirm();
+      setConfirmOpen(false);
+    } catch (error: any) {
+      toast.error(error.message || 'Action failed');
+    } finally {
+      setConfirmProcessing(false);
+    }
+  };
+
 
   // Extract data from GraphQL responses
   const inventoryItems = inventoryData?.inventoryItems || [];
@@ -300,13 +896,13 @@ export default function InventoryPage() {
 
   // Helper functions for analytics
   const getTotalValue = () => {
-    return inventoryItems.reduce((sum: number, item: any) => 
+    return inventoryItems.reduce((sum: number, item: InventoryItem) => 
       sum + (item.currentStock * item.costPerUnit), 0
     );
   };
 
   const getWeeklyWaste = () => {
-    return inventoryItems.reduce((sum: number, item: any) => 
+    return inventoryItems.reduce((sum: number, item: InventoryItem) => 
       sum + (item.waste || 0) * item.costPerUnit, 0
     );
   };
@@ -314,7 +910,7 @@ export default function InventoryPage() {
   // Role-based access control
   const isAdmin = currentUserRole === "Super Admin" || currentUserRole === "Manager";
   const availableTabs = isAdmin
-    ? ["overview", "items", "recipes", "purchase-orders", "receiving", "suppliers", "counts", "analytics", "reports"]
+    ? ["overview", "items", "recipes", "purchase-orders", "receiving", "vendors", "counts", "analytics", "reports"]
     : ["overview", "items", "recipes"];
 
   // Enhanced stock movement data with real transaction data
@@ -425,7 +1021,7 @@ export default function InventoryPage() {
     {
       type: "reorder",
       title: "Immediate Reorder Required",
-      items: lowStockItems.slice(0, 2).map((item: any) => item.name),
+      items: lowStockItems.slice(0, 2).map((item: InventoryItem) => item.name),
       urgency: "critical",
       description: "These items are below reorder point and may impact menu availability within 2 days.",
       action: `Order ${lowStockItems.length} low stock items`,
@@ -434,7 +1030,7 @@ export default function InventoryPage() {
     {
       type: "optimization",
       title: "Par Level Optimization",
-      items: inventoryItems.slice(0, 1).map((item: any) => item.name),
+      items: inventoryItems.slice(0, 1).map((item: InventoryItem) => item.name),
       urgency: "medium", 
       description: "Current par level may be too high based on usage patterns. Reducing could free up working capital.",
       action: "Optimize par levels based on usage",
@@ -443,7 +1039,7 @@ export default function InventoryPage() {
     {
       type: "waste_prevention",
       title: "Waste Reduction Opportunity",
-      items: inventoryItems.filter((item: any) => item.waste && item.waste > 0).map((item: any) => item.name),
+      items: inventoryItems.filter((item: InventoryItem) => item.waste && item.waste > 0).map((item: InventoryItem) => item.name),
       urgency: "low",
       description: "Higher than normal waste detected. Consider prep adjustments or menu promotions.",
       action: "Daily specials featuring high-waste items",
@@ -491,6 +1087,9 @@ export default function InventoryPage() {
             description: newItemForm.description,
             reorderPoint: parseFloat(newItemForm.reorderPoint) || undefined,
             reorderQuantity: parseFloat(newItemForm.reorderQuantity) || undefined,
+            averageDailyUsage: parseFloat(newItemForm.averageDailyUsage) || undefined,
+            restockPeriod: newItemForm.restockPeriod,
+            restockDays: parseInt(String(newItemForm.restockDays)) || undefined,
           }
         }
       });
@@ -526,6 +1125,8 @@ export default function InventoryPage() {
         averageDailyUsage: "",
         seasonalItem: "",
         notes: "",
+        restockPeriod: "weekly",
+        restockDays: "7",
       });
     } catch (error: any) {
       toast.error(error.message || 'Failed to create inventory item');
@@ -539,24 +1140,29 @@ export default function InventoryPage() {
     if (!selectedItem) return;
     
     try {
-      await updateInventoryItem({
-        variables: {
-          id: selectedItem.id,
-          input: {
+      const input = {
             name: newItemForm.name,
             category: newItemForm.category,
-            currentStock: parseFloat(newItemForm.currentStock),
-            minThreshold: parseFloat(newItemForm.minThreshold),
-            maxCapacity: parseFloat(newItemForm.maxCapacity),
+        currentStock: parseFloat(newItemForm.currentStock) || 0,
+        minThreshold: parseFloat(newItemForm.minThreshold) || 0,
+        maxCapacity: parseFloat(newItemForm.maxCapacity) || 0,
             unit: newItemForm.unit,
-            costPerUnit: parseFloat(newItemForm.costPerUnit),
+        costPerUnit: parseFloat(newItemForm.costPerUnit) || 0,
             supplier: newItemForm.supplier,
             location: newItemForm.location,
             barcode: newItemForm.barcode,
             description: newItemForm.description,
             reorderPoint: parseFloat(newItemForm.reorderPoint) || undefined,
             reorderQuantity: parseFloat(newItemForm.reorderQuantity) || undefined,
-          }
+            averageDailyUsage: parseFloat(newItemForm.averageDailyUsage) || undefined,
+            restockPeriod: newItemForm.restockPeriod,
+            restockDays: parseInt(String(newItemForm.restockDays)) || undefined,
+      };
+
+      await updateInventoryItem({
+        variables: {
+          id: selectedItem.id,
+          input,
         }
       });
       
@@ -570,17 +1176,16 @@ export default function InventoryPage() {
 
   // Handle deleting an item
   const handleDeleteItem = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
-    
-    try {
-      await deleteInventoryItem({
-        variables: { id }
-      });
-      
-      toast.success('Inventory item deleted successfully!');
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to delete inventory item');
-    }
+    openConfirm({
+      title: 'Delete Inventory Item',
+      message: 'Are you sure you want to delete this item? This action cannot be undone.',
+      confirmText: 'Delete',
+      danger: true,
+      onConfirm: async () => {
+        await deleteInventoryItem({ variables: { id } });
+        toast.success('Inventory item deleted successfully!');
+      }
+    });
   };
 
   // Handle stock quantity updates
@@ -633,28 +1238,125 @@ export default function InventoryPage() {
       averageDailyUsage: item.averageDailyUsage?.toString() || "",
       seasonalItem: item.seasonalItem?.toString() || "",
       notes: item.notes || "",
+      restockPeriod: item.restockPeriod || 'weekly',
+      restockDays: (item.restockDays?.toString?.() || String(item.restockDays || 7))
     });
     setIsEditItemOpen(true);
   };
 
   // Open quantity modifier dialog
-  const openQuantityDialog = (item: any) => {
+  const openQuantityDialog = (item: InventoryItem) => {
     setSelectedItem(item);
     setIsQuantityModifierOpen(true);
   };
 
-  const filteredItems = inventoryItems.filter((item: InventoryItem) =>
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDirection("asc");
+    }
+  };
+
+  const uniqueCategories = inventoryItems.reduce((acc: string[], item: InventoryItem) => {
+    if (item.category && typeof item.category === 'string' && item.category.trim() !== '' && !acc.includes(item.category)) {
+      acc.push(item.category);
+    }
+    return acc;
+  }, []);
+
+  const filteredItems = inventoryItems
+    .filter((item: InventoryItem) => {
+      const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.category.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCategory = filterCategory ? item.category === filterCategory : true;
+      return matchesSearch && matchesCategory;
+    })
+    .sort((a: InventoryItem, b: InventoryItem) => {
+      const aValue = a[sortKey as keyof InventoryItem] ?? "";
+      const bValue = b[sortKey as keyof InventoryItem] ?? "";
+
+      if (aValue < bValue) {
+        return sortDirection === "asc" ? -1 : 1;
+      }
+      if (aValue > bValue) {
+        return sortDirection === "asc" ? 1 : -1;
+      }
+      return 0;
+    });
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case "critical": return "tag-red";
       case "low": return "tag-yellow";
+      case "out_of_stock": return "tag-red";
       case "adequate": 
       case "normal": return "tag-green";
       default: return "tag-slate";
+    }
+  };
+
+  const friendlyStatusLabel = (status: string) => {
+    if (!status) return "";
+    if (status === "out_of_stock") return "Out of stock";
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  };
+
+  // Compute status on the fly for display to avoid stale server values
+  const computeStatus = (stock: number, min: number) => {
+    const s = Number(stock || 0);
+    const m = Number(min || 0);
+    if (s <= 0) return 'out_of_stock';
+    if (s <= m) return 'critical';
+    if (s <= m * 1.5) return 'low';
+    return 'normal';
+  };
+
+  // Waste tags: mapping and helpers
+  const WASTE_REASONS = [
+    "Spoiled",
+    "Expired",
+    "Cooking Error",
+    "Dropped",
+    "Contaminated",
+    "Other",
+  ];
+
+  const getWasteTagClass = (reason: string) => {
+    switch (reason) {
+      case "Spoiled": return "tag-red";
+      case "Expired": return "tag-yellow";
+      case "Cooking Error": return "tag-orange";
+      case "Dropped": return "tag-blue";
+      case "Contaminated": return "tag-slate";
+      case "Other":
+      default:
+        return "tag-green";
+    }
+  };
+
+  const getWasteCountsForItem = (item: InventoryItem): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    if (!item?.wasteLogs || !Array.isArray(item.wasteLogs)) return counts;
+    for (const log of item.wasteLogs) {
+      const reason = (log?.reason || "Other").trim();
+      counts[reason] = (counts[reason] || 0) + 1;
+    }
+    return counts;
+  };
+
+  // Legend chip classes (brighter for visibility)
+  const getWasteLegendClass = (reason: string) => {
+    switch (reason) {
+      case "Spoiled": return "bg-red-600 text-white";
+      case "Expired": return "bg-yellow-500 text-black";
+      case "Cooking Error": return "bg-orange-500 text-white";
+      case "Dropped": return "bg-blue-600 text-white";
+      case "Contaminated": return "bg-slate-600 text-white";
+      case "Other":
+      default:
+        return "bg-green-600 text-white";
     }
   };
 
@@ -665,12 +1367,12 @@ export default function InventoryPage() {
 
   // Vendor Order Export Functions
   const exportVendorOrder = () => {
-    const lowStockItems = inventoryItems.filter((item: any) => 
+    const lowStockItems = inventoryItems.filter((item: InventoryItem) => 
       item.currentStock <= (item.reorderPoint || item.minThreshold)
     );
     
     // Group by supplier
-    const ordersBySupplier = lowStockItems.reduce((acc: any, item: any) => {
+    const ordersBySupplier = lowStockItems.reduce((acc: Record<string, InventoryItem[]>, item: InventoryItem) => {
       const supplier = item.supplier || 'Unknown Supplier';
       if (!acc[supplier]) {
         acc[supplier] = [];
@@ -681,10 +1383,10 @@ export default function InventoryPage() {
 
     // Generate order data
     const orderData = Object.entries(ordersBySupplier).map(([supplier, items]) => {
-      const itemArray = items as any[];
+      const itemArray = items as InventoryItem[];
       return {
         supplier,
-        items: itemArray.map((item: any) => ({
+        items: itemArray.map((item: InventoryItem) => ({
           name: item.name,
           sku: item.sku,
           syscoSKU: item.syscoSKU,
@@ -704,7 +1406,7 @@ export default function InventoryPage() {
           notes: item.notes
         })),
         totalItems: itemArray.length,
-        totalCost: itemArray.reduce((sum: number, item: any) => 
+        totalCost: itemArray.reduce((sum: number, item: InventoryItem) => 
           sum + (((item.reorderQuantity || item.maxCapacity) - item.currentStock) * item.costPerUnit), 0
         )
       };
@@ -718,8 +1420,8 @@ export default function InventoryPage() {
     
     let csvContent = "Supplier,Item Name,SKU,Sysco SKU,Vendor SKU,Vendor Code,Current Stock,Needed Quantity,Unit,Case Pack Size,Min Order Qty,Cost Per Unit,Price Per Case,Total Cost,Lead Time (Days),Sysco Category,Urgency,Notes\n";
     
-    orderData.forEach((order: any) => {
-      (order.items as any[]).forEach((item: any) => {
+    orderData.forEach((order) => {
+      (order.items).forEach((item) => {
         csvContent += `"${order.supplier}","${item.name}","${item.sku || ''}","${item.syscoSKU || ''}","${item.vendorSKU || ''}","${item.vendorCode || ''}",${item.currentStock},${item.neededQuantity},"${item.unit}",${item.casePackSize || 1},${item.minimumOrderQty || 1},${item.costPerUnit.toFixed(2)},${item.pricePerCase?.toFixed(2) || '0.00'},${item.totalCost.toFixed(2)},${item.leadTimeDays || 1},"${item.syscoCategory || ''}","${item.urgency}","${item.notes || ''}"\n`;
       });
     });
@@ -892,7 +1594,7 @@ export default function InventoryPage() {
         if (data.errors && data.errors.length > 0) {
           console.error('Import errors:', data.errors);
           // Show specific error details
-          const errorDetails = data.errors.map((err: any) => 
+          const errorDetails = data.errors.map((err: { item: string; error: string }) => 
             `${err.item}: ${err.error}`
           ).join('\n');
           console.log('Error details:\n', errorDetails);
@@ -932,8 +1634,8 @@ export default function InventoryPage() {
   const selectAllNewItems = () => {
     if (!csvPreviewData) return;
     const newItemIndices = csvPreviewData.items
-      .map((item: any, index: number) => ({ item, index }))
-      .filter(({ item }: { item: any }) => !item.isDuplicate)
+      .map((item: CsvItem, index: number) => ({ item, index }))
+      .filter(({ item }: { item: CsvItem }) => !item.isDuplicate)
       .map(({ index }: { index: number }) => index);
     setSelectedImportItems(newItemIndices);
   };
@@ -972,7 +1674,7 @@ export default function InventoryPage() {
       } else {
         toast.error('REST API failed');
       }
-    } catch (error) {
+    } catch {
       toast.error('Test failed');
     }
   };
@@ -988,32 +1690,28 @@ export default function InventoryPage() {
       } else {
         toast.error('Schema check failed');
       }
-    } catch (error) {
+    } catch {
       toast.error('Schema check error');
     }
   };
 
   const clearAllInventory = async () => {
-    if (!confirm('⚠️ This will DELETE ALL inventory items! Are you sure?')) {
-      return;
-    }
-    
-    try {
-      const response = await fetch('/api/inventory/clear', {
-        method: 'DELETE'
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        toast.success(`✅ Deleted ${data.deleted} items`);
-        refetchInventory(); // Refresh the list
-      } else {
-        toast.error('Failed to clear inventory');
+    openConfirm({
+      title: 'Delete All Inventory',
+      message: 'This will permanently delete ALL inventory items. Are you absolutely sure?',
+      confirmText: 'Delete All',
+      danger: true,
+      onConfirm: async () => {
+        const response = await fetch('/api/inventory/clear', { method: 'DELETE' });
+        const data = await response.json();
+        if (data.success) {
+          toast.success(`✅ Deleted ${data.deleted} items`);
+          refetchInventory();
+        } else {
+          toast.error('Failed to clear inventory');
+        }
       }
-    } catch (error) {
-      toast.error('Error clearing inventory');
-    }
+    });
   };
 
   const forceCacheRefresh = async () => {
@@ -1037,60 +1735,19 @@ export default function InventoryPage() {
   };
 
   // QR Scan handler
-  const handleQRScan = async (result: any) => {
+  const handleQRScan = async (result: ScanResult[]) => {
     if (result && result.length > 0) {
       const scannedText = result[0].rawValue;
       setScannedData(scannedText);
       
-      if (qrScanMode === 'map-barcode') {
-        // Map barcode mode - link scanned barcode to existing item
-        if (itemToMapBarcode) {
-          const success = await mapBarcodeToItem(itemToMapBarcode._id, scannedText);
-          if (success) {
-            setItemToMapBarcode(null);
-            refetchInventory(); // Refresh list
-          }
-        }
-        setIsQRScannerOpen(false);
-        return;
-      }
+      // Unified QR behavior: identify item and open quantity modifier
 
       // First, check if this barcode is already in our internal database
       const existingItem = await lookupBarcode(scannedText);
-      if (existingItem && qrScanMode === 'add-item') {
-        // Auto-populate from internal mapping
-        setNewItemForm({
-          name: existingItem.name || "",
-          category: existingItem.category || "",
-          sku: existingItem.syscoSKU || existingItem.vendorSKU || "",
-          barcode: scannedText,
-          unit: existingItem.unit || "",
-          costPerUnit: existingItem.costPerUnit?.toString() || "",
-          supplier: existingItem.supplier || "",
-          currentStock: "",
-          minThreshold: "",
-          maxCapacity: "",
-          location: "",
-          description: "",
-          reorderPoint: "",
-          reorderQuantity: "",
-          syscoSKU: existingItem.syscoSKU || "",
-          vendorSKU: existingItem.vendorSKU || "",
-          casePackSize: existingItem.casePackSize?.toString() || "",
-          vendorCode: existingItem.vendorCode || "",
-          syscoCategory: existingItem.syscoCategory || "",
-          leadTimeDays: existingItem.leadTimeDays?.toString() || "",
-          minimumOrderQty: existingItem.minimumOrderQty?.toString() || "",
-          pricePerCase: existingItem.pricePerCase?.toString() || "",
-          lastOrderDate: existingItem.lastOrderDate || "",
-          preferredVendor: existingItem.preferredVendor || "",
-          alternateVendors: existingItem.alternateVendors || "",
-          averageDailyUsage: existingItem.averageDailyUsage?.toString() || "",
-          seasonalItem: existingItem.seasonalItem?.toString() || "",
-          notes: existingItem.notes || "",
-        });
-        toast.success('Item details auto-populated from barcode! 🎯');
+      if (existingItem) {
         setIsQRScannerOpen(false);
+        setSelectedItem(existingItem);
+        setIsQuantityModifierOpen(true);
         return;
       }
       
@@ -1127,6 +1784,8 @@ export default function InventoryPage() {
             averageDailyUsage: parsedData.averageDailyUsage?.toString() || "",
             seasonalItem: parsedData.seasonalItem?.toString() || "",
             notes: parsedData.notes || "",
+            restockPeriod: 'weekly',
+            restockDays: '7',
           });
         }
       } catch (error) {
@@ -1827,7 +2486,7 @@ export default function InventoryPage() {
     });
   };
 
-  const printLabel = (item: any) => {
+  const printLabel = (item: InventoryItem) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
@@ -1918,11 +2577,131 @@ export default function InventoryPage() {
     `);
   };
 
+  const handleUpdateDetails = async () => {
+    if (!detailViewItem || !detailViewItem.id) return;
+    try {
+      const input = {
+        name: detailViewItem.name,
+        category: detailViewItem.category,
+        currentStock: parseFloat(String(detailViewItem.currentStock)) || 0,
+        minThreshold: parseFloat(String(detailViewItem.minThreshold)) || 0,
+        maxCapacity: parseFloat(String(detailViewItem.maxCapacity)) || 0,
+        unit: detailViewItem.unit,
+        costPerUnit: parseFloat(String(detailViewItem.costPerUnit)) || 0,
+        supplier: detailViewItem.supplier,
+        location: detailViewItem.location,
+        ...(detailViewItem.barcode && String(detailViewItem.barcode).trim() ? { barcode: detailViewItem.barcode } : {}),
+        ...(detailViewItem.qrCode && String(detailViewItem.qrCode).trim() ? { qrCode: detailViewItem.qrCode } : {}),
+        description: detailViewItem.description,
+        expiryDate: detailViewItem.expiryDate,
+        waste: parseFloat(String(detailViewItem.waste)) || 0,
+        reorderPoint: parseFloat(String(detailViewItem.reorderPoint)) || 0,
+        reorderQuantity: parseFloat(String(detailViewItem.reorderQuantity)) || 0,
+      };
+
+      await updateInventoryItem({
+        variables: { id: detailViewItem.id, input },
+      });
+      toast.success('Inventory item updated successfully!');
+      setDetailViewItem(null);
+      setSelectedItem(null);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update inventory item');
+    }
+  };
+
+  const handleQuickCountSubmit = async () => {
+    const item = inventoryItems[quickCountIndex];
+    if (!item) return;
+
+    const newCount = parseFloat(quickCountValue);
+    const newPar = parseFloat(quickParValue);
+
+    try {
+      if (!isNaN(newCount)) {
+        await handleUpdateStock(item.id, newCount);
+      }
+      if (!isNaN(newPar)) {
+        const input = {
+          name: item.name,
+          category: item.category,
+          currentStock: item.currentStock,
+          minThreshold: newPar,
+          maxCapacity: item.maxCapacity,
+          unit: item.unit,
+          costPerUnit: item.costPerUnit,
+          supplier: item.supplier,
+          location: item.location,
+          ...(item.barcode && String(item.barcode).trim() ? { barcode: item.barcode } : {}),
+          ...(item.qrCode && String(item.qrCode).trim() ? { qrCode: item.qrCode } : {}),
+          description: item.description,
+          expiryDate: item.expiryDate,
+          waste: item.waste,
+          reorderPoint: item.reorderPoint,
+          reorderQuantity: item.reorderQuantity,
+        };
+        await updateInventoryItem({
+          variables: {
+            id: item.id,
+            input,
+          },
+        });
+        toast.success('Par updated successfully!');
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to submit changes');
+    } finally {
+      // Advance to next item
+      if (quickCountIndex < inventoryItems.length - 1) {
+        setQuickCountIndex(quickCountIndex + 1);
+      }
+      setQuickCountValue("");
+      setQuickParValue("");
+    }
+  };
+
+  const handleRecordWaste = async () => {
+    if (!selectedItem) return;
+    const quantity = parseFloat(wasteQuantity);
+    if (isNaN(quantity) || quantity <= 0) {
+      toast.error('Please enter a valid quantity.');
+      return;
+    }
+    if (!wasteReason) {
+      toast.error('Please select a reason for the waste.');
+      return;
+    }
+
+    try {
+      const { data } = await recordWaste({
+        variables: {
+          itemId: selectedItem.id,
+          quantity,
+          reason: wasteReason,
+          notes: wasteNotes,
+        },
+      });
+      
+      if (data?.recordWaste) {
+        setSelectedItem(data.recordWaste);
+        setDetailViewItem(data.recordWaste);
+      }
+
+      toast.success('Waste recorded successfully!');
+      setWasteQuantity("");
+      setWasteReason("");
+      setWasteNotes("");
+      // Optionally, switch back to the details tab or close the modal
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to record waste.');
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="p-6 space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-foreground">Inventory Management</h1>
             <p className="text-muted-foreground mt-1">
@@ -1930,87 +2709,35 @@ export default function InventoryPage() {
               {!isAdmin && <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">Staff View</span>}
             </p>
           </div>
-          <div className="flex space-x-3">
-            <Button variant="outline" onClick={() => setIsLabelDesignerOpen(true)}>
-              <Printer className="mr-2 h-4 w-4" />
-              Label Designer
-            </Button>
-            <div className="relative">
-              <Button 
-                variant="outline"
-                onClick={() => setIsVendorOrderExportOpen(!isVendorOrderExportOpen)}
-              >
-                <FileDown className="mr-2 h-4 w-4" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setIsVendorOrderExportOpen(true)}>
+              <Download className="mr-2 h-4 w-4" />
                 Export Vendor Orders
               </Button>
-              {isVendorOrderExportOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
-                  <div className="p-2">
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      onClick={() => {
-                        downloadCSV();
-                        setIsVendorOrderExportOpen(false);
-                      }}
-                    >
-                      <FileSpreadsheet className="mr-2 h-4 w-4" />
-                      Export as CSV
+            <Button onClick={openAddItemDialog} className="bg-orange-600 hover:bg-orange-700 text-white" size="sm">
+              <Plus className="mr-2 h-4 w-4" /> Add Item
                     </Button>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      onClick={() => {
-                        downloadJSON();
-                        setIsVendorOrderExportOpen(false);
-                      }}
-                    >
-                      <FileDown className="mr-2 h-4 w-4" />
-                      Export as JSON
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <Button 
-              variant="outline" 
-              onClick={checkSchema}
-              className="border-blue-600 text-blue-600 hover:bg-blue-50"
-            >
-              📋 Check Schema
-            </Button>
-            <Button 
-              variant="destructive" 
-              onClick={clearAllInventory}
-              className="bg-red-600 hover:bg-red-700"
-            >
-              🗑️ Clear All
+            <Button variant="destructive" onClick={clearAllInventory} className="bg-red-600 hover:bg-red-700" size="sm">
+              <Trash2 className="mr-2 h-4 w-4" /> Clear All
             </Button>
             <div className="flex space-x-2">
-            <Button variant="outline">
+            <Button variant="outline" size="sm">
               <Download className="mr-2 h-4 w-4" />
               Export Report
             </Button>
               <Button variant="outline" onClick={testDirectInventoryFetch} size="sm">
-                📡 Test API
+                <ScanLine className="mr-2 h-4 w-4" /> Test API
               </Button>
               <Button variant="outline" onClick={forceCacheRefresh} size="sm">
-                🔄 Refresh
+                <RefreshCw className="mr-2 h-4 w-4" /> Refresh
               </Button>
             </div>
             <div className="flex space-x-2">
-            <Dialog open={isAddItemOpen} onOpenChange={setIsAddItemOpen}>
-              <DialogTrigger asChild>
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Item
-                </Button>
-              </DialogTrigger>
-              </Dialog>
+            
               
               <Dialog open={isCSVImportOpen} onOpenChange={setIsCSVImportOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="border-orange-600 text-orange-600 hover:bg-orange-50">
+                  <Button variant="outline" size="sm" className="border-orange-600 text-orange-600 hover:bg-orange-50">
                     <Upload className="mr-2 h-4 w-4" />
                     Import CSV
                   </Button>
@@ -2126,7 +2853,7 @@ export default function InventoryPage() {
                               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
                                 <input 
                                   type="checkbox" 
-                                  checked={selectedImportItems.length === csvPreviewData.items.filter((item: any) => !item.isDuplicate).length}
+                                  checked={selectedImportItems.length === csvPreviewData.items.filter((item: CsvItem) => !item.isDuplicate).length}
                                   onChange={selectAllNewItems}
                                 />
                               </th>
@@ -2138,7 +2865,7 @@ export default function InventoryPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-200">
-                            {csvPreviewData.items.map((item: any, index: number) => (
+                            {csvPreviewData.items.map((item: CsvItem, index: number) => (
                               <tr key={index} className={item.isDuplicate ? 'bg-yellow-50' : 'bg-white'}>
                                 <td className="px-3 py-2">
                                   <input 
@@ -2221,49 +2948,19 @@ export default function InventoryPage() {
               </Dialog>
             </div>
             
-            <Dialog open={isAddItemOpen} onOpenChange={setIsAddItemOpen}>
-              <DialogContent className="max-w-4xl">
+            <Dialog open={isAddItemOpen || isEditItemOpen} onOpenChange={(isOpen) => {
+              if (!isOpen) {
+                setIsAddItemOpen(false);
+                setIsEditItemOpen(false);
+                setSelectedItem(null);
+              }
+            }}>
+              <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>Add New Inventory Item</DialogTitle>
+                  <DialogTitle>{selectedItem ? 'Edit Inventory Item' : 'Add New Inventory Item'}</DialogTitle>
                   <DialogDescription>Add a new item with QR code scanning or manual entry</DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-6 py-4">
-                  {/* QR Scanner Section */}
-                  <div className="border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="font-medium text-foreground">Quick Entry Options</h3>
-                      <div className="flex space-x-2">
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => {
-                            setQrScanMode('add-item');
-                            setIsQRScannerOpen(true);
-                          }}
-                        >
-                          <QrCode className="mr-2 h-4 w-4" />
-                          Scan QR Code
-                        </Button>
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => {
-                            setQrScanMode('add-item');
-                            setIsQRScannerOpen(true);
-                          }}
-                        >
-                          <ScanLine className="mr-2 h-4 w-4" />
-                          Scan Barcode
-                        </Button>
-                      </div>
-                    </div>
-                    {scannedData && (
-                      <div className="bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded p-3">
-                        <p className="text-sm text-green-800 dark:text-green-200">Scanned data populated below ✓</p>
-                      </div>
-                    )}
-                  </div>
-
                   {/* Form Fields */}
                   <div className="grid grid-cols-2 gap-6">
                     <div className="space-y-4">
@@ -2348,7 +3045,12 @@ export default function InventoryPage() {
 
                   {/* Inventory Levels */}
                   <div className="border-t pt-4">
-                    <h3 className="font-medium text-foreground mb-4">Inventory Levels</h3>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-medium text-foreground">On-hand + Par System</h3>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => setIsParHelpOpen(true)}>
+                        <HelpCircle className="h-4 w-4" />
+                      </Button>
+                    </div>
                     <div className="grid grid-cols-3 gap-4">
                       <div>
                         <Label htmlFor="current-stock">Current Stock</Label>
@@ -2371,7 +3073,7 @@ export default function InventoryPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="max-capacity">Max Capacity</Label>
+                        <Label htmlFor="max-capacity">Par Level (Max Capacity)</Label>
                         <Input 
                           id="max-capacity" 
                           type="number" 
@@ -2379,6 +3081,97 @@ export default function InventoryPage() {
                           value={newItemForm.maxCapacity}
                           onChange={(e) => setNewItemForm(prev => ({ ...prev, maxCapacity: e.target.value }))}
                         />
+                      </div>
+                      <div>
+                        <Label htmlFor="average-daily-usage">Average Daily Usage</Label>
+                        <Input
+                          id="average-daily-usage"
+                          type="number"
+                          step="0.01"
+                          placeholder="Units per day"
+                          value={newItemForm.averageDailyUsage}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, averageDailyUsage: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-4">
+                      <div>
+                        <Label htmlFor="reorder-point">Reorder Point</Label>
+                        <Input
+                          id="reorder-point"
+                          type="number"
+                          placeholder="Auto or set manually"
+                          value={newItemForm.reorderPoint || ''}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, reorderPoint: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="restock-period">Restock Periodicity</Label>
+                        <select
+                          id="restock-period"
+                          className="w-full h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                          value={newItemForm.restockPeriod || 'weekly'}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, restockPeriod: e.target.value }))}
+                        >
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="custom">Custom</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Label htmlFor="restock-days">Custom Days</Label>
+                        <Input
+                          id="restock-days"
+                          type="number"
+                          placeholder="e.g., 10"
+                          value={newItemForm.restockDays || ''}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, restockDays: e.target.value }))}
+                          disabled={(newItemForm.restockPeriod || 'weekly') !== 'custom'}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-4 text-sm">
+                      <div className="rounded-md border p-2">
+                        <div className="text-muted-foreground">Days Left (est.)</div>
+                        <div className="font-medium">
+                          {(() => {
+                            // Determine horizon from periodicity
+                            const period = newItemForm.restockPeriod || 'weekly';
+                            const customDays = parseInt(String(newItemForm.restockDays || 0)) || 0;
+                            const periodDays = period === 'daily' ? 1 : period === 'weekly' ? 7 : period === 'monthly' ? 30 : (customDays || 7);
+                            const usage = parseFloat(newItemForm.averageDailyUsage || '0');
+                            const stock = parseFloat(newItemForm.currentStock || '0');
+                            if (!usage) return '—';
+                            const days = Math.floor(stock / usage);
+                            return days >= 0 ? `${days} days` : '—';
+                          })()}
+                        </div>
+                      </div>
+                      <div className="rounded-md border p-2">
+                        <div className="text-muted-foreground">Order to Par</div>
+                        <div className="font-medium">
+                          {(() => {
+                            const par = parseFloat(newItemForm.maxCapacity || '0');
+                            const stock = parseFloat(newItemForm.currentStock || '0');
+                            const needed = Math.max(0, par - stock);
+                            return needed;
+                          })()}
+                        </div>
+                      </div>
+                      <div className="rounded-md border p-2">
+                        <div className="text-muted-foreground">Recommended Reorder Point</div>
+                        <div className="font-medium">
+                          {(() => {
+                            const period = newItemForm.restockPeriod || 'weekly';
+                            const customDays = parseInt(String(newItemForm.restockDays || 0)) || 0;
+                            const periodDays = period === 'daily' ? 1 : period === 'weekly' ? 7 : period === 'monthly' ? 30 : (customDays || 7);
+                            const usage = parseFloat(newItemForm.averageDailyUsage || '0');
+                            if (!usage) return '—';
+                            // Recommendation: reorder when remaining is <= usage * periodDays
+                            return Math.ceil(usage * periodDays);
+                          })()}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2486,12 +3279,57 @@ export default function InventoryPage() {
                     <span>💡 Tip: Add item first, then map barcode for future scans</span>
                   </div>
                   <div className="flex space-x-2">
-                  <Button variant="outline" onClick={() => setIsAddItemOpen(false)}>Cancel</Button>
-                    <Button onClick={handleCreateItem} disabled={isLoading} className="bg-orange-600 hover:bg-orange-700 text-white">
-                      {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-                      Add Item
+                  <Button variant="outline" onClick={() => {
+                    setIsAddItemOpen(false);
+                    setIsEditItemOpen(false);
+                    setSelectedItem(null);
+                  }}>Cancel</Button>
+                    <Button onClick={selectedItem ? handleEditItem : handleCreateItem} disabled={isLoading} className="bg-orange-600 hover:bg-orange-700 text-white">
+                      {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (selectedItem ? <Save className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />)}
+                      {selectedItem ? 'Save Changes' : 'Add Item'}
                     </Button>
                   </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            {/* Nested help dialog for Par/On-hand tutorial */}
+            <Dialog open={isParHelpOpen} onOpenChange={setIsParHelpOpen}>
+              <DialogContent className="max-w-xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>How On-hand + Par Works</DialogTitle>
+                  <DialogDescription>A quick guide to manage inventory effectively</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <span className="font-medium">Par Level (Max Capacity):</span> Your target full level for the item (we use Par Level = Max Capacity). After ordering, you aim to reach this number.
+                  </div>
+                  <div>
+                    <span className="font-medium">Current Stock (On Hand):</span> What you physically have right now.
+                  </div>
+                  <div>
+                    <span className="font-medium">Average Daily Usage (units/day):</span> Your best estimate of how many units you use per day. This drives forecasting.
+                  </div>
+                  <div>
+                    <span className="font-medium">Restock Periodicity:</span> Choose <em>daily</em> (1 day), <em>weekly</em> (7 days), <em>monthly</em> (30 days), or <em>custom</em> (your own days). We use this horizon for recommendations.
+                  </div>
+                  <div>
+                    <span className="font-medium">Days Left:</span> <code>floor(Current Stock ÷ Average Daily Usage)</code>. If usage is 0 or blank, Days Left is not shown.
+                  </div>
+                  <div>
+                    <span className="font-medium">Order to Par:</span> <code>Par Level − Current Stock</code>. This is the quantity needed to get back to your par.
+                  </div>
+                  <div>
+                    <span className="font-medium">Recommended Reorder Point:</span> <code>ceil(Average Daily Usage × Period Days)</code>. Reorder when remaining stock is at or below this level so you can cover your restock horizon.
+                  </div>
+                  <div>
+                    <span className="font-medium">Status:</span> Automatically updates based on stock: <em>Out of stock</em> (0), <em>Critical</em> (≤ Min Threshold), <em>Low</em> (≤ 1.5 × Min Threshold), otherwise <em>Normal</em>.
+                  </div>
+                  <div className="rounded-md border p-3 bg-accent/20">
+                    Tip: Keep Average Daily Usage current and set Period Days ≥ your vendor lead time to avoid stockouts. Consider setting your Min Threshold near the Recommended Reorder Point.
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsParHelpOpen(false)}>Got it</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -2587,7 +3425,7 @@ export default function InventoryPage() {
           <TabsList className={`grid w-full ${isAdmin ? 'grid-cols-4' : 'grid-cols-2'}`}>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="items">Items</TabsTrigger>
-            {isAdmin && <TabsTrigger value="suppliers">Suppliers</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="vendors">Vendors</TabsTrigger>}
             {isAdmin && <TabsTrigger value="analytics">Analytics</TabsTrigger>}
           </TabsList>
 
@@ -2605,7 +3443,7 @@ export default function InventoryPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {getCriticalItems().map((item: { id: Key | null | undefined; name: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; currentStock: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; unit: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; reorderPoint: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; dailyUsage: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; }) => (
+                    {getCriticalItems().map((item: InventoryItem) => (
                       <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
                         <div>
                           <p className="font-medium text-foreground">{item.name}</p>
@@ -2668,12 +3506,12 @@ export default function InventoryPage() {
             {isAdmin && (
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                     <div>
                   <CardTitle>Stock Movement Trends</CardTitle>
                       <CardDescription>Real-time inventory flow analysis</CardDescription>
                     </div>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex flex-wrap items-center gap-4">
                       {/* Period Selection */}
                       <div className="flex items-center space-x-2">
                         <Label className="text-sm font-medium">Period:</Label>
@@ -2865,7 +3703,7 @@ export default function InventoryPage() {
           <TabsContent value="recipes" className="space-y-6">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                   <div>
                     <CardTitle className="flex items-center">
                       <Package className="mr-2 h-5 w-5" />
@@ -2873,10 +3711,10 @@ export default function InventoryPage() {
                     </CardTitle>
                     <CardDescription>Manage recipes, ingredient costing, and food cost analysis</CardDescription>
                   </div>
-                  <div className="flex space-x-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button className="bg-orange-600 hover:bg-orange-700 text-white">
                       <Plus className="mr-2 h-4 w-4" />
-                      New Recipe
+                      Add Recipe
                     </Button>
                   </div>
                 </div>
@@ -2998,7 +3836,7 @@ export default function InventoryPage() {
             <TabsContent value="purchase-orders" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                     <div>
                       <CardTitle className="flex items-center">
                         <Truck className="mr-2 h-5 w-5" />
@@ -3006,10 +3844,10 @@ export default function InventoryPage() {
                       </CardTitle>
                       <CardDescription>Create, track, and manage purchase orders</CardDescription>
                     </div>
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline">
-                        <Download className="mr-2 h-4 w-4" />
-                        Export POs
+                        <Filter className="mr-2 h-4 w-4" />
+                        Filter
                       </Button>
                       <Button className="bg-orange-600 hover:bg-orange-700 text-white">
                         <Plus className="mr-2 h-4 w-4" />
@@ -3123,7 +3961,7 @@ export default function InventoryPage() {
             <TabsContent value="receiving" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                     <div>
                       <CardTitle className="flex items-center">
                         <CheckCircle className="mr-2 h-5 w-5" />
@@ -3131,10 +3969,10 @@ export default function InventoryPage() {
                       </CardTitle>
                       <CardDescription>Receive shipments, perform quality checks, and update inventory</CardDescription>
                     </div>
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline">
-                        <Download className="mr-2 h-4 w-4" />
-                        Receiving Report
+                        <Filter className="mr-2 h-4 w-4" />
+                        Filter
                       </Button>
                       <Button className="bg-orange-600 hover:bg-orange-700 text-white">
                         <Plus className="mr-2 h-4 w-4" />
@@ -3218,7 +4056,7 @@ export default function InventoryPage() {
             <TabsContent value="counts" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                     <div>
                       <CardTitle className="flex items-center">
                         <Scale className="mr-2 h-5 w-5" />
@@ -3226,10 +4064,10 @@ export default function InventoryPage() {
                       </CardTitle>
                       <CardDescription>Physical counts, cycle counts, and variance analysis</CardDescription>
                     </div>
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline">
-                        <Download className="mr-2 h-4 w-4" />
-                        Count Report
+                        <Filter className="mr-2 h-4 w-4" />
+                        Filter
                       </Button>
                       <Button className="bg-orange-600 hover:bg-orange-700 text-white">
                         <Plus className="mr-2 h-4 w-4" />
@@ -3344,7 +4182,7 @@ export default function InventoryPage() {
             <TabsContent value="reports" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                     <div>
                       <CardTitle className="flex items-center">
                         <BarChart className="mr-2 h-5 w-5" />
@@ -3352,7 +4190,11 @@ export default function InventoryPage() {
                       </CardTitle>
                       <CardDescription>Comprehensive reporting and business intelligence</CardDescription>
                     </div>
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline">
+                        <Filter className="mr-2 h-4 w-4" />
+                        Filter
+                      </Button>
                       <Button variant="outline">
                         <Download className="mr-2 h-4 w-4" />
                         Export All Reports
@@ -3461,12 +4303,12 @@ export default function InventoryPage() {
           <TabsContent value="items" className="space-y-6">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
                   <div>
                     <CardTitle>Inventory Items (On Hand Method)</CardTitle>
                     <CardDescription>Manage your on-hand quantities with QR codes and smart counting</CardDescription>
                   </div>
-                  <div className="flex space-x-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
@@ -3476,13 +4318,44 @@ export default function InventoryPage() {
                         className="pl-10 w-64"
                       />
                     </div>
+                    <div className="md:hidden">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="sm">
+                            <Filter className="h-4 w-4 mr-2" />
+                            Sort
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          <DropdownMenuItem onClick={() => handleSort("name")}>Name</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSort("category")}>Category</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSort("currentStock")}>On Hand</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSort("status")}>Status</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <Button variant="outline" size="sm" className="hidden md:flex" onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}>
                       <Filter className="h-4 w-4" />
                     </Button>
                     <Button 
                       variant="outline" 
                       size="sm"
-                      onClick={() => setIsQuantityModifierOpen(true)}
+                      onClick={() => {
+                        setIsQRScannerOpen(true);
+                      }}
+                    >
+                      <QrCode className="mr-2 h-4 w-4" />
+                      Scan QR Code
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => {
+                        setIsQuickCountOpen(true);
+                        setQuickCountIndex(0);
+                        setQuickCountValue("");
+                        setQuickSearch("");
+                      }}
                     >
                       <Target className="mr-2 h-4 w-4" />
                       Modify Quantities
@@ -3490,32 +4363,52 @@ export default function InventoryPage() {
                   </div>
                 </div>
               </CardHeader>
+              {isFilterPanelOpen && (
+                <div className="p-4 border-b">
+                  <div className="flex items-center gap-4">
+                    <Select onValueChange={(value) => setFilterCategory(value)} defaultValue={filterCategory || ""}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Filter by category..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">All Categories</SelectItem>
+                        {uniqueCategories.map((category: string) => (
+                          <SelectItem key={category} value={category}>{category}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button variant="ghost" onClick={() => setFilterCategory(null)}>Clear</Button>
+                  </div>
+                </div>
+              )}
               <CardContent>
-                <Table>
+                <Table className="hidden md:table">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>On Hand</TableHead>
-                      <TableHead>Par Level</TableHead>
-                      <TableHead>Daily Usage</TableHead>
+                      <TableHead onClick={() => handleSort("name")} className="cursor-pointer">Item</TableHead>
+                      <TableHead onClick={() => handleSort("category")} className="cursor-pointer">Category</TableHead>
+                      <TableHead onClick={() => handleSort("currentStock")} className="cursor-pointer">On Hand</TableHead>
+                      <TableHead onClick={() => handleSort("minThreshold")} className="cursor-pointer">Par Level</TableHead>
+                      <TableHead>Waste</TableHead>
+                      <TableHead onClick={() => handleSort("status")} className="cursor-pointer">Status</TableHead>
                       <TableHead>Days Left</TableHead>
-                      <TableHead>QR Code</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead></TableHead>
+                      <TableHead>Order to Par</TableHead>
+                      <TableHead>Last Updated</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredItems.map((item: InventoryItem) => {
-                      const daysLeft = item.dailyUsage > 0 ? Math.floor(item.currentStock / item.dailyUsage) : Infinity;
+                      const usage = (item as any).averageDailyUsage > 0 ? (item as any).averageDailyUsage : 0;
+                      const daysLeft = usage > 0 ? Math.floor((item.currentStock || 0) / usage) : Infinity;
                       return (
-                        <TableRow key={item.id}>
+                        <TableRow key={item.id} onClick={() => {
+                          setSelectedItem(item);
+                          setDetailViewItem(item);
+                        }} className="cursor-pointer">
                           <TableCell>
-                            <div>
-                              <p className="font-medium text-foreground">{item.name}</p>
-                              <p className="text-sm text-muted-foreground">SKU: {item.syscoSKU || item.vendorSKU || 'N/A'}</p>
-                              <p className="text-xs text-muted-foreground">${item.costPerUnit}/{item.unit}</p>
-                            </div>
+                            <div className="font-medium">{item.name}</div>
+                            <div className="text-sm text-muted-foreground">{item.sku}</div>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{item.category}</TableCell>
                           <TableCell>
@@ -3525,61 +4418,53 @@ export default function InventoryPage() {
                             </div>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{item.minThreshold} {item.unit}</TableCell>
-                          <TableCell className="text-muted-foreground">{item.dailyUsage} {item.unit}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {(() => {
+                                const counts = getWasteCountsForItem(item);
+                                return WASTE_REASONS.map((reason) => (
+                                  <Badge key={reason} variant="outline" title={reason} className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>{counts[reason] || 0}</Badge>
+                                ));
+                              })()}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {(() => {
+                              const liveStatus = computeStatus(item.currentStock, item.minThreshold);
+                              return (
+                                <span className={`px-2 py-1 text-xs rounded ${getStatusColor(liveStatus)}`}>
+                                  {friendlyStatusLabel(liveStatus)}
+                                </span>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell>
                             <span className={`font-medium ${daysLeft <= 3 ? 'text-red-600' : daysLeft <= 7 ? 'text-yellow-600' : 'text-green-600'}`}>
                               {daysLeft === Infinity ? '∞' : `${daysLeft} days`}
                             </span>
                           </TableCell>
                           <TableCell>
+                            {Math.max(0, (item.maxCapacity || 0) - (item.currentStock || 0))}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{format(new Date(item.lastUpdated), "P")}</TableCell>
+                          <TableCell>
                             <div className="flex items-center space-x-2">
-                              <QRCodeSVG
-                                value={generateQRData(item)}
-                                size={32}
-                                includeMargin={true}
-                                level="M"
-                              />
                               <Button 
                                 variant="outline" 
                                 size="sm"
-                                onClick={() => printLabel(item)}
+                                onClick={(e) => { e.stopPropagation(); printLabel(item); }}
                               >
                                 <Printer className="h-4 w-4" />
                               </Button>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <span className={`px-2 py-1 text-xs rounded ${getStatusColor(item.status)}`}>
-                              {item.status}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex space-x-2">
-                              <Button 
-                                variant="outline" 
-                                size="sm"
-                                onClick={() => setSelectedItem(item)}
-                              >
-                                <Edit className="h-4 w-4" />
+                              <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setSelectedItem(item); setDetailViewItem(item); }}>
+                                <i className="fa fa-pencil-square-o"></i>
                               </Button>
-                              <Button 
-                                variant="outline" 
-                                size="sm"
-                                onClick={() => {
-                                  setItemToMapBarcode(item);
-                                  setQrScanMode('map-barcode');
-                                  setIsQRScannerOpen(true);
-                                }}
-                                className={item.barcodeMapping?.scannedBarcode ? "bg-green-50 border-green-200 text-green-700" : ""}
-                                title={item.barcodeMapping?.scannedBarcode ? `Mapped: ${item.barcodeMapping.scannedBarcode}` : "Map Sysco barcode to this item"}
-                              >
-                                <ScanLine className="h-4 w-4" />
+                              <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); openEditDialog(item); }}>
+                                <i className="fa fa-cog"></i>
                               </Button>
-                              {isAdmin && (
-                                <Button variant="outline" size="sm">
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              )}
+                              <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -3587,44 +4472,80 @@ export default function InventoryPage() {
                     })}
                   </TableBody>
                 </Table>
+                {/* Floating legend - glass morphism, light/dark compatible */}
+                <div className="fixed bottom-3 right-3 z-40">
+                  <div className="pointer-events-auto rounded-lg border border-white/20 dark:border-slate-800/50 bg-white/30 dark:bg-slate-900/30 backdrop-blur-md saturate-150 shadow-lg ring-1 ring-white/20 dark:ring-slate-800/50 px-3 py-2 text-xs text-slate-800 dark:text-slate-200">
+                    <div className="flex items-center flex-wrap gap-1">
+                      <span className="mr-1 font-semibold">Legend:</span>
+                      {WASTE_REASONS.map((reason) => (
+                        <Badge key={reason} variant="outline" className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>
+                          {reason}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:hidden">
+                  {filteredItems.map((item: InventoryItem) => (
+                    <Card key={item.id}>
+                      <CardHeader>
+                        <CardTitle>{item.name}</CardTitle>
+                        <CardDescription>{item.category}</CardDescription>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(() => {
+                            const counts = getWasteCountsForItem(item);
+                            return WASTE_REASONS.map((reason) => (
+                              <Badge key={reason} variant="outline" title={reason} className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>{counts[reason] || 0}</Badge>
+                            ));
+                          })()}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-sm text-muted-foreground">On Hand</div>
+                          <div>{item.currentStock} {item.unit}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-muted-foreground">Par Level</div>
+                          <div>{item.minThreshold} {item.unit}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-muted-foreground">Status</div>
+                          <div className={getStatusColor(item.status)}>{friendlyStatusLabel(item.status)}</div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-muted-foreground">Last Updated</div>
+                          <div>{format(new Date(item.lastUpdated), "P")}</div>
+                        </div>
+                      </CardContent>
+                      <div className="p-3 border-t flex items-center gap-1 justify-end">
+                        <Button aria-label="Edit details" variant="ghost" size="icon" onClick={() => { setSelectedItem(item); setDetailViewItem(item); }}>
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button aria-label="Settings" variant="ghost" size="icon" onClick={() => openEditDialog(item)}>
+                          <Settings className="h-4 w-4" />
+                        </Button>
+                        <Button aria-label="Delete" variant="ghost" size="icon" onClick={() => handleDeleteItem(item.id)} className="text-red-600">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
 
-          {/* Suppliers Tab - Only visible to admins */}
+          {/* Vendors Tab - Only visible to admins */}
           {isAdmin && (
-            <TabsContent value="suppliers" className="space-y-6">
+            <TabsContent value="vendors" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Suppliers</CardTitle>
+                  <CardTitle>Vendors</CardTitle>
                   <CardDescription>Manage your vendor relationships</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-4">
-                    {suppliers.map((supplier) => (
-                      <div key={supplier.id} className="flex items-center justify-between p-4 border border-border rounded-lg">
-                        <div className="flex items-center space-x-4">
-                          <div className="bg-orange-100 dark:bg-orange-900/30 rounded-full p-3">
-                            <Truck className="h-6 w-6 text-orange-600" />
-                          </div>
-                          <div>
-                            <h3 className="font-medium text-foreground">{supplier.name}</h3>
-                            <p className="text-sm text-muted-foreground">{supplier.category} • {supplier.deliveryDays}</p>
-                            <p className="text-sm text-muted-foreground">{supplier.contact} • {supplier.phone}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center space-x-2">
-                            <span className="text-yellow-500">★</span>
-                            <span className="font-medium">{supplier.rating}</span>
-                          </div>
-                          <Button variant="outline" size="sm" className="mt-2">
-                            Contact
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <VendorsPanel />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -4185,52 +5106,153 @@ export default function InventoryPage() {
            </DialogContent>
          </Dialog>
 
-        {/* Quantity Modification Modal */}
-        <Dialog open={isQuantityModifierOpen} onOpenChange={setIsQuantityModifierOpen}>
-          <DialogContent className="max-w-2xl">
+        {/* Quantity Modification Modal (repurposed to Quick Count later; keeping for SAM future) */}
+
+        {/* Quick Count Modal */}
+        <Dialog open={isQuickCountOpen} onOpenChange={setIsQuickCountOpen}>
+          <DialogContent className="max-w-2xl p-0">
+            <div className="p-4">
             <DialogHeader>
-              <DialogTitle>Modify Quantities</DialogTitle>
-              <DialogDescription>Update inventory quantities using QR scan or camera counting</DialogDescription>
+                <DialogTitle>Quick Inventory Count</DialogTitle>
+                <DialogDescription>Swipe or use arrows to switch items quickly</DialogDescription>
             </DialogHeader>
-            <div className="space-y-6 py-4">
-              <div className="grid grid-cols-2 gap-4">
+            </div>
+            <div
+              className="px-4 pb-24 select-none"
+              onTouchStart={(e) => setQuickTouchStartX(e.touches[0]?.clientX || null)}
+              onTouchEnd={(e) => {
+                if (quickTouchStartX == null) return;
+                const deltaX = (e.changedTouches[0]?.clientX || 0) - quickTouchStartX;
+                if (Math.abs(deltaX) > 50) {
+                  if (deltaX < 0 && quickCountIndex < inventoryItems.length - 1) {
+                    setQuickCountIndex(quickCountIndex + 1);
+                    setQuickCountValue("");
+                  } else if (deltaX > 0 && quickCountIndex > 0) {
+                    setQuickCountIndex(quickCountIndex - 1);
+                    setQuickCountValue("");
+                  }
+                }
+                setQuickTouchStartX(null);
+              }}
+            >
+              {inventoryItems.length > 0 && (
+                <div className="relative">
                 <Button 
-                  variant="outline" 
-                  className="h-24 flex flex-col items-center justify-center space-y-2"
+                    variant="ghost"
+                    className="absolute left-0 top-1/2 -translate-y-1/2 z-10"
+                    disabled={quickCountIndex === 0}
                   onClick={() => {
-                    setQrScanMode('quantity-modify');
-                    setIsQRScannerOpen(true);
-                  }}
-                >
-                  <QrCode className="h-8 w-8" />
-                  <span>Scan QR Code</span>
+                      if (quickCountIndex > 0) {
+                        setQuickCountIndex(quickCountIndex - 1);
+                        setQuickCountValue("");
+                      }
+                    }}
+                  >
+                    <ChevronLeft className="h-5 w-5" />
                 </Button>
                 <Button 
-                  variant="outline" 
-                  className="h-24 flex flex-col items-center justify-center space-y-2"
-                  onClick={() => setIsCameraCountingOpen(true)}
-                >
-                  <Camera className="h-8 w-8" />
-                  <span>Camera Count</span>
+                    variant="ghost"
+                    className="absolute right-0 top-1/2 -translate-y-1/2 z-10"
+                    disabled={quickCountIndex >= inventoryItems.length - 1}
+                    onClick={() => {
+                      if (quickCountIndex < inventoryItems.length - 1) {
+                        setQuickCountIndex(quickCountIndex + 1);
+                        setQuickCountValue("");
+                      }
+                    }}
+                  >
+                    <ChevronRight className="h-5 w-5" />
                 </Button>
+
+                  <div className="mx-10">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{inventoryItems[quickCountIndex]?.name}</CardTitle>
+                        <CardDescription>
+                          {inventoryItems[quickCountIndex]?.category} • {inventoryItems[quickCountIndex]?.unit}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-3 gap-4 text-center">
+                          <div>
+                            <div className="text-xs text-muted-foreground">On Hand</div>
+                            <div className="text-2xl font-semibold">{inventoryItems[quickCountIndex]?.currentStock ?? 0}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground">Par</div>
+                            <div className="text-2xl font-semibold">{inventoryItems[quickCountIndex]?.minThreshold ?? 0}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground">Max</div>
+                            <div className="text-2xl font-semibold">{inventoryItems[quickCountIndex]?.maxCapacity ?? 0}</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              )}
               </div>
               
-              <div className="border-t pt-4">
-                <Label htmlFor="manual-quantity">Manual Entry</Label>
-                <div className="flex space-x-2 mt-2">
+            {/* Bottom controls */}
+            <div className="fixed bottom-4 left-0 right-0 px-4">
+              <div className="mx-auto max-w-2xl rounded-lg border bg-background p-3 shadow-sm">
+                <div className="flex items-center gap-2">
                   <Input 
-                    id="manual-quantity" 
                     type="number" 
-                    placeholder="Enter new quantity" 
+                    placeholder="Enter count"
+                    value={quickCountValue}
+                    onChange={(e) => setQuickCountValue(e.target.value)}
                     className="flex-1"
                   />
-                  <Button>Update</Button>
+                  <Input
+                    type="number"
+                    placeholder="Adjust par"
+                    value={quickParValue}
+                    onChange={(e) => setQuickParValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleQuickCountSubmit(); }}
+                    className="w-36"
+                  />
+                  <Button onClick={handleQuickCountSubmit}>
+                    Submit Count
+                  </Button>
+                </div>
+                <div className="mt-2">
+                  <div className="relative">
+                    <Input
+                      placeholder="Search items..."
+                      value={quickSearch}
+                      onChange={(e) => setQuickSearch(e.target.value)}
+                      className="pr-3"
+                    />
+                    {quickSearch && (
+                      <div className="absolute z-20 mt-1 w-full rounded-md border bg-background shadow">
+                        {inventoryItems
+                          .filter((it: any) => it.name?.toLowerCase().includes(quickSearch.toLowerCase()))
+                          .slice(0, 8)
+                          .map((it: any, idx: number) => (
+                            <button
+                              key={it.id}
+                              className="w-full text-left px-3 py-2 hover:bg-accent"
+                              onClick={() => {
+                                const nextIndex = inventoryItems.findIndex((x: any) => x.id === it.id);
+                                if (nextIndex >= 0) {
+                                  setQuickCountIndex(nextIndex);
+                                  setQuickSearch("");
+                                  setQuickCountValue("");
+                                }
+                              }}
+                            >
+                              {it.name}
+                              <span className="text-xs text-muted-foreground ml-2">{it.category}</span>
+                            </button>
+                          ))}
+              </div>
+                    )}
+            </div>
                 </div>
               </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsQuantityModifierOpen(false)}>Close</Button>
-            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -4782,22 +5804,13 @@ export default function InventoryPage() {
         <Dialog open={isQRScannerOpen} onOpenChange={setIsQRScannerOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>
-                {qrScanMode === 'map-barcode' ? 'Map Sysco Barcode' : 'Scan QR Code'}
-              </DialogTitle>
-              <DialogDescription>
-                {qrScanMode === 'add-item' 
-                  ? 'Scan to auto-populate item details from your internal database or capture new barcode' 
-                  : qrScanMode === 'map-barcode' 
-                  ? `Scan the Sysco barcode to link it with "${itemToMapBarcode?.name}"`
-                  : 'Scan to identify item for quantity update'
-                }
-              </DialogDescription>
+              <DialogTitle>Scan QR Code</DialogTitle>
+              <DialogDescription>Scan to identify the item and load Modify Quantities</DialogDescription>
             </DialogHeader>
             <div className="py-4">
               <div className="rounded-lg overflow-hidden">
                 <Scanner
-                  onScan={handleQRScan}
+                  onScan={(result) => handleQRScan(result as ScanResult[])}
                   formats={['qr_code', 'ean_13', 'ean_8', 'code_128']}
                   components={{
                     finder: false,
@@ -4815,108 +5828,178 @@ export default function InventoryPage() {
         </Dialog>
 
         {/* Item Detail Modal */}
-        {selectedItem && (
-          <Dialog open={!!selectedItem} onOpenChange={() => setSelectedItem(null)}>
+        {selectedItem && detailViewItem && (
+          <Dialog open={!!selectedItem} onOpenChange={() => {
+            setSelectedItem(null);
+            setDetailViewItem(null);
+          }}>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Inventory Details: {selectedItem.name}</DialogTitle>
                 <DialogDescription>View and update inventory information</DialogDescription>
               </DialogHeader>
+              <Tabs defaultValue="details">
+                <TabsList>
+                  <TabsTrigger value="details">Details</TabsTrigger>
+                  <TabsTrigger value="recordWaste">Record Waste</TabsTrigger>
+                  <TabsTrigger value="logs">Logs</TabsTrigger>
+                </TabsList>
+                <TabsContent value="details">
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Current Stock</Label>
-                    <Input defaultValue={selectedItem.currentStock} type="number" />
+                        <Input value={detailViewItem.currentStock ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, currentStock: parseFloat(e.target.value) || 0 }))} type="number" />
                   </div>
                   <div>
                     <Label>Min Threshold</Label>
-                    <Input defaultValue={selectedItem.minThreshold} type="number" />
+                        <Input value={detailViewItem.minThreshold ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, minThreshold: parseFloat(e.target.value) || 0 }))} type="number" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Max Capacity</Label>
-                    <Input defaultValue={selectedItem.maxCapacity} type="number" />
+                        <Input value={detailViewItem.maxCapacity ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, maxCapacity: parseFloat(e.target.value) || 0 }))} type="number" />
                   </div>
                   <div>
                     <Label>Location</Label>
-                    <Input defaultValue={selectedItem.location} />
+                        <Input value={detailViewItem.location ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, location: e.target.value }))} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Description</Label>
-                    <Textarea defaultValue={selectedItem.description} />
+                      <Textarea value={detailViewItem.description ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, description: e.target.value }))} />
                   </div>
+                    <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Reorder Point</Label>
-                    <Input defaultValue={selectedItem.reorderPoint} type="number" />
+                            <Input value={detailViewItem.reorderPoint ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, reorderPoint: parseFloat(e.target.value) || 0 }))} type="number" />
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Reorder Quantity</Label>
-                    <Input defaultValue={selectedItem.reorderQuantity} type="number" />
+                            <Input value={detailViewItem.reorderQuantity ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, reorderQuantity: parseFloat(e.target.value) || 0 }))} type="number" />
                   </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Last Physical Count</Label>
-                    <div className="flex items-center space-x-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                       <Scale className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedItem.lastCount} {selectedItem.unit}</span>
+                            <span>{detailViewItem.lastCount ?? 'N/A'} {detailViewItem.unit}</span>
                     </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Count Date</Label>
-                    <div className="flex items-center space-x-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                       <Calendar className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedItem.countDate}</span>
+                            <span>{detailViewItem.countDate ? format(new Date(detailViewItem.countDate), "P") : 'N/A'}</span>
                     </div>
                   </div>
                   <div>
                     <Label>Counted By</Label>
-                    <div className="flex items-center space-x-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                       <User className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm">{selectedItem.countBy}</span>
+                            <span>{detailViewItem.countBy ?? 'N/A'}</span>
                     </div>
                   </div>
                 </div>
-                <div className="border-t pt-4">
+
+                    <div>
                   <Label>QR Code for this Item</Label>
-                  <div className="flex items-center space-x-4 mt-2">
-                    <QRCodeSVG
-                      value={generateQRData(selectedItem)}
-                      size={80}
-                      includeMargin={true}
-                      level="M"
-                    />
-                    <Button onClick={() => printLabel(selectedItem)}>
+                      <div className="flex items-center gap-4 mt-2">
+                        <div className="bg-white p-2 rounded-md">
+                          <QRCodeSVG value={selectedItem.qrCode || selectedItem.id} size={64} />
+                        </div>
+                        <Button variant="outline" onClick={() => setIsLabelDesignerOpen(true)}>
                       <Printer className="mr-2 h-4 w-4" />
                       Print Label
                     </Button>
                   </div>
                 </div>
-                {selectedItem.waste > 0 && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label>Waste This Week</Label>
-                      <span className="text-sm text-red-600 mt-1 block">{selectedItem.waste} {selectedItem.unit}</span>
-                    </div>
-                    <div>
-                      <Label>Waste Reason</Label>
-                      <span className="text-sm text-muted-foreground mt-1 block">{selectedItem.wasteReason}</span>
-                    </div>
                   </div>
-                )}
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setSelectedItem(null)}>Close</Button>
+                    <Button onClick={handleUpdateDetails} className="bg-orange-600 hover:bg-orange-700 text-white">Update Details</Button>
+                  </DialogFooter>
+                </TabsContent>
+                <TabsContent value="recordWaste">
+                  <div className="space-y-4 py-4">
+                    <div>
+                      <Label>Quantity Wasted</Label>
+                      <Input type="number" value={wasteQuantity} onChange={(e) => setWasteQuantity(e.target.value)} placeholder="e.g., 2.5" />
+                    </div>
+                    <div>
+                      <Label>Reason</Label>
+                      <Select onValueChange={setWasteReason} value={wasteReason}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a reason..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WASTE_REASONS.map((reason) => (
+                            <SelectItem key={reason} value={reason}>
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getWasteTagClass(reason)}`} />
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Notes (Optional)</Label>
+                      <Textarea value={wasteNotes} onChange={(e) => setWasteNotes(e.target.value)} placeholder="Add any additional details..." />
+                  </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setSelectedItem(null)}>Close</Button>
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white">Update Count</Button>
+                    <Button variant="outline" onClick={() => setSelectedItem(null)}>Cancel</Button>
+                    <Button onClick={handleRecordWaste} disabled={recordingWaste} className="bg-red-600 hover:bg-red-700 text-white">
+                      {recordingWaste && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Record Waste
+                    </Button>
               </DialogFooter>
+                </TabsContent>
+                <TabsContent value="logs">
+                  <div className="py-4">
+                    <h4 className="font-medium mb-2">Waste Logs</h4>
+                    <div className="space-y-2">
+                      {selectedItem.wasteLogs && selectedItem.wasteLogs.length > 0 ? (
+                        selectedItem.wasteLogs.map((log: any) => (
+                          <div key={log.id} className="text-sm p-2 border rounded">
+                            <p><strong>Date:</strong> {format(new Date(log.date), "P p")}</p>
+                            <p><strong>Quantity:</strong> {log.quantity} {selectedItem.unit}</p>
+                            <p><strong>Reason:</strong> {log.reason}</p>
+                            {log.notes && <p><strong>Notes:</strong> {log.notes}</p>}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No waste logs for this item.</p>
+                      )}
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
             </DialogContent>
           </Dialog>
         )}
+
+        {/* Confirm Modal - Glass Morphism */}
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent className="backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+            <DialogHeader>
+              <DialogTitle className={`${confirmConfig.danger ? 'text-red-600' : ''}`}>{confirmConfig.title}</DialogTitle>
+              <DialogDescription>{confirmConfig.message}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={confirmProcessing}>Cancel</Button>
+              <Button 
+                className={confirmConfig.danger ? 'bg-red-600 hover:bg-red-700 text-white' : ''}
+                onClick={executeConfirm}
+                disabled={confirmProcessing}
+              >
+                {confirmProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {confirmConfig.confirmText || 'Confirm'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

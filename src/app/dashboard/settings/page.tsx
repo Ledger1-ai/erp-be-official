@@ -12,22 +12,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
-  Settings,
   Plus,
-  Shield,
-  Users,
-  Key,
   Bell,
   Globe,
   Smartphone,
   Edit,
   Trash2,
-  CheckCircle,
-  X,
   Link,
   AlertTriangle,
   Download,
+  Users,
+  Copy,
+  CheckCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 
 // Sample data
 const userRoles = [
@@ -129,6 +127,25 @@ export default function SettingsPage() {
     testConnection,
     performFullSync 
   } = useToastIntegration();
+
+  const [sevenShiftsSyncing, setSevenShiftsSyncing] = useState(false);
+
+  const handle7ShiftsSync = async () => {
+    setSevenShiftsSyncing(true);
+    try {
+      const response = await fetch('/api/7shifts/sync', { method: 'POST' });
+      const data = await response.json();
+      if (data.success) {
+        toast.success("7shifts sync completed successfully!");
+      } else {
+        toast.error(`7shifts sync failed: ${data.error}`);
+      }
+    } catch (error) {
+      toast.error("An error occurred during the 7shifts sync.");
+    } finally {
+      setSevenShiftsSyncing(false);
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -499,6 +516,28 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* 7shifts Integration */}
+            <div className="border p-4 rounded-lg">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="font-semibold">7shifts</h3>
+                  <p className="text-sm text-gray-600">
+                    Syncs schedules for on-time rate calculation.
+                  </p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handle7ShiftsSync}
+                    disabled={sevenShiftsSyncing}
+                  >
+                    {sevenShiftsSyncing ? "Syncing..." : "Sync from 7shifts"}
+                  </Button>
+                </div>
+              </div>
+            </div>
 
             {/* Other Integrations */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

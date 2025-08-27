@@ -92,6 +92,28 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Minimal, consistent scrollbars */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(24 70% 56% / 0.35); /* orange, subtle */
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .dark *::-webkit-scrollbar-thumb {
+    background-color: hsl(24 70% 56% / 0.45);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(24 70% 56% / 0.45) transparent; /* Firefox */
+  }
 }
 
 /* Dynamic Tag Classes for Light/Dark Mode */

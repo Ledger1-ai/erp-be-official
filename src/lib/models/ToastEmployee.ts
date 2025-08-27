@@ -25,6 +25,7 @@ export interface IToastEmployee extends Document {
   isActive: boolean;
   notes?: string;
   isLocallyDeleted: boolean; // For hiding employees locally while keeping Toast sync
+  sevenShiftsId?: number;
 }
 
 const ToastEmployeeSchema = new Schema<IToastEmployee>({
@@ -111,6 +112,11 @@ const ToastEmployeeSchema = new Schema<IToastEmployee>({
     type: Boolean,
     default: false,
     index: true,
+  },
+  sevenShiftsId: {
+    type: Number,
+    sparse: true,
+    unique: true,
   },
 }, {
   timestamps: true,

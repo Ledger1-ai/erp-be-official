@@ -71,7 +71,7 @@ export default function StockMovementChart({
   // Fetch movement data when period or date range changes
   useEffect(() => {
     fetchMovementData();
-  }, [movementPeriod, movementDateRange]);
+  }, [movementPeriod, movementDateRange, fetchMovementData]);
 
   // Set appropriate date ranges based on period
   const handlePeriodChange = (period: 'daily' | 'weekly' | 'yearly') => {

@@ -3,12 +3,18 @@
 import React from "react";
 import { useTheme } from "next-themes";
 
+interface Payload {
+  name: string;
+  value: number | string;
+  color: string;
+}
+
 interface CustomTooltipProps {
   active?: boolean;
-  payload?: any[];
+  payload?: Payload[];
   label?: string;
   labelFormatter?: (label: string) => string;
-  formatter?: (value: any, name: string) => [string, string];
+  formatter?: (value: number | string, name: string) => [string, string];
 }
 
 export function CustomChartTooltip({ 

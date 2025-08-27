@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useLazyQuery } from '@apollo/client';
+import { useQuery, useMutation } from '@apollo/client';
 import { gql } from '@apollo/client';
 
 // Team Members
@@ -108,6 +108,9 @@ export const GET_INVENTORY_ITEMS = gql`
       waste
       reorderPoint
       reorderQuantity
+      averageDailyUsage
+      restockPeriod
+      restockDays
       syscoSKU
       vendorSKU
       casePackSize
@@ -123,6 +126,13 @@ export const GET_INVENTORY_ITEMS = gql`
       seasonalItem
       notes
       brand
+      wasteLogs {
+        id
+        date
+        quantity
+        reason
+        notes
+      }
     }
   }
 `;
@@ -149,6 +159,9 @@ export const GET_INVENTORY_ITEM = gql`
       waste
       reorderPoint
       reorderQuantity
+      averageDailyUsage
+      restockPeriod
+      restockDays
     }
   }
 `;
@@ -214,6 +227,99 @@ export const UPDATE_STOCK = gql`
 export const DELETE_INVENTORY_ITEM = gql`
   mutation DeleteInventoryItem($id: ID!) {
     deleteInventoryItem(id: $id)
+  }
+`;
+
+export const RECORD_WASTE = gql`
+  mutation RecordWaste($itemId: ID!, $quantity: Float!, $reason: String!, $notes: String) {
+    recordWaste(itemId: $itemId, quantity: $quantity, reason: $reason, notes: $notes) {
+      id
+      currentStock
+      wasteLogs {
+        id
+        date
+        quantity
+        reason
+        notes
+      }
+    }
+  }
+`;
+
+// Vendors
+export const GET_VENDORS = gql`
+  query GetVendors {
+    vendors {
+      id
+      name
+      companyName
+      supplierCode
+      type
+      categories
+      status
+      notes
+      isPreferred
+      currentRepresentative { name title email phone mobile startDate notes }
+      representativeHistory { 
+        representative { name title email phone mobile startDate notes }
+        fromDate
+        toDate
+        reason
+        changedBy
+        changedAt
+      }
+      deliveryInfo { deliveryDays deliveryWindow minimumOrder leadTimeDays }
+      performanceMetrics { onTimeDeliveryRate qualityRating totalOrders totalSpent }
+      contacts { name title email phone mobile isPrimary }
+      address { street city state zipCode country }
+      paymentTerms { terms customTerms creditLimit currentBalance currency }
+      certifications
+      documents { name type url uploadDate expiryDate }
+    }
+  }
+`;
+
+export const CREATE_VENDOR = gql`
+  mutation CreateVendor($input: CreateVendorInput!) {
+    createVendor(input: $input) {
+      id
+      name
+      companyName
+      supplierCode
+      status
+      notes
+      isPreferred
+    }
+  }
+`;
+
+export const UPDATE_VENDOR = gql`
+  mutation UpdateVendor($id: ID!, $input: UpdateVendorInput!) {
+    updateVendor(id: $id, input: $input) {
+      id
+      name
+      companyName
+      supplierCode
+      status
+      notes
+      isPreferred
+    }
+  }
+`;
+
+export const DELETE_VENDOR = gql`
+  mutation DeleteVendor($id: ID!) {
+    deleteVendor(id: $id)
+  }
+`;
+
+export const UPDATE_VENDOR_REPRESENTATIVE = gql`
+  mutation UpdateVendorRepresentative($id: ID!, $input: UpdateVendorRepresentativeInput!) {
+    updateVendorRepresentative(id: $id, input: $input) {
+      id
+      currentRepresentative { name title email phone mobile startDate notes }
+      representativeHistory { toDate reason changedAt }
+    }
   }
 `;
 
@@ -457,6 +563,25 @@ export const useUpdateStock = () => useMutation(UPDATE_STOCK, {
 });
 export const useDeleteInventoryItem = () => useMutation(DELETE_INVENTORY_ITEM, {
   refetchQueries: [{ query: GET_INVENTORY_ITEMS }]
+});
+
+export const useRecordWaste = () => useMutation(RECORD_WASTE, {
+  refetchQueries: [{ query: GET_INVENTORY_ITEMS }],
+});
+
+export const useVendors = () => useQuery(GET_VENDORS);
+export const useCreateVendor = () => useMutation(CREATE_VENDOR, {
+  refetchQueries: [{ query: GET_VENDORS }]
+});
+export const useUpdateVendor = () => useMutation(UPDATE_VENDOR, {
+  refetchQueries: [{ query: GET_VENDORS }]
+});
+export const useDeleteVendor = () => useMutation(DELETE_VENDOR, {
+  refetchQueries: [{ query: GET_VENDORS }]
+});
+
+export const useUpdateVendorRepresentative = () => useMutation(UPDATE_VENDOR_REPRESENTATIVE, {
+  refetchQueries: [{ query: GET_VENDORS }]
 });
 
 export const useShifts = (startDate?: string, endDate?: string) => 

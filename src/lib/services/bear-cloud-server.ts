@@ -39,7 +39,7 @@ interface RobotStatus {
 interface WorkflowData {
   id: string;
   name: string;
-  keyframes: any[];
+  keyframes: unknown[];
   status: 'draft' | 'active' | 'paused' | 'completed';
   created: string;
   updated: string;
@@ -219,12 +219,12 @@ class ServerBearCloudAPIService {
   }
 
   // Transform Bear Cloud API robot data to our interface
-  private transformRobotsData(apiData: any): RobotStatus[] {
+  private transformRobotsData(apiData: unknown): RobotStatus[] {
     try {
       // Handle different possible response structures
-      const robots = apiData.robots || apiData.data || apiData || [];
+      const robots = (apiData as { robots?: unknown[] })?.robots || (apiData as { data?: unknown[] })?.data || apiData || [];
       
-      return robots.map((robot: any) => ({
+      return (robots as { id?: string; robot_id?: string; name?: string; robot_name?: string; status?: string; state?: string; battery_level?: number; battery?: number; position?: { x: number; y: number; z?: number; }; location?: { x: number; y: number; z?: number; }; signal_strength?: number; wifi_strength?: number; current_task?: string; task?: string; mission?: string; uptime?: string | number; online_time?: string | number; last_updated?: string; timestamp?: string; heading?: number; orientation?: number; speed?: number; velocity?: number; sensors?: { temperature?: number; humidity?: number; proximity?: number[]; }; temperature?: number; humidity?: number; proximity_sensors?: number[]; }[]).map((robot) => ({
         id: robot.id || robot.robot_id || `robot-${Math.random().toString(36).substr(2, 9)}`,
         name: robot.name || robot.robot_name || `Robot ${robot.id}`,
         status: this.mapBearStatus(robot.status || robot.state),
@@ -302,7 +302,7 @@ class ServerBearCloudAPIService {
     }
   }
 
-  async sendRobotCommand(robotId: string, command: string, params?: any): Promise<boolean> {
+  async sendRobotCommand(robotId: string, command: string, params?: unknown): Promise<boolean> {
     try {
       console.log(`🎮 Server sending command '${command}' to robot ${robotId}...`);
       
@@ -364,7 +364,7 @@ class ServerBearCloudAPIService {
       const data = await response.json();
       console.log('✅ Successfully fetched workflows:', data);
       
-      return data.workflows || data.data || [];
+      return (data as { workflows?: unknown[]; data?: unknown[]; }).workflows || (data as { workflows?: unknown[]; data?: unknown[]; }).data || [];
     } catch (error) {
       console.error('❌ Failed to fetch workflows:', error);
       console.log('🔄 Returning mock workflows...');
@@ -388,7 +388,7 @@ class ServerBearCloudAPIService {
       const data = await response.json();
       console.log('✅ Successfully created workflow:', data);
       
-      return data.workflow || data;
+      return (data as { workflow?: unknown; }).workflow || (data as { workflow?: unknown; });
     } catch (error) {
       console.error('❌ Failed to create workflow:', error);
       // Return mock workflow as fallback
@@ -401,7 +401,7 @@ class ServerBearCloudAPIService {
     }
   }
 
-  async getFacilityMap(): Promise<any> {
+  async getFacilityMap(): Promise<unknown> {
     try {
       console.log('🗺️ Server fetching facility map from Bear Cloud API...');
       
@@ -514,7 +514,7 @@ class ServerBearCloudAPIService {
     ];
   }
 
-  private getMockFacilityMap(): any {
+  private getMockFacilityMap(): unknown {
     return {
       width: 600,
       height: 400,

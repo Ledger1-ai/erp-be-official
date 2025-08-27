@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -39,6 +38,14 @@ interface LoginResponse {
   tempToken?: string;
 }
 
+interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  permissions: string[];
+}
+
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -52,7 +59,7 @@ export default function LoginPage() {
     userEmail: string;
     isFirstLogin: boolean;
   } | null>(null);
-  const router = useRouter();
+  useRouter();
 
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -117,7 +124,7 @@ export default function LoginPage() {
     }
   };
 
-  const handlePasswordChangeSuccess = (accessToken: string, user: any) => {
+  const handlePasswordChangeSuccess = (accessToken: string, user: User) => {
     // Store the new tokens and user data
     sessionStorage.setItem('accessToken', accessToken);
     localStorage.setItem('user', JSON.stringify(user));

@@ -14,7 +14,6 @@ import {
   Battery,
   Wifi,
   Navigation,
-  Target,
   RefreshCw,
   Loader2
 } from "lucide-react";
@@ -400,16 +399,16 @@ export default function RobotMapView() {
                     {/* Location & Task */}
                     <div className="bg-muted/30 rounded-lg p-3 space-y-2">
                       <h4 className="font-medium text-sm">Location & Task</h4>
-                      {(robot as any).location && (
+                      {robot.location && (
                         <div className="flex items-center gap-2 text-sm">
                           <MapPin className="h-4 w-4 text-green-600" />
-                          <span className="truncate">{(robot as any).location}</span>
+                          <span className="truncate">{robot.location}</span>
                         </div>
                       )}
-                      {(robot as any).destination && (
+                      {robot.destination && (
                         <div className="flex items-center gap-2 text-sm">
                           <Navigation className="h-4 w-4 text-blue-600" />
-                          <span className="truncate">→ {(robot as any).destination}</span>
+                          <span className="truncate">→ {robot.destination}</span>
                         </div>
                       )}
                       <p className="text-sm text-muted-foreground truncate">Task: {robot.task}</p>

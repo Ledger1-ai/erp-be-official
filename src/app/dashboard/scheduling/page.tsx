@@ -13,10 +13,6 @@ import {
   Calendar,
   Plus,
   Brain,
-  Clock,
-  Users,
-  AlertTriangle,
-  CheckCircle,
   Star,
   Edit,
   Trash2,
@@ -141,7 +137,7 @@ const currentWeek = [22, 23, 24, 25, 26, 27, 28]; // January 2025
 
 export default function SchedulingPage() {
   const [selectedView, setSelectedView] = useState("calendar");
-  const [selectedDate, setSelectedDate] = useState("2025-01-22");
+  const [, setSelectedDate] = useState("2025-01-22");
   const [isCreateShiftOpen, setIsCreateShiftOpen] = useState(false);
 
   const getShiftsForDate = (date: string) => {
@@ -228,7 +224,7 @@ export default function SchedulingPage() {
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Scheduling Insights</h3>
+                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni&apos;s Scheduling Insights</h3>
                 <div className="space-y-3">
                   {aiRecommendations.map((rec, index) => (
                     <div key={index} className="bg-card rounded-lg p-3 border border-border">

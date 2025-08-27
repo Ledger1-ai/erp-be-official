@@ -30,6 +30,14 @@ const performanceEntrySchema = new mongoose.Schema({
     trim: true,
     maxlength: 2000,
   },
+  salesGenerated: {
+    type: Number,
+    default: 0
+  },
+  date: {
+    type: Date,
+    default: Date.now
+  },
   createdBy: {
     type: String,
   },

@@ -74,6 +74,28 @@ const performanceMetricsSchema = new mongoose.Schema({
   lastDeliveryDate: Date
 });
 
+const vendorRepresentativeSchema = new mongoose.Schema({
+  name: String,
+  title: String,
+  email: String,
+  phone: String,
+  mobile: String,
+  startDate: Date,
+  notes: String
+}, { _id: false });
+
+const representativeHistorySchema = new mongoose.Schema({
+  representative: vendorRepresentativeSchema,
+  fromDate: Date,
+  toDate: Date,
+  reason: String,
+  changedBy: String,
+  changedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const supplierSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -137,6 +159,8 @@ const supplierSchema = new mongoose.Schema({
     uploadDate: Date,
     expiryDate: Date
   }],
+  currentRepresentative: vendorRepresentativeSchema,
+  representativeHistory: [representativeHistorySchema],
   notes: String,
   isPreferred: {
     type: Boolean,
@@ -172,6 +196,7 @@ supplierSchema.index({ status: 1 });
 supplierSchema.index({ type: 1 });
 supplierSchema.index({ categories: 1 });
 supplierSchema.index({ isPreferred: 1 });
+supplierSchema.index({ 'currentRepresentative.name': 1 });
 
 // Virtual for primary contact
 supplierSchema.virtual('primaryContact').get(function() {

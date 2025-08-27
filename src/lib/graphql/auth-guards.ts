@@ -61,10 +61,10 @@ export function requireRole(context: AuthContext, roles: string[]): void {
 /**
  * Higher-order function to wrap resolvers with authentication
  */
-export function withAuth<TArgs = any, TResult = any>(
-  resolver: (parent: any, args: TArgs, context: AuthContext, info: any) => TResult
+export function withAuth<TArgs = unknown, TResult = unknown>(
+  resolver: (parent: unknown, args: TArgs, context: AuthContext, info: unknown) => TResult
 ) {
-  return (parent: any, args: TArgs, context: AuthContext, info: any): TResult => {
+  return (parent: unknown, args: TArgs, context: AuthContext, info: unknown): TResult => {
     requireAuth(context);
     return resolver(parent, args, context, info);
   };
@@ -73,11 +73,11 @@ export function withAuth<TArgs = any, TResult = any>(
 /**
  * Higher-order function to wrap resolvers with permission check
  */
-export function withPermission<TArgs = any, TResult = any>(
+export function withPermission<TArgs = unknown, TResult = unknown>(
   permission: string,
-  resolver: (parent: any, args: TArgs, context: AuthContext, info: any) => TResult
+  resolver: (parent: unknown, args: TArgs, context: AuthContext, info: unknown) => TResult
 ) {
-  return (parent: any, args: TArgs, context: AuthContext, info: any): TResult => {
+  return (parent: unknown, args: TArgs, context: AuthContext, info: unknown): TResult => {
     requirePermission(context, permission);
     return resolver(parent, args, context, info);
   };
@@ -86,11 +86,11 @@ export function withPermission<TArgs = any, TResult = any>(
 /**
  * Higher-order function to wrap resolvers with role check
  */
-export function withRole<TArgs = any, TResult = any>(
+export function withRole<TArgs = unknown, TResult = unknown>(
   roles: string[],
-  resolver: (parent: any, args: TArgs, context: AuthContext, info: any) => TResult
+  resolver: (parent: unknown, args: TArgs, context: AuthContext, info: unknown) => TResult
 ) {
-  return (parent: any, args: TArgs, context: AuthContext, info: any): TResult => {
+  return (parent: unknown, args: TArgs, context: AuthContext, info: unknown): TResult => {
     requireRole(context, roles);
     return resolver(parent, args, context, info);
   };

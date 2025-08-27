@@ -28,12 +28,21 @@ export async function GET(request: NextRequest) {
     const matchStage: any = filter;
     const agg = await PerformanceEntry.aggregate([
       { $match: matchStage },
-      { $group: { _id: '$employeeToastGuid', avg: { $avg: '$rating' }, count: { $sum: { $cond: [{ $ifNull: ['$rating', false] }, 1, 0] } }, 
-        flags: { $sum: { $cond: ['$isFlag', 1, 0] } },
-        red: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: ['$flagType', 'red'] }] }, 1, 0 ] } },
-        yellow: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: ['$flagType', 'yellow'] }] }, 1, 0 ] } },
-        blue: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: ['$flagType', 'blue'] }] }, 1, 0 ] } }
-      } },
+      { $project: { 
+          employeeToastGuid: 1, 
+          rating: 1, 
+          isFlag: 1, 
+          flagType: { $ifNull: ['$flagType', 'blue'] } // Default nulls to 'blue'
+      }},
+      { $group: { 
+          _id: '$employeeToastGuid', 
+          avg: { $avg: '$rating' }, 
+          count: { $sum: { $cond: [{ $ifNull: ['$rating', false] }, 1, 0] } }, 
+          flags: { $sum: { $cond: ['$isFlag', 1, 0] } },
+          red: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: [{ $toLower: '$flagType' }, 'red'] }] }, 1, 0 ] } },
+          yellow: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: [{ $toLower: '$flagType' }, 'yellow'] }] }, 1, 0 ] } },
+          blue: { $sum: { $cond: [ { $and: ['$isFlag', { $eq: [{ $toLower: '$flagType' }, 'blue'] }] }, 1, 0 ] } }
+      }},
     ]);
 
     return NextResponse.json({ success: true, data: { entries, aggregates: agg } });

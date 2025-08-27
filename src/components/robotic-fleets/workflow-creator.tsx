@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { 
   Play, 
@@ -88,7 +87,7 @@ export default function WorkflowCreator() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [showTrajectories, setShowTrajectories] = useState(true);
-  const [zoomLevel, setZoomLevel] = useState(0.8);
+  const [zoomLevel] = useState(0.8);
   const mapRef = useRef<HTMLDivElement>(null);
 
   const totalDuration = keyframes.length > 0 ? 
