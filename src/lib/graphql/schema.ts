@@ -111,6 +111,7 @@ export const typeDefs = gql`
     category: String!
     currentStock: Float!
     minThreshold: Float!
+    parLevel: Float
     maxCapacity: Float!
     unit: String!
     costPerUnit: Float!
@@ -189,6 +190,92 @@ export const typeDefs = gql`
     date: Date
   }
 
+  # Inventory Analytics & Reports
+  type InventoryMovementPoint {
+    date: String!
+    dateKey: String!
+    received: Float!
+    usage: Float!
+    adjustments: Float!
+    totalValue: Float!
+    netMovement: Float!
+    transactionCount: Int!
+    itemsCount: Int!
+  }
+
+  type InventoryAnalyticsSummary {
+    totalInventoryValue: Float!
+    totalItems: Int!
+    lowStockItems: Int!
+    criticalItems: Int!
+    wasteCostInPeriod: Float!
+    wasteQtyInPeriod: Float!
+    turnoverRatio: Float!
+  }
+
+  type ABCItem {
+    itemId: ID!
+    name: String!
+    value: Float!
+    cumulativePct: Float!
+    category: String!
+  }
+
+  type WasteReasonSummary {
+    reason: String!
+    quantity: Float!
+    cost: Float!
+  }
+
+  type WasteItemSummary {
+    itemId: ID!
+    name: String!
+    quantity: Float!
+    cost: Float!
+  }
+
+  type WasteReport {
+    byReason: [WasteReasonSummary!]!
+    byItem: [WasteItemSummary!]!
+    totalQuantity: Float!
+    totalCost: Float!
+  }
+
+  type SupplierPerformanceRow {
+    supplierId: ID!
+    supplierName: String!
+    totalOrders: Int!
+    totalSpent: Float!
+    averageOrderValue: Float!
+    onTimeDeliveryRate: Float!
+    qualityRating: Float!
+  }
+
+  type InventoryTurnoverPoint {
+    date: String!
+    period: String!
+    usageCost: Float!
+    avgInventoryValue: Float!
+    turnover: Float!
+  }
+
+  type RecipeProfitRow {
+    recipeId: ID!
+    name: String!
+    foodCost: Float!
+    menuPrice: Float!
+    foodCostPct: Float!
+    grossMargin: Float!
+    isPopular: Boolean!
+  }
+
+  type CrossPanelLink {
+    itemId: ID!
+    itemName: String!
+    vendorNames: [String!]!
+    recipeNames: [String!]!
+  }
+
   type Query {
     # User queries
     me: User
@@ -218,6 +305,28 @@ export const typeDefs = gql`
     # Analytics queries
     analytics(period: String!): Analytics!
     revenueAnalytics(startDate: Date!, endDate: Date!): [Analytics!]!
+
+    # Inventory analytics/reporting
+    inventoryMovement(period: String!, startDate: Date!, endDate: Date!, itemId: ID): [InventoryMovementPoint!]!
+    inventoryAnalyticsSummary(startDate: Date!, endDate: Date!): InventoryAnalyticsSummary!
+    abcAnalysis(startDate: Date!, endDate: Date!, metric: String): [ABCItem!]!
+    wasteReport(startDate: Date!, endDate: Date!): WasteReport!
+    supplierPerformanceReport(startDate: Date!, endDate: Date!): [SupplierPerformanceRow!]!
+    inventoryTurnoverSeries(period: String!, startDate: Date!, endDate: Date!): [InventoryTurnoverPoint!]!
+    recipeProfitabilityReport: [RecipeProfitRow!]!
+    crossPanelLinks(itemIds: [ID!]): [CrossPanelLink!]!
+
+    # Menus
+    indexedMenus(restaurantGuid: String!): IndexedMenus
+    menuMappings(restaurantGuid: String!, toastItemGuid: String): [MenuMapping!]!
+    menuItemCost(restaurantGuid: String!, toastItemGuid: String!): Float!
+    menuItemCapacity(restaurantGuid: String!, toastItemGuid: String!, quantity: Float): MenuItemCapacityResult!
+    menuItemStock(restaurantGuid: String!, guids: [String!], multiLocationIds: [String!]): [MenuItemStock!]!
+    orderTrackingStatus(restaurantGuid: String!): OrderTracking
+
+    # Orders
+    purchaseOrders(vendorId: ID, status: String): [PurchaseOrder!]!
+    purchaseOrder(id: ID!): PurchaseOrder
 
     # Roster queries
     rosterConfigurations: [RosterConfiguration!]!
@@ -261,11 +370,54 @@ export const typeDefs = gql`
     deleteInvoice(id: ID!): Boolean!
     markInvoicePaid(id: ID!): Invoice!
 
+    # Orders
+    createPurchaseOrder(input: CreatePurchaseOrderInput!): PurchaseOrder!
+    updatePurchaseOrder(id: ID!, input: UpdatePurchaseOrderInput!): PurchaseOrder!
+    receivePurchaseOrder(id: ID!, receipts: [ReceiveItemInput!]!): ReceiveResult!
+    resetPurchaseOrder(id: ID!): PurchaseOrder!
+    deletePurchaseOrder(id: ID!): Boolean!
+
     # Roster mutations
     createRosterConfiguration(input: CreateRosterInput!): RosterConfiguration!
     updateRosterConfiguration(id: ID!, input: UpdateRosterInput!): RosterConfiguration!
     deleteRosterConfiguration(id: ID!): Boolean!
     setActiveRosterConfiguration(id: ID!): RosterConfiguration!
+
+    # Menus
+    indexMenus(restaurantGuid: String!): Boolean!
+    upsertMenuMapping(input: UpsertMenuMappingInput!): MenuMapping!
+    setOrderTracking(restaurantGuid: String!, enabled: Boolean!): OrderTracking!
+    runOrderTracking(restaurantGuid: String!, businessDate: String): Boolean!
+    updateMenuItemStock(restaurantGuid: String!, updates: [MenuItemStockUpdateInput!]!): [MenuItemStock!]!
+  }
+
+  type MenuItemCapacityResult {
+    capacity: Int!
+    allHaveStock: Boolean!
+    requirements: [CapacityRequirement!]!
+  }
+
+  type CapacityRequirement {
+    inventoryItem: ID!
+    unit: String!
+    quantityPerOrder: Float!
+    available: Float!
+  }
+
+  type MenuItemStock {
+    guid: String
+    multiLocationId: String
+    status: String
+    quantity: Float
+    versionId: String
+  }
+
+  input MenuItemStockUpdateInput {
+    guid: String
+    multiLocationId: String
+    status: String!
+    quantity: Float
+    versionId: String
   }
 
   # Input types
@@ -305,6 +457,98 @@ export const typeDefs = gql`
     status: String
   }
 
+  # Orders types
+  type PurchaseOrderItem {
+    inventoryItem: ID
+    name: String!
+    sku: String
+    syscoSKU: String
+    vendorSKU: String
+    quantityOrdered: Float!
+    quantityReceived: Float
+    creditedQuantity: Float
+    unit: String!
+    unitCost: Float!
+    totalCost: Float!
+    notes: String
+  }
+
+  type PurchaseOrder {
+    id: ID!
+    poNumber: String!
+    supplier: Vendor
+    supplierName: String!
+    status: String!
+    orderDate: Date
+    expectedDeliveryDate: Date
+    actualDeliveryDate: Date
+    items: [PurchaseOrderItem!]!
+    creditTotal: Float
+    parentOrder: ID
+    isPartial: Boolean
+    subtotal: Float!
+    tax: Float
+    shipping: Float
+    total: Float!
+    terms: String
+    notes: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  input PurchaseOrderItemInput {
+    inventoryItem: ID
+    name: String!
+    sku: String
+    syscoSKU: String
+    vendorSKU: String
+    quantityOrdered: Float!
+    quantityReceived: Float
+    unit: String!
+    unitCost: Float!
+    totalCost: Float!
+    notes: String
+  }
+
+  input CreatePurchaseOrderInput {
+    supplierId: ID
+    supplierName: String
+    expectedDeliveryDate: Date
+    items: [PurchaseOrderItemInput!]!
+    notes: String
+    status: String
+  }
+
+  input UpdatePurchaseOrderInput {
+    supplierId: ID
+    supplierName: String
+    expectedDeliveryDate: Date
+    items: [PurchaseOrderItemInput!]
+    notes: String
+    status: String
+  }
+
+  input ReceiveItemInput {
+    inventoryItem: ID
+    name: String
+    quantityReceived: Float!
+    credit: Boolean
+  }
+
+  type MissingItem {
+    name: String!
+    missingQuantity: Float!
+    unitCost: Float!
+    totalCredit: Float!
+  }
+
+  type ReceiveResult {
+    order: PurchaseOrder!
+    missing: [MissingItem!]!
+    totalCredit: Float!
+    replacementOrder: PurchaseOrder
+  }
+
   input CreateShiftInput {
     date: Date!
     startTime: String!
@@ -332,6 +576,7 @@ export const typeDefs = gql`
     category: String!
     currentStock: Float!
     minThreshold: Float!
+    parLevel: Float
     maxCapacity: Float!
     unit: String!
     costPerUnit: Float!
@@ -353,6 +598,7 @@ export const typeDefs = gql`
     category: String
     currentStock: Float
     minThreshold: Float
+    parLevel: Float
     maxCapacity: Float
     unit: String
     costPerUnit: Float
@@ -397,6 +643,120 @@ export const typeDefs = gql`
     status: String
     notes: String
     terms: String
+  }
+
+  # Menu types
+  type IndexedMenus {
+    restaurantGuid: String!
+    lastUpdated: String
+    menus: [MenuNode!]!
+    modifierGroupReferences: [ModifierGroupRef!]!
+    modifierOptionReferences: [ModifierOptionRef!]!
+  }
+
+  type MenuNode {
+    guid: String!
+    name: String!
+    description: String
+    menuGroups: [MenuGroupNode!]
+  }
+
+  type MenuGroupNode {
+    guid: String!
+    name: String!
+    description: String
+    menuItems: [MenuItemNode!]
+    menuGroups: [MenuGroupNode!]
+  }
+
+  type MenuItemNode {
+    guid: String!
+    name: String!
+    description: String
+    price: Float
+    pricingStrategy: String
+    taxInclusion: String
+    modifierGroupReferences: [Int!]
+  }
+
+  type ModifierGroupRef {
+    referenceId: Int!
+    guid: String
+    name: String
+    pricingStrategy: String
+    modifierOptionReferences: [Int!]
+  }
+
+  type ModifierOptionRef {
+    referenceId: Int!
+    guid: String
+    name: String
+    price: Float
+    pricingStrategy: String
+  }
+
+  type MenuMappingComponent {
+    kind: String!
+    inventoryItem: ID
+    nestedToastItemGuid: String
+    modifierOptionGuid: String
+    quantity: Float!
+    unit: String!
+    notes: String
+    overrides: [MenuMappingComponent!]
+  }
+
+  type MenuMapping {
+    id: ID!
+    restaurantGuid: String!
+    toastItemGuid: String!
+    toastItemName: String
+    toastItemSku: String
+    components: [MenuMappingComponent!]!
+    recipeSteps: [RecipeStep!]
+    computedCostCache: Float
+    lastComputedAt: Date
+  }
+
+  type RecipeStep {
+    step: Int!
+    instruction: String!
+    time: Int
+    notes: String
+  }
+
+  input MenuMappingComponentInput {
+    kind: String!
+    inventoryItem: ID
+    nestedToastItemGuid: String
+    modifierOptionGuid: String
+    quantity: Float!
+    unit: String!
+    notes: String
+    overrides: [MenuMappingComponentInput!]
+  }
+
+  input UpsertMenuMappingInput {
+    restaurantGuid: String!
+    toastItemGuid: String!
+    toastItemName: String
+    toastItemSku: String
+    components: [MenuMappingComponentInput!]!
+    recipeSteps: [RecipeStepInput!]
+  }
+
+  input RecipeStepInput {
+    step: Int!
+    instruction: String!
+    time: Int
+    notes: String
+  }
+
+  type OrderTracking {
+    restaurantGuid: String!
+    enabled: Boolean!
+    lastRunAt: Date
+    lastBusinessDate: String
   }
 
   # Vendor types

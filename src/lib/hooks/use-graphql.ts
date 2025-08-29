@@ -94,6 +94,7 @@ export const GET_INVENTORY_ITEMS = gql`
       category
       currentStock
       minThreshold
+      parLevel
       maxCapacity
       unit
       costPerUnit
@@ -145,6 +146,7 @@ export const GET_INVENTORY_ITEM = gql`
       category
       currentStock
       minThreshold
+      parLevel
       maxCapacity
       unit
       costPerUnit
@@ -430,6 +432,69 @@ export const GET_INVOICES = gql`
   }
 `;
 
+// Orders
+export const GET_PURCHASE_ORDERS = gql`
+  query GetPurchaseOrders($vendorId: ID, $status: String) {
+    purchaseOrders(vendorId: $vendorId, status: $status) {
+      id
+      poNumber
+      supplierName
+      supplier { id name companyName supplierCode }
+      status
+      expectedDeliveryDate
+      subtotal
+      total
+      creditTotal
+      createdAt
+      items { inventoryItem name vendorSKU sku unit unitCost quantityOrdered quantityReceived creditedQuantity totalCost }
+    }
+  }
+`;
+
+export const CREATE_PURCHASE_ORDER = gql`
+  mutation CreatePurchaseOrder($input: CreatePurchaseOrderInput!) {
+    createPurchaseOrder(input: $input) {
+      id
+      poNumber
+      status
+    }
+  }
+`;
+
+export const UPDATE_PURCHASE_ORDER = gql`
+  mutation UpdatePurchaseOrder($id: ID!, $input: UpdatePurchaseOrderInput!) {
+    updatePurchaseOrder(id: $id, input: $input) { id poNumber status }
+  }
+`;
+
+export const RECEIVE_PURCHASE_ORDER = gql`
+  mutation ReceivePurchaseOrder($id: ID!, $receipts: [ReceiveItemInput!]!) {
+    receivePurchaseOrder(id: $id, receipts: $receipts) {
+      order { id poNumber status }
+      missing { name missingQuantity unitCost totalCredit }
+      totalCredit
+      replacementOrder { id poNumber status }
+    }
+  }
+`;
+
+export const RESET_PURCHASE_ORDER = gql`
+  mutation ResetPurchaseOrder($id: ID!) {
+    resetPurchaseOrder(id: $id) {
+      id
+      poNumber
+      status
+      items { name quantityOrdered quantityReceived creditedQuantity unitCost totalCost }
+    }
+  }
+`;
+
+export const DELETE_PURCHASE_ORDER = gql`
+  mutation DeletePurchaseOrder($id: ID!) {
+    deletePurchaseOrder(id: $id)
+  }
+`;
+
 export const GET_INVOICE = gql`
   query GetInvoice($id: ID!) {
     invoice(id: $id) {
@@ -497,6 +562,110 @@ export const DELETE_INVOICE = gql`
   }
 `;
 
+// Menus & Mappings
+export const INDEX_MENUS = gql`
+  mutation IndexMenus($restaurantGuid: String!) {
+    indexMenus(restaurantGuid: $restaurantGuid)
+  }
+`;
+
+export const GET_INDEXED_MENUS = gql`
+  query IndexedMenus($restaurantGuid: String!) {
+    indexedMenus(restaurantGuid: $restaurantGuid) {
+      restaurantGuid
+      lastUpdated
+      menus { guid name description menuGroups { guid name description menuItems { guid name description price pricingStrategy taxInclusion modifierGroupReferences } menuGroups { guid name description } } }
+      modifierGroupReferences { referenceId guid name pricingStrategy modifierOptionReferences }
+      modifierOptionReferences { referenceId guid name price pricingStrategy }
+    }
+  }
+`;
+
+export const GET_MENU_MAPPINGS = gql`
+  query MenuMappings($restaurantGuid: String!, $toastItemGuid: String) {
+    menuMappings(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid) {
+      id
+      restaurantGuid
+      toastItemGuid
+      toastItemName
+      components { kind inventoryItem nestedToastItemGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid quantity unit notes } }
+      recipeSteps { step instruction time notes }
+      computedCostCache
+      lastComputedAt
+    }
+  }
+`;
+
+export const UPSERT_MENU_MAPPING = gql`
+  mutation UpsertMenuMapping($input: UpsertMenuMappingInput!) {
+    upsertMenuMapping(input: $input) {
+      id
+      restaurantGuid
+      toastItemGuid
+      components { kind inventoryItem nestedToastItemGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid quantity unit notes } }
+      recipeSteps { step instruction time notes }
+    }
+  }
+`;
+
+export const GET_MENU_ITEM_COST = gql`
+  query MenuItemCost($restaurantGuid: String!, $toastItemGuid: String!) {
+    menuItemCost(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid)
+  }
+`;
+
+export const GET_MENU_ITEM_CAPACITY = gql`
+  query MenuItemCapacity($restaurantGuid: String!, $toastItemGuid: String!, $quantity: Float) {
+    menuItemCapacity(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid, quantity: $quantity) {
+      capacity
+      allHaveStock
+      requirements { inventoryItem unit quantityPerOrder available }
+    }
+  }
+`;
+
+export const GET_MENU_ITEM_STOCK = gql`
+  query MenuItemStock($restaurantGuid: String!, $guids: [String!], $multiLocationIds: [String!]) {
+    menuItemStock(restaurantGuid: $restaurantGuid, guids: $guids, multiLocationIds: $multiLocationIds) {
+      guid
+      multiLocationId
+      status
+      quantity
+      versionId
+    }
+  }
+`;
+
+export const UPDATE_MENU_ITEM_STOCK = gql`
+  mutation UpdateMenuItemStock($restaurantGuid: String!, $updates: [MenuItemStockUpdateInput!]!) {
+    updateMenuItemStock(restaurantGuid: $restaurantGuid, updates: $updates) {
+      guid
+      multiLocationId
+      status
+      quantity
+      versionId
+    }
+  }
+`;
+
+export const GET_ORDER_TRACKING = gql`
+  query OrderTrackingStatus($restaurantGuid: String!) {
+    orderTrackingStatus(restaurantGuid: $restaurantGuid) { restaurantGuid enabled lastRunAt lastBusinessDate }
+  }
+`;
+
+export const SET_ORDER_TRACKING = gql`
+  mutation SetOrderTracking($restaurantGuid: String!, $enabled: Boolean!) {
+    setOrderTracking(restaurantGuid: $restaurantGuid, enabled: $enabled) { restaurantGuid enabled lastRunAt lastBusinessDate }
+  }
+`;
+
+export const RUN_ORDER_TRACKING = gql`
+  mutation RunOrderTracking($restaurantGuid: String!, $businessDate: String) {
+    runOrderTracking(restaurantGuid: $restaurantGuid, businessDate: $businessDate)
+  }
+`;
+
 // Analytics
 export const GET_ANALYTICS = gql`
   query GetAnalytics($period: String!) {
@@ -532,6 +701,111 @@ export const GET_REVENUE_ANALYTICS = gql`
       staffUtilization
       inventoryValue
       wastePercentage
+    }
+  }
+`;
+
+// Inventory Analytics & Reports
+export const GET_INVENTORY_MOVEMENT = gql`
+  query InventoryMovement($period: String!, $startDate: Date!, $endDate: Date!, $itemId: ID) {
+    inventoryMovement(period: $period, startDate: $startDate, endDate: $endDate, itemId: $itemId) {
+      date
+      dateKey
+      received
+      usage
+      adjustments
+      totalValue
+      netMovement
+      transactionCount
+      itemsCount
+    }
+  }
+`;
+
+export const GET_INVENTORY_ANALYTICS_SUMMARY = gql`
+  query InventoryAnalyticsSummary($startDate: Date!, $endDate: Date!) {
+    inventoryAnalyticsSummary(startDate: $startDate, endDate: $endDate) {
+      totalInventoryValue
+      totalItems
+      lowStockItems
+      criticalItems
+      wasteCostInPeriod
+      wasteQtyInPeriod
+      turnoverRatio
+    }
+  }
+`;
+
+export const GET_ABC_ANALYSIS = gql`
+  query ABCAnalysis($startDate: Date!, $endDate: Date!, $metric: String) {
+    abcAnalysis(startDate: $startDate, endDate: $endDate, metric: $metric) {
+      itemId
+      name
+      value
+      cumulativePct
+      category
+    }
+  }
+`;
+
+export const GET_WASTE_REPORT = gql`
+  query WasteReport($startDate: Date!, $endDate: Date!) {
+    wasteReport(startDate: $startDate, endDate: $endDate) {
+      byReason { reason quantity cost }
+      byItem { itemId name quantity cost }
+      totalQuantity
+      totalCost
+    }
+  }
+`;
+
+export const GET_SUPPLIER_PERFORMANCE = gql`
+  query SupplierPerformance($startDate: Date!, $endDate: Date!) {
+    supplierPerformanceReport(startDate: $startDate, endDate: $endDate) {
+      supplierId
+      supplierName
+      totalOrders
+      totalSpent
+      averageOrderValue
+      onTimeDeliveryRate
+      qualityRating
+    }
+  }
+`;
+
+export const GET_TURNOVER_SERIES = gql`
+  query InventoryTurnoverSeries($period: String!, $startDate: Date!, $endDate: Date!) {
+    inventoryTurnoverSeries(period: $period, startDate: $startDate, endDate: $endDate) {
+      date
+      period
+      usageCost
+      avgInventoryValue
+      turnover
+    }
+  }
+`;
+
+export const GET_RECIPE_PROFIT = gql`
+  query RecipeProfitability {
+    recipeProfitabilityReport {
+      recipeId
+      name
+      foodCost
+      menuPrice
+      foodCostPct
+      grossMargin
+      isPopular
+    }
+  }
+`;
+
+export const GET_CROSS_PANEL_LINKS = gql`
+  query CrossPanelLinks($itemIds: [ID!]) {
+    crossPanelLinks(itemIds: $itemIds) {
+      itemId
+      itemName
+      vendorNames
+      recipeNames
     }
   }
 `;
@@ -615,3 +889,87 @@ export const useDeleteInvoice = () => useMutation(DELETE_INVOICE, {
 export const useAnalytics = (period: string) => useQuery(GET_ANALYTICS, { variables: { period } });
 export const useRevenueAnalytics = (startDate: string, endDate: string) => 
   useQuery(GET_REVENUE_ANALYTICS, { variables: { startDate, endDate } }); 
+
+// Menu hooks
+export const useIndexMenus = () => useMutation(INDEX_MENUS);
+export const useIndexedMenus = (restaurantGuid: string) => useQuery(GET_INDEXED_MENUS, { variables: { restaurantGuid }, skip: !restaurantGuid });
+export const useMenuMappings = (restaurantGuid: string, toastItemGuid?: string) => useQuery(GET_MENU_MAPPINGS, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid });
+export const useUpsertMenuMapping = () => useMutation(UPSERT_MENU_MAPPING);
+export const useMenuItemCost = (restaurantGuid: string, toastItemGuid: string) => useQuery(GET_MENU_ITEM_COST, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid || !toastItemGuid });
+export const useMenuItemCapacity = (restaurantGuid: string, toastItemGuid: string, quantity?: number) =>
+  useQuery(GET_MENU_ITEM_CAPACITY, { variables: { restaurantGuid, toastItemGuid, quantity }, skip: !restaurantGuid || !toastItemGuid });
+export const useMenuItemStock = (restaurantGuid: string, guids?: string[], multiLocationIds?: string[]) =>
+  useQuery(GET_MENU_ITEM_STOCK, { variables: { restaurantGuid, guids, multiLocationIds }, skip: !restaurantGuid || (!guids && !multiLocationIds) });
+export const useUpdateMenuItemStock = () => useMutation(UPDATE_MENU_ITEM_STOCK);
+export const useOrderTrackingStatus = (restaurantGuid: string) => useQuery(GET_ORDER_TRACKING, { variables: { restaurantGuid }, skip: !restaurantGuid });
+export const useSetOrderTracking = () => useMutation(SET_ORDER_TRACKING);
+export const useRunOrderTracking = () => useMutation(RUN_ORDER_TRACKING);
+
+export const useInventoryMovement = (period: string, startDate: string, endDate: string, itemId?: string) =>
+  useQuery(GET_INVENTORY_MOVEMENT, {
+    variables: { period, startDate, endDate, itemId },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useInventoryAnalyticsSummary = (startDate: string, endDate: string) =>
+  useQuery(GET_INVENTORY_ANALYTICS_SUMMARY, {
+    variables: { startDate, endDate },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useABCAnalysis = (startDate: string, endDate: string, metric?: string) =>
+  useQuery(GET_ABC_ANALYSIS, {
+    variables: { startDate, endDate, metric },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useWasteReport = (startDate: string, endDate: string) =>
+  useQuery(GET_WASTE_REPORT, {
+    variables: { startDate, endDate },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useSupplierPerformance = (startDate: string, endDate: string) =>
+  useQuery(GET_SUPPLIER_PERFORMANCE, {
+    variables: { startDate, endDate },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useTurnoverSeries = (period: string, startDate: string, endDate: string) =>
+  useQuery(GET_TURNOVER_SERIES, {
+    variables: { period, startDate, endDate },
+    fetchPolicy: 'network-only',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
+
+export const useRecipeProfitability = () => useQuery(GET_RECIPE_PROFIT, {
+  fetchPolicy: 'network-only',
+  nextFetchPolicy: 'cache-first',
+  notifyOnNetworkStatusChange: true,
+});
+
+export const useCrossPanelLinks = (itemIds?: string[]) => useQuery(GET_CROSS_PANEL_LINKS, {
+  variables: { itemIds },
+  fetchPolicy: 'network-only',
+  nextFetchPolicy: 'cache-first',
+  notifyOnNetworkStatusChange: true,
+});
+
+// Order hooks
+export const usePurchaseOrders = (vendorId?: string, status?: string) => useQuery(GET_PURCHASE_ORDERS, { variables: { vendorId, status } });
+export const useCreatePurchaseOrder = () => useMutation(CREATE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
+export const useUpdatePurchaseOrder = () => useMutation(UPDATE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
+export const useReceivePurchaseOrder = () => useMutation(RECEIVE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
+export const useResetPurchaseOrder = () => useMutation(RESET_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
+export const useDeletePurchaseOrder = () => useMutation(DELETE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });

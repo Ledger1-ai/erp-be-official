@@ -774,6 +774,58 @@ export class ToastAPIClient {
       };
     }
   }
+
+  // Stock/Inventory status for Menu Items (86ing)
+
+  /**
+   * Fetch inventory status for a list of menu item GUIDs or multi-location IDs
+   */
+  public async getMenuItemInventory(
+    restaurantGuid: string,
+    guids: string[] = [],
+    multiLocationIds: string[] = []
+  ): Promise<Array<{ guid?: string; multiLocationId?: string; status?: string; quantity?: number | null; versionId?: string }>> {
+    const headers = {
+      'Toast-Restaurant-External-ID': restaurantGuid,
+      'Content-Type': 'application/json',
+    } as Record<string, string>;
+    const body = JSON.stringify({
+      ...(Array.isArray(guids) && guids.length ? { guids } : {}),
+      ...(Array.isArray(multiLocationIds) && multiLocationIds.length ? { multiLocationIds } : {}),
+    });
+    const resp = await this.makeRequest<any>(
+      '/stock/v1/inventory/search',
+      'POST',
+      body,
+      undefined,
+      headers
+    );
+    const arr = Array.isArray(resp) ? resp : (resp?.data || []);
+    return arr as any[];
+  }
+
+  /**
+   * Update inventory status for menu items (e.g., set OUT_OF_STOCK)
+   */
+  public async updateMenuItemInventory(
+    restaurantGuid: string,
+    updates: Array<{ guid?: string; multiLocationId?: string; status: 'IN_STOCK' | 'OUT_OF_STOCK' | 'QUANTITY'; quantity?: number | null; versionId?: string }>
+  ): Promise<Array<{ guid?: string; multiLocationId?: string; status?: string; quantity?: number | null; versionId?: string }>> {
+    const headers = {
+      'Toast-Restaurant-External-ID': restaurantGuid,
+      'Content-Type': 'application/json',
+    } as Record<string, string>;
+    const body = JSON.stringify(updates || []);
+    const resp = await this.makeRequest<any>(
+      '/stock/v1/inventory/update',
+      'PUT',
+      body,
+      undefined,
+      headers
+    );
+    const arr = Array.isArray(resp) ? resp : (resp?.data || []);
+    return arr as any[];
+  }
 }
 
 export default ToastAPIClient;

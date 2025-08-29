@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -40,49 +42,72 @@ const sidebarItems = [
     title: "Dashboard",
     href: "/dashboard",
     icon: Home,
+    permission: "dashboard" as const,
   },
   {
-    title: "Scheduling",
+    title: "Scheduling", 
     href: "/dashboard/scheduling",
     icon: Calendar,
+    permission: "scheduling" as const,
+    disabled: true,
+    tag: "Coming soon",
   },
   {
     title: "Inventory",
-    href: "/dashboard/inventory",
+    href: "/dashboard/inventory", 
     icon: Package,
+    permission: "inventory" as const,
   },
   {
     title: "Invoicing",
     href: "/dashboard/invoicing",
     icon: FileText,
+    disabled: true,
+    tag: "Coming soon",
+  },
+  {
+    title: "Menu",
+    href: "/dashboard/menu",
+    icon: Menu,
+    permission: "menu" as const,
   },
   {
     title: "Team Management",
-    href: "/dashboard/team",
+    href: "/dashboard/team", 
     icon: Users,
+    permission: "team" as const,
   },
   {
     title: "Robotic Fleets",
     href: "/dashboard/robotic-fleets",
-    icon: Bot,
+    icon: Bot, 
+    permission: "robotic-fleets" as const,
   },
   {
     title: "Analytics",
     href: "/dashboard/analytics",
     icon: BarChart3,
+    permission: "analytics" as const,
   },
   {
     title: "Settings",
     href: "/dashboard/settings",
     icon: Settings,
+    permission: "settings" as const,
   },
 ];
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
+  const permissions = usePermissions();
   const [user, setUser] = useState<User | null>(null);
   const [isVaruniOpen, setIsVaruniOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
+  
+  // Filter sidebar items based on user permissions (but always show disabled items)
+  const visibleSidebarItems = sidebarItems.filter(item => 
+    item.disabled || (item.permission && permissions.hasPermission(item.permission))
+  );
 
   useEffect(() => {
     const userData = localStorage.getItem("user");
@@ -119,19 +144,25 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {/* Navigation */}
       <nav className="flex-1 px-4 py-4 space-y-2">
-        {sidebarItems.map((item) => {
+        {visibleSidebarItems.map((item) => {
           const isActive = pathname === item.href;
           return (
             <Button
               key={item.href}
               variant={isActive ? "secondary" : "ghost"}
-                          className={`w-full justify-start ${
+              className={`w-full justify-between ${
               isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
             }`}
-              onClick={() => router.push(item.href)}
+              onClick={() => !item.disabled && router.push(item.href)}
+              disabled={item.disabled}
             >
-              <item.icon className="mr-3 h-4 w-4" />
-              {item.title}
+              <span className="flex items-center">
+                <item.icon className="mr-3 h-4 w-4" />
+                {item.title}
+              </span>
+              {item.tag && (
+                <Badge variant="secondary" className="ml-2">{item.tag}</Badge>
+              )}
             </Button>
           );
         })}

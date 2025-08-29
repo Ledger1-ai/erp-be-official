@@ -191,7 +191,6 @@ const supplierSchema = new mongoose.Schema({
 // Indexes
 supplierSchema.index({ name: 1 });
 supplierSchema.index({ companyName: 1 });
-supplierSchema.index({ supplierCode: 1 });
 supplierSchema.index({ status: 1 });
 supplierSchema.index({ type: 1 });
 supplierSchema.index({ categories: 1 });

@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { ConditionalRender } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -94,7 +96,11 @@ const recentActivities = [
 ];
 
 export default function DashboardPage() {
+  const permissions = usePermissions();
   const [selectedMetric, setSelectedMetric] = useState("sales");
+  
+  // Permission checks for dashboard content
+  const canViewFinancialData = permissions.canViewFinancialData();
 
   // Fetch real data from GraphQL
   const { data: teamData, loading: teamLoading } = useTeamMembers();
@@ -194,7 +200,13 @@ export default function DashboardPage() {
 
         {/* Metrics Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {metrics.map((metric, index) => (
+          {metrics
+            .filter((metric, index) => {
+              // Hide revenue metric for users without financial permissions
+              const isFinancialMetric = index === 0; // First metric is revenue
+              return canViewFinancialData || !isFinancialMetric;
+            })
+            .map((metric, index) => (
             <Card key={index}>
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
@@ -241,12 +253,13 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Analytics Charts */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Sales Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Weekly Performance</CardTitle>
-                <CardDescription>Sales and order trends for the past week</CardDescription>
-              </CardHeader>
+            {/* Sales Chart - Financial permission required */}
+            {canViewFinancialData && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Weekly Performance</CardTitle>
+                  <CardDescription>Sales and order trends for the past week</CardDescription>
+                </CardHeader>
               <CardContent>
                 <Tabs value={selectedMetric} onValueChange={setSelectedMetric}>
                   <TabsList className="grid w-full grid-cols-2">
@@ -303,6 +316,7 @@ export default function DashboardPage() {
                 </Tabs>
               </CardContent>
             </Card>
+            )}
 
             {/* Current Staff Schedule */}
             <Card>

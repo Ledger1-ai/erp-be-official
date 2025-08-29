@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { PermissionDenied, PermissionTab } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -108,8 +110,32 @@ const aiInsights = [
 ];
 
 export default function AnalyticsPage() {
+  const permissions = usePermissions();
   const [selectedTimeframe, setSelectedTimeframe] = useState("12m");
   const [selectedTab, setSelectedTab] = useState("overview");
+  
+  // Check if user has any analytics permissions
+  const canViewBasicAnalytics = permissions.hasPermission('analytics');
+  const canViewDetailedAnalytics = permissions.hasPermission('analytics:detailed');
+  
+  // If no analytics permission at all, show permission denied
+  if (!canViewBasicAnalytics) {
+    return (
+      <DashboardLayout>
+        <div className="p-6">
+          <PermissionDenied 
+            variant="full"
+            title="Analytics Access Required"
+            message="You need analytics permissions to view reports and data insights."
+            actionButton={{
+              text: "Back to Dashboard",
+              onClick: () => window.location.href = "/dashboard"
+            }}
+          />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   const kpiMetrics = [
     {
@@ -212,7 +238,13 @@ export default function AnalyticsPage() {
 
         {/* KPI Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {kpiMetrics.map((metric, index) => (
+          {kpiMetrics
+            .filter((metric, index) => {
+              // Financial metrics (Revenue, Order Value) require detailed analytics permission
+              const isFinancialMetric = index <= 1; // First two metrics are financial
+              return canViewDetailedAnalytics || !isFinancialMetric;
+            })
+            .map((metric, index) => (
             <Card key={index}>
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
@@ -246,9 +278,9 @@ export default function AnalyticsPage() {
 
         {/* Main Analytics */}
         <Tabs value={selectedTab} onValueChange={setSelectedTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className={`grid w-full ${canViewDetailedAnalytics ? 'grid-cols-4' : 'grid-cols-3'}`}>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="revenue">Revenue</TabsTrigger>
+            {canViewDetailedAnalytics && <TabsTrigger value="revenue">Revenue</TabsTrigger>}
             <TabsTrigger value="operations">Operations</TabsTrigger>
             <TabsTrigger value="customers">Customers</TabsTrigger>
           </TabsList>
@@ -256,12 +288,13 @@ export default function AnalyticsPage() {
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Revenue Trend */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Revenue Trend</CardTitle>
-                  <CardDescription>Monthly revenue vs targets</CardDescription>
-                </CardHeader>
+              {/* Revenue Trend - Detailed analytics permission required */}
+              {canViewDetailedAnalytics && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Revenue Trend</CardTitle>
+                    <CardDescription>Monthly revenue vs targets</CardDescription>
+                  </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
                     <AreaChart data={revenueData.slice(-6)}>
@@ -284,6 +317,7 @@ export default function AnalyticsPage() {
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
+              )}
 
               {/* Daily Performance */}
               <Card>
@@ -373,8 +407,9 @@ export default function AnalyticsPage() {
             </div>
           </TabsContent>
 
-          {/* Revenue Tab */}
-          <TabsContent value="revenue" className="space-y-6">
+          {/* Revenue Tab - Detailed analytics permission required */}
+          {canViewDetailedAnalytics && (
+            <TabsContent value="revenue" className="space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle>Revenue Analysis</CardTitle>
@@ -402,7 +437,8 @@ export default function AnalyticsPage() {
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabsContent>
+          )}
 
           {/* Operations Tab */}
           <TabsContent value="operations" className="space-y-6">

@@ -127,7 +127,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if user needs to change password (first login or forced change)
-    const needsPasswordChange = user.needsPasswordChange();
+    const needsPasswordChange = Boolean((user as any).isFirstLogin || (user as any).mustChangePassword);
     if (needsPasswordChange) {
       // Generate a temporary token for password change
       const tempToken = generateAccessToken({
@@ -188,7 +188,9 @@ export async function POST(request: NextRequest) {
 
              // If backup code was used, remove it
        if (verification.isBackupCode && verification.usedBackupCode) {
-         user.useBackupCode(verification.usedBackupCode);
+         if (Array.isArray((user as any).backupCodes)) {
+           (user as any).backupCodes = (user as any).backupCodes.filter((c: string) => c !== verification.usedBackupCode);
+         }
        }
     }
 

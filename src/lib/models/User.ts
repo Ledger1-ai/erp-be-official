@@ -47,7 +47,24 @@ const userSchema = new mongoose.Schema({
   },
   permissions: [{
     type: String,
-    enum: ['dashboard', 'scheduling', 'inventory', 'invoicing', 'team', 'analytics', 'settings', 'admin']
+    enum: [
+      'dashboard', 
+      'scheduling', 
+      'inventory', 
+      'inventory:financial',
+      'team', 
+      'team:performance',
+      'team:management',
+      'analytics', 
+      'analytics:detailed',
+      'settings', 
+      'settings:users',
+      'settings:system',
+      'roster', 
+      'menu',
+      'robotic-fleets',
+      'admin'
+    ]
   }],
   // Security fields
   loginAttempts: {
@@ -161,10 +178,47 @@ userSchema.methods.resetLoginAttempts = function() {
 // Method to get user permissions based on role
 userSchema.methods.getPermissions = function(): string[] {
   const rolePermissions: { [key: string]: string[] } = {
-    'Super Admin': ['dashboard', 'scheduling', 'inventory', 'invoicing', 'team', 'analytics', 'settings', 'admin'],
-    'Manager': ['dashboard', 'scheduling', 'inventory', 'invoicing', 'team', 'analytics', 'settings'],
-    'Shift Supervisor': ['dashboard', 'scheduling', 'team'],
-    'Staff': ['dashboard']
+    'Super Admin': [
+      'dashboard', 
+      'scheduling', 
+      'inventory', 
+      'inventory:financial',
+      'team', 
+      'team:performance',
+      'team:management',
+      'analytics', 
+      'analytics:detailed',
+      'settings', 
+      'settings:users',
+      'settings:system',
+      'roster', 
+      'menu',
+      'robotic-fleets',
+      'admin'
+    ],
+    'Manager': [
+      'dashboard',
+      'scheduling',
+      'inventory',
+      'inventory:financial',
+      'team',
+      'team:performance',
+      'analytics',
+      'analytics:detailed',
+      'roster',
+      'menu',
+      'robotic-fleets'
+    ],
+    'Shift Supervisor': [
+      'dashboard',
+      'scheduling',
+      'inventory', // Basic inventory view for shift needs
+      'team', // Basic team info but no detailed performance
+      'roster'
+    ],
+    'Staff': [
+      'dashboard' // Very limited access
+    ]
   };
 
   const defaultPermissions = rolePermissions[this.role] || ['dashboard'];

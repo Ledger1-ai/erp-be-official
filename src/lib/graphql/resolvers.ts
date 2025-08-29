@@ -4,7 +4,10 @@ import { Shift } from '../models/Shift';
 import { InventoryItem } from '../models/InventoryItem';
 import { Invoice } from '../models/Invoice';
 import { Supplier } from '../models/Supplier';
+import { PurchaseOrder } from '../models/PurchaseOrder';
 import { Analytics } from '../models/Analytics';
+import { InventoryTransaction } from '../models/InventoryTransaction';
+import { Recipe } from '../models/Recipe';
 import ToastEmployee from '../models/ToastEmployee';
 import { 
   withAuth, 
@@ -14,6 +17,93 @@ import {
   AuthContext 
 } from './auth-guards';
 import mongoose from 'mongoose';
+import { MenuIndex } from '../models/MenuIndex';
+import { MenuMapping } from '../models/MenuMapping';
+import { OrderTrackingConfig } from '../models/OrderTrackingConfig';
+import ToastAPIClient from '../services/toast-api-client';
+
+async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, visited = new Set<string>()): Promise<number> {
+  if (visited.has(toastItemGuid)) return 0;
+  visited.add(toastItemGuid);
+  const mapping: any = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean();
+  if (!mapping) return 0;
+  let total = 0;
+  for (const c of (mapping.components || [])) {
+    if (c.kind === 'inventory' && c.inventoryItem) {
+      const inv: any = await InventoryItem.findById(c.inventoryItem).lean();
+      const unitCost = Number(inv?.costPerUnit || 0);
+      total += unitCost * Number(c.quantity || 0);
+    } else if (c.kind === 'menu' && c.nestedToastItemGuid) {
+      // If overrides exist, compute cost from overrides instead of underlying mapping
+      if (Array.isArray(c.overrides) && c.overrides.length > 0) {
+        for (const oc of c.overrides) {
+          if (oc.kind === 'inventory' && oc.inventoryItem) {
+            const inv: any = await InventoryItem.findById(oc.inventoryItem).lean();
+            const unitCost = Number(inv?.costPerUnit || 0);
+            total += unitCost * Number(oc.quantity || 0) * Number(c.quantity || 1);
+          } else if (oc.kind === 'menu' && oc.nestedToastItemGuid) {
+            const nestedCost = await computeMappedCost(restaurantGuid, oc.nestedToastItemGuid, visited);
+            total += nestedCost * Number(oc.quantity || 1) * Number(c.quantity || 1);
+          }
+        }
+      } else {
+        total += await computeMappedCost(restaurantGuid, c.nestedToastItemGuid, visited) * Number(c.quantity || 1);
+      }
+    }
+  }
+  return total;
+}
+
+async function explodeToInventory(
+  restaurantGuid: string,
+  toastItemGuid: string,
+  baseQty: number,
+  acc: Map<string, Map<string, number>>,
+  visited: Set<string>
+) {
+  if (visited.has(toastItemGuid)) return;
+  visited.add(toastItemGuid);
+  const mapping: any = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean();
+  if (!mapping) return;
+  for (const c of (mapping.components || [])) {
+    if (c.kind === 'inventory' && c.inventoryItem) {
+      const unit = String(c.unit || 'units');
+      const q = Number(c.quantity || 0) * baseQty;
+      if (!acc.has(String(c.inventoryItem))) acc.set(String(c.inventoryItem), new Map());
+      const byUnit = acc.get(String(c.inventoryItem))!;
+      byUnit.set(unit, (byUnit.get(unit) || 0) + q);
+    } else if (c.kind === 'menu' && c.nestedToastItemGuid) {
+      if (Array.isArray(c.overrides) && c.overrides.length > 0) {
+        // explode overrides directly
+        for (const oc of c.overrides) {
+          if (oc.kind === 'inventory' && oc.inventoryItem) {
+            const unit = String(oc.unit || 'units');
+            const q = Number(oc.quantity || 0) * baseQty * Number(c.quantity || 1);
+            if (!acc.has(String(oc.inventoryItem))) acc.set(String(oc.inventoryItem), new Map());
+            const byUnit = acc.get(String(oc.inventoryItem))!;
+            byUnit.set(unit, (byUnit.get(unit) || 0) + q);
+          } else if (oc.kind === 'menu' && oc.nestedToastItemGuid) {
+            await explodeToInventory(restaurantGuid, oc.nestedToastItemGuid, baseQty * Number(c.quantity || 1) * Number(oc.quantity || 1), acc, visited);
+          }
+        }
+      } else {
+        await explodeToInventory(restaurantGuid, c.nestedToastItemGuid, baseQty * Number(c.quantity || 0), acc, visited);
+      }
+    }
+  }
+}
+
+// Date helpers to ensure inclusive end-of-day filtering when UI passes YYYY-MM-DD
+function toStartOfDay(input: string | Date): Date {
+  const d = new Date(input as any);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function toEndOfDay(input: string | Date): Date {
+  const d = new Date(input as any);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
 
 // TypeScript types for resolver parameters
 interface ResolverArgs {
@@ -30,6 +120,55 @@ interface TeamMemberWithPerformance {
     rating?: number;
   };
   [key: string]: any;
+}
+
+// Helper to reverse receiving transactions for a PO and decrement item stocks
+async function reverseReceivingForOrder(orderId: string, createdByHint?: string) {
+  try {
+    const rx = await InventoryTransaction.find({ referenceType: 'PurchaseOrder', referenceId: orderId, transactionType: 'receiving', isReversed: { $ne: true } }).lean();
+    if (!rx.length) return;
+    let createdBy = createdByHint;
+    if (!createdBy) {
+      let sys: any = await User.findOne({ email: 'system@varuni.local' }).lean();
+      if (!sys) sys = await User.create({ name: 'System', email: 'system@varuni.local', password: 'ChangeMe123!@#', role: 'Super Admin', permissions: ['admin','inventory'] });
+      createdBy = String(sys._id);
+    }
+    for (const t of rx) {
+      const item: any = await InventoryItem.findById(t.inventoryItem);
+      if (item) {
+        const before = Number(item.currentStock || 0);
+        const after = Math.max(0, before - Math.abs(Number(t.quantity || 0)));
+        item.currentStock = after;
+        // Update status
+        if (after <= 0) item.status = 'out_of_stock';
+        else if (after <= item.minThreshold) item.status = 'critical';
+        else if (after <= item.minThreshold * 1.5) item.status = 'low';
+        else item.status = 'normal';
+        await item.save();
+      }
+      // Mark original as reversed and write an adjustment reversal record
+      await InventoryTransaction.updateOne({ _id: t._id }, { $set: { isReversed: true, reversedDate: new Date(), reversalReason: 'PO status reverted' } });
+      await InventoryTransaction.create({
+        inventoryItem: t.inventoryItem,
+        itemName: (t as any).itemName,
+        transactionType: 'adjustment',
+        quantity: -Math.abs(Number(t.quantity || 0)),
+        unit: (t as any).unit,
+        unitCost: Number((t as any).unitCost || 0),
+        totalCost: Math.abs(Number(t.quantity || 0)) * Number((t as any).unitCost || 0),
+        balanceBefore: 0,
+        balanceAfter: 0,
+        location: (t as any).location,
+        referenceType: 'PurchaseOrder',
+        referenceId: (t as any).referenceId,
+        referenceNumber: (t as any).referenceNumber,
+        supplier: (t as any).supplier,
+        createdBy,
+      });
+    }
+  } catch (e) {
+    console.warn('reverseReceivingForOrder failed', e);
+  }
 }
 
 export const resolvers = {
@@ -328,6 +467,614 @@ export const resolvers = {
       }
     },
 
+    // Inventory analytics & reports
+    inventoryMovement: async (
+      _: unknown,
+      { period, startDate, endDate, itemId }: { period: string; startDate: string; endDate: string; itemId?: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return [];
+        const query: any = {
+          createdAt: {
+            $gte: toStartOfDay(startDate),
+            $lte: toEndOfDay(endDate),
+          },
+        };
+        if (itemId) query.inventoryItem = itemId;
+
+        let txs = await InventoryTransaction.find(query)
+          .populate('inventoryItem', 'name category unit')
+          .sort({ createdAt: 1 })
+          .lean();
+
+        // Include synthetic receiving for partial POs that haven't generated tx yet (delta-aware)
+        try {
+          const poWindowFilter: any = {};
+          if (startDate && endDate) {
+            poWindowFilter.$or = [
+              { updatedAt: { $gte: toStartOfDay(startDate), $lte: toEndOfDay(endDate) } },
+              { receivedDate: { $gte: toStartOfDay(startDate), $lte: toEndOfDay(endDate) } },
+              { orderDate: { $gte: toStartOfDay(startDate), $lte: toEndOfDay(endDate) } },
+              { expectedDeliveryDate: { $gte: toStartOfDay(startDate), $lte: toEndOfDay(endDate) } },
+            ];
+          }
+          const pos: any[] = await PurchaseOrder.find(poWindowFilter).lean();
+          // Build received sum map for existing tx within the window
+          const key = (oId: any, iId: any) => `${String(oId)}::${String(iId)}`;
+          const receivedMap = new Map<string, number>();
+          for (const t of txs) {
+            if (t.transactionType === 'receiving' && t.referenceType === 'PurchaseOrder' && t.referenceId && t.inventoryItem) {
+              const invId = (t as any).inventoryItem?._id || (t as any).inventoryItem;
+              const k = key((t as any).referenceId, invId);
+              receivedMap.set(k, (receivedMap.get(k) || 0) + Math.abs(Number(t.quantity || 0)));
+            }
+          }
+          // Prepare shortfall map by period key
+          const shortfallByKey = new Map<string, number>();
+          const periodKey = (d: Date) => {
+            const date = new Date(d);
+            switch (String(period)) {
+              case 'daily': return date.toISOString().split('T')[0];
+              case 'weekly': {
+                const ws = new Date(date);
+                const dow = ws.getDay();
+                const diff = (dow + 6) % 7; // Monday start
+                ws.setDate(ws.getDate() - diff);
+                return ws.toISOString().split('T')[0];
+              }
+              case 'monthly': return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}`;
+              case 'quarterly': { const q = Math.floor(date.getMonth()/3)+1; return `${date.getFullYear()}-Q${q}`; }
+              case 'yearly': return String(date.getFullYear());
+              default: return date.toISOString().split('T')[0];
+            }
+          };
+          const synthetic: any[] = [];
+          for (const o of pos) {
+            const items = Array.isArray(o.items) ? o.items : [];
+            for (const it of items) {
+              const qtyRec = Number(it.quantityReceived || 0);
+              if (!it.inventoryItem || qtyRec <= 0) continue;
+              const k = key(o._id, it.inventoryItem);
+              const already = receivedMap.get(k) || 0;
+              const delta = qtyRec - already;
+              if (delta > 0) {
+                synthetic.push({
+                  inventoryItem: it.inventoryItem,
+                  itemName: it.name,
+                  transactionType: 'receiving',
+                  quantity: delta,
+                  unit: it.unit,
+                  unitCost: Number(it.unitCost || 0),
+                  totalCost: delta * Number(it.unitCost || 0),
+                  balanceBefore: 0,
+                  balanceAfter: 0,
+                  createdAt: o.updatedAt || o.receivedDate || o.orderDate || o.expectedDeliveryDate || new Date(),
+                  referenceType: 'PurchaseOrder',
+                  referenceId: o._id,
+                });
+              }
+              // Compute shortfall (outstanding/missed) for visualization
+              const ordered = Number(it.quantityOrdered || 0);
+              const credited = Number(it.creditedQuantity || 0);
+              const short = Math.max(0, ordered - (qtyRec + credited));
+              if (short > 0) {
+                const baseDate = o.expectedDeliveryDate || o.orderDate || o.updatedAt || o.receivedDate || new Date();
+                const k2 = periodKey(baseDate);
+                shortfallByKey.set(k2, (shortfallByKey.get(k2) || 0) + short);
+              }
+            }
+          }
+          if (synthetic.length) {
+            txs = [...txs, ...synthetic];
+          }
+          // Attach shortfall to each tx group by dateKey via a hidden property on the function scope
+          (global as any).__inv_shortfall = shortfallByKey;
+        } catch (e) {
+          console.warn('inventoryMovement synthetic receiving supplement skipped', e);
+        }
+
+        const groups: Record<string, any[]> = {};
+        for (const t of txs) {
+          const d = new Date(t.createdAt as any);
+          let key = '';
+          switch (String(period)) {
+            case 'daily':
+              // Local date key to avoid UTC boundary shifts
+              key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+              break;
+            case 'weekly': {
+              const ws = new Date(d);
+              const dow = ws.getDay();
+              const diff = (dow + 6) % 7; // Monday start
+              ws.setDate(ws.getDate() - diff);
+              key = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2,'0')}-${String(ws.getDate()).padStart(2,'0')}`;
+              break;
+            }
+            case 'monthly':
+              key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              break;
+            case 'quarterly': {
+              const q = Math.floor(d.getMonth() / 3) + 1;
+              key = `${d.getFullYear()}-Q${q}`;
+              break;
+            }
+            case 'yearly':
+              key = String(d.getFullYear());
+              break;
+            default:
+              key = d.toISOString().split('T')[0];
+          }
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(t);
+        }
+
+        const shortfallMap: Map<string, number> | undefined = (global as any).__inv_shortfall;
+        const mappedPoints = await Promise.all(Object.entries(groups).map(async ([dateKey, transactions]) => {
+          let sampleDate: Date;
+          if (String(dateKey).includes('Q')) {
+            const [yearStr, qStr] = String(dateKey).split('-');
+            const year = Number(yearStr);
+            const q = Number((qStr || 'Q1').replace('Q', '')) || 1;
+            sampleDate = new Date(year, (q - 1) * 3, 1);
+          } else if (String(dateKey).length === 4) {
+            sampleDate = new Date(Number(dateKey), 0, 1);
+          } else if (String(dateKey).length === 7) {
+            const [y, m] = String(dateKey).split('-');
+            sampleDate = new Date(Number(y), Number(m) - 1, 1);
+          } else {
+            const [y, m, d] = String(dateKey).split('-');
+            sampleDate = new Date(Number(y), Number(m) - 1, Number(d));
+          }
+          const received = (transactions as any[])
+            .filter((t: any) => ['purchase', 'receiving', 'transfer_in', 'production', 'return'].includes(t.transactionType))
+            .reduce((s: number, t: any) => s + Math.abs(Number(t.quantity || 0)), 0);
+          const usage = (transactions as any[])
+            .filter((t: any) => ['sale', 'consumption', 'waste', 'transfer_out', 'expiry', 'theft'].includes(t.transactionType))
+            .reduce((s: number, t: any) => s + Math.abs(Number(t.quantity || 0)), 0);
+          const adjustments = (transactions as any[])
+            .filter((t: any) => ['adjustment', 'count_adjustment'].includes(t.transactionType))
+            .reduce((s: number, t: any) => s + Number(t.quantity || 0), 0);
+          const totalValue = (transactions as any[]).reduce((s: number, t: any) => s + Math.abs(Number(t.totalCost || 0)), 0);
+          const itemsCount = await InventoryItem.countDocuments({ createdAt: { $lte: sampleDate } });
+
+          let displayDate = '';
+          switch (String(period)) {
+            case 'daily':
+              displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              break;
+            case 'weekly': {
+              const weekEnd = new Date(sampleDate);
+              weekEnd.setDate(sampleDate.getDate() + 6);
+              displayDate = `${sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+              break;
+            }
+            case 'monthly':
+              displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+              break;
+            case 'quarterly': {
+              const q = Math.floor(sampleDate.getMonth() / 3) + 1;
+              displayDate = `Q${q} ${sampleDate.getFullYear()}`;
+              break;
+            }
+            case 'yearly':
+              displayDate = String(sampleDate.getFullYear());
+              break;
+            default:
+              displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          }
+
+          return {
+            date: displayDate,
+            dateKey,
+            received,
+            usage,
+            adjustments,
+            totalValue,
+            netMovement: received - usage + adjustments,
+            transactionCount: (transactions as any[]).length,
+            itemsCount,
+            shortfall: shortfallMap ? (shortfallMap.get(dateKey) || 0) : 0,
+          };
+        }));
+        const points = (mappedPoints as any[]).sort((a: any, b: any) => String(a.dateKey).localeCompare(String(b.dateKey)));
+        return points;
+      } catch (e) {
+        console.error('inventoryMovement error', e);
+        return [];
+      }
+    },
+
+    inventoryAnalyticsSummary: async (
+      _: unknown,
+      { startDate, endDate }: { startDate: string; endDate: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) {
+          return {
+            totalInventoryValue: 0,
+            totalItems: 0,
+            lowStockItems: 0,
+            criticalItems: 0,
+            wasteCostInPeriod: 0,
+            wasteQtyInPeriod: 0,
+            turnoverRatio: 0,
+          };
+        }
+        const items = await InventoryItem.find({}).lean();
+        const totalInventoryValue = items.reduce((s: number, it: any) => s + Number(it.currentStock || 0) * Number(it.costPerUnit || 0), 0);
+        const totalItems = items.length;
+        const lowStockItems = items.filter((it: any) => Number(it.currentStock || 0) <= Number(it.minThreshold || 0)).length;
+        const criticalItems = items.filter((it: any) => ['critical', 'out_of_stock'].includes(String(it.status))).length;
+
+        const start = toStartOfDay(startDate); const end = toEndOfDay(endDate);
+        const wasteTx = await InventoryTransaction.find({
+          createdAt: { $gte: start, $lte: end },
+          transactionType: { $in: ['waste', 'expiry', 'theft'] },
+        }).lean();
+        // Compute waste from transactions using unitCost if present
+        let wasteCostInPeriod = 0;
+        let wasteQtyInPeriod = 0;
+        for (const t of wasteTx) {
+          const qty = Math.abs(Number((t as any).quantity || 0));
+          const unitCost = Number((t as any).unitCost || 0);
+          const totalCost = Number((t as any).totalCost || 0);
+          wasteQtyInPeriod += qty;
+          wasteCostInPeriod += totalCost > 0 ? Math.abs(totalCost) : qty * unitCost;
+        }
+        // Fallback: include InventoryItem.wasteLogs within range, priced at item costPerUnit
+        for (const it of items) {
+          const cpu = Number((it as any).costPerUnit || 0);
+          const logs = Array.isArray((it as any).wasteLogs) ? (it as any).wasteLogs : [];
+          for (const log of logs) {
+            const d = new Date(log.date || it.updatedAt || start);
+            if (d >= start && d <= end) {
+              const q = Math.abs(Number(log.quantity || 0));
+              wasteQtyInPeriod += q;
+              wasteCostInPeriod += q * cpu;
+            }
+          }
+        }
+
+        const usageTx = await InventoryTransaction.find({
+          createdAt: { $gte: start, $lte: end },
+          transactionType: { $in: ['sale', 'consumption', 'waste', 'transfer_out', 'expiry', 'theft'] },
+        }).lean();
+        const usageCost = usageTx.reduce((s: number, t: any) => s + Math.abs(Number(t.totalCost || 0)), 0);
+        const avgInventoryValue = totalInventoryValue || 1; // approximation with current value
+        const turnoverRatio = avgInventoryValue > 0 ? usageCost / avgInventoryValue : 0;
+
+        return {
+          totalInventoryValue,
+          totalItems,
+          lowStockItems,
+          criticalItems,
+          wasteCostInPeriod,
+          wasteQtyInPeriod,
+          turnoverRatio,
+        };
+      } catch (e) {
+        console.error('inventoryAnalyticsSummary error', e);
+        return {
+          totalInventoryValue: 0,
+          totalItems: 0,
+          lowStockItems: 0,
+          criticalItems: 0,
+          wasteCostInPeriod: 0,
+          wasteQtyInPeriod: 0,
+          turnoverRatio: 0,
+        };
+      }
+    },
+
+    abcAnalysis: async (
+      _: unknown,
+      { startDate, endDate, metric }: { startDate: string; endDate: string; metric?: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return [];
+        const start = toStartOfDay(startDate); const end = toEndOfDay(endDate);
+        const metricKey = (metric || 'consumptionValue').toLowerCase();
+        const txs = await InventoryTransaction.find({ createdAt: { $gte: start, $lte: end } }).lean();
+
+        const valueByItem = new Map<string, { name: string; value: number }>();
+        for (const t of txs) {
+          let include = false;
+          if (metricKey === 'spendvalue') include = ['purchase', 'receiving', 'transfer_in', 'production', 'return'].includes((t as any).transactionType);
+          else include = ['sale', 'consumption', 'waste', 'transfer_out', 'expiry', 'theft'].includes((t as any).transactionType);
+          if (!include) continue;
+          const key = String((t as any).inventoryItem);
+          const name = (t as any).itemName || '';
+          const add = Math.abs(Number((t as any).totalCost || 0));
+          const cur = valueByItem.get(key) || { name, value: 0 };
+          cur.value += add;
+          valueByItem.set(key, cur);
+        }
+
+        const total = Array.from(valueByItem.values()).reduce((s, v) => s + v.value, 0) || 1;
+        const rows = Array.from(valueByItem.entries())
+          .sort((a, b) => b[1].value - a[1].value)
+          .map(([itemId, obj], idx, arr) => {
+            const cumulative = arr.slice(0, idx + 1).reduce((s, x) => s + x[1].value, 0) / total;
+            const category = cumulative <= 0.8 ? 'A' : cumulative <= 0.95 ? 'B' : 'C';
+            return { itemId, name: obj.name || itemId, value: obj.value, cumulativePct: cumulative, category };
+          });
+        return rows;
+      } catch (e) {
+        console.error('abcAnalysis error', e);
+        return [];
+      }
+    },
+
+    wasteReport: async (
+      _: unknown,
+      { startDate, endDate }: { startDate: string; endDate: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) {
+          return { byReason: [], byItem: [], totalQuantity: 0, totalCost: 0 };
+        }
+        const start = toStartOfDay(startDate); const end = toEndOfDay(endDate);
+        const txs = await InventoryTransaction.find({
+          createdAt: { $gte: start, $lte: end },
+          transactionType: { $in: ['waste', 'expiry', 'theft'] },
+        }).populate('inventoryItem', 'name costPerUnit').lean();
+
+        const reasonMap = new Map<string, { quantity: number; cost: number }>();
+        const itemMap = new Map<string, { name: string; quantity: number; cost: number }>();
+        let totalQuantity = 0, totalCost = 0;
+        for (const t of txs) {
+          const reason = String((t as any).reason || (t as any).transactionType || 'unknown');
+          const q = Math.abs(Number((t as any).quantity || 0));
+          const unitCost = Number((t as any).unitCost || (t as any).inventoryItem?.costPerUnit || 0);
+          const totalCostTx = Number((t as any).totalCost || 0);
+          const c = Math.abs(totalCostTx > 0 ? totalCostTx : q * unitCost);
+          totalQuantity += q; totalCost += c;
+          const rc = reasonMap.get(reason) || { quantity: 0, cost: 0 };
+          rc.quantity += q; rc.cost += c; reasonMap.set(reason, rc);
+          const itemId = String((t as any).inventoryItem);
+          const name = (t as any).itemName || ((t as any).inventoryItem?.name) || itemId;
+          const ic = itemMap.get(itemId) || { name, quantity: 0, cost: 0 };
+          ic.quantity += q; ic.cost += c; itemMap.set(itemId, ic);
+        }
+        // Include InventoryItem.wasteLogs within range as additional source
+        const items = await InventoryItem.find({}).select('name costPerUnit wasteLogs').lean();
+        for (const it of items) {
+          const cpu = Number((it as any).costPerUnit || 0);
+          const logs = Array.isArray((it as any).wasteLogs) ? (it as any).wasteLogs : [];
+          for (const log of logs) {
+            const d = new Date(log.date || it.updatedAt || start);
+            if (d >= start && d <= end) {
+              const q = Math.abs(Number(log.quantity || 0));
+              const reason = String(log.reason || 'waste');
+              const c = q * cpu;
+              totalQuantity += q; totalCost += c;
+              const rc = reasonMap.get(reason) || { quantity: 0, cost: 0 };
+              rc.quantity += q; rc.cost += c; reasonMap.set(reason, rc);
+              const id = String((it as any)._id);
+              const name = (it as any).name || id;
+              const ic = itemMap.get(id) || { name, quantity: 0, cost: 0 };
+              ic.quantity += q; ic.cost += c; itemMap.set(id, ic);
+            }
+          }
+        }
+        return {
+          byReason: Array.from(reasonMap.entries()).map(([reason, v]) => ({ reason, quantity: v.quantity, cost: v.cost })),
+          byItem: Array.from(itemMap.entries()).map(([itemId, v]) => ({ itemId, name: v.name, quantity: v.quantity, cost: v.cost })),
+          totalQuantity,
+          totalCost,
+        };
+      } catch (e) {
+        console.error('wasteReport error', e);
+        return { byReason: [], byItem: [], totalQuantity: 0, totalCost: 0 };
+      }
+    },
+
+    supplierPerformanceReport: async (
+      _: unknown,
+      { startDate, endDate }: { startDate: string; endDate: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return [];
+        const start = toStartOfDay(startDate); const end = toEndOfDay(endDate);
+        const orders = await PurchaseOrder.find({ createdAt: { $gte: start, $lte: end } }).populate('supplier').lean();
+
+        const map = new Map<string, { supplierId: string; supplierName: string; totalOrders: number; totalSpent: number; onTimeCount: number; deliveredCount: number; qualityRating: number }>();
+        for (const o of orders) {
+          const sid = String((o as any).supplier?._id || o.supplier || o.supplierName);
+          const sname = (o as any).supplier?.name || o.supplierName || 'Unknown Supplier';
+          const row = map.get(sid) || { supplierId: sid, supplierName: sname, totalOrders: 0, totalSpent: 0, onTimeCount: 0, deliveredCount: 0, qualityRating: 0 };
+          row.totalOrders += 1;
+          row.totalSpent += Number((o as any).total || 0);
+          if ((o as any).actualDeliveryDate) {
+            row.deliveredCount += 1;
+            if ((o as any).expectedDeliveryDate && (o as any).actualDeliveryDate <= (o as any).expectedDeliveryDate) row.onTimeCount += 1;
+          }
+          const q = Number(((o as any).supplier?.performanceMetrics?.qualityRating) || 0);
+          row.qualityRating = Math.max(row.qualityRating, q);
+          map.set(sid, row);
+        }
+        const rows = Array.from(map.values()).map(r => ({
+          supplierId: r.supplierId,
+          supplierName: r.supplierName,
+          totalOrders: r.totalOrders,
+          totalSpent: r.totalSpent,
+          averageOrderValue: r.totalOrders > 0 ? r.totalSpent / r.totalOrders : 0,
+          onTimeDeliveryRate: r.deliveredCount > 0 ? (r.onTimeCount / r.deliveredCount) * 100 : 0,
+          qualityRating: r.qualityRating,
+        }));
+        return rows;
+      } catch (e) {
+        console.error('supplierPerformanceReport error', e);
+        return [];
+      }
+    },
+
+    inventoryTurnoverSeries: async (
+      _: unknown,
+      { period, startDate, endDate }: { period: string; startDate: string; endDate: string },
+      context: AuthContext
+    ) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return [];
+        const start = toStartOfDay(startDate); const end = toEndOfDay(endDate);
+        const txs = await InventoryTransaction.find({
+          createdAt: { $gte: start, $lte: end },
+          transactionType: { $in: ['sale', 'consumption', 'waste', 'transfer_out', 'expiry', 'theft'] },
+        }).lean();
+
+        const items = await InventoryItem.find({}).lean();
+        const currentInventoryValue = items.reduce((s: number, it: any) => s + Number(it.currentStock || 0) * Number(it.costPerUnit || 0), 0) || 1;
+
+        const groups: Record<string, any[]> = {};
+        for (const t of txs) {
+          const d = new Date((t as any).createdAt);
+          let key = '';
+          switch (String(period)) {
+            case 'daily': key = d.toISOString().split('T')[0]; break;
+            case 'weekly': { const ws = new Date(d); ws.setDate(d.getDate() - d.getDay()); key = ws.toISOString().split('T')[0]; break; }
+            case 'monthly': key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; break;
+            case 'quarterly': { const q = Math.floor(d.getMonth() / 3) + 1; key = `${d.getFullYear()}-Q${q}`; break; }
+            case 'yearly': key = String(d.getFullYear()); break;
+            default: key = d.toISOString().split('T')[0];
+          }
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(t);
+        }
+
+        return Object.entries(groups).map(([dateKey, arr]) => {
+          const usageCost = (arr as any[]).reduce((s, t: any) => s + Math.abs(Number(t.totalCost || 0)), 0);
+          const sampleDate = new Date(dateKey.includes('Q') || dateKey.length === 4 ? `${(dateKey as string).split('-')[0]}-01-01` : (dateKey as string));
+          let displayDate = '';
+          switch (String(period)) {
+            case 'daily': displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); break;
+            case 'weekly': { const we = new Date(sampleDate); we.setDate(sampleDate.getDate() + 6); displayDate = `${sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${we.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`; break; }
+            case 'monthly': displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); break;
+            case 'quarterly': { const q = Math.floor(sampleDate.getMonth() / 3) + 1; displayDate = `Q${q} ${sampleDate.getFullYear()}`; break; }
+            case 'yearly': displayDate = String(sampleDate.getFullYear()); break;
+            default: displayDate = sampleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          }
+          return { date: displayDate, period: String(period), usageCost, avgInventoryValue: currentInventoryValue, turnover: currentInventoryValue > 0 ? usageCost / currentInventoryValue : 0 };
+        }).sort((a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime());
+      } catch (e) {
+        console.error('inventoryTurnoverSeries error', e);
+        return [];
+      }
+    },
+
+    recipeProfitabilityReport: async () => {
+      try {
+        const recipes = await Recipe.find({}).lean();
+        return (recipes || []).map((r: any) => ({
+          recipeId: String(r._id),
+          name: r.name,
+          foodCost: Number(r.foodCost || 0),
+          menuPrice: Number(r.menuPrice || 0),
+          foodCostPct: Number(r.actualFoodCostPercentage || 0),
+          grossMargin: Number(r.grossMargin || 0),
+          isPopular: Boolean(r.isPopular),
+        }));
+      } catch (e) {
+        console.error('recipeProfitabilityReport error', e);
+        return [];
+      }
+    },
+
+    crossPanelLinks: async (_: unknown, { itemIds }: { itemIds?: string[] }) => {
+      try {
+        const itemQuery = itemIds && itemIds.length ? { _id: { $in: itemIds } } : {};
+        const items = await InventoryItem.find(itemQuery).lean();
+        const itemIdSet = new Set(items.map((i: any) => String(i._id)));
+
+        const orders = await PurchaseOrder.find({ 'items.inventoryItem': { $exists: true } }).populate('supplier').lean();
+        const recipes = await Recipe.find({ 'ingredients.inventoryItem': { $exists: true } }).lean();
+
+        const vendorNamesByItem = new Map<string, Set<string>>();
+        for (const o of orders) {
+          const sname = (o as any).supplier?.name || (o as any).supplierName || 'Unknown Supplier';
+          for (const it of ((o as any).items || [])) {
+            const iid = String((it as any).inventoryItem || '');
+            if (!iid || (itemIdSet.size && !itemIdSet.has(iid))) continue;
+            if (!vendorNamesByItem.has(iid)) vendorNamesByItem.set(iid, new Set());
+            vendorNamesByItem.get(iid)!.add(sname);
+          }
+        }
+
+        const recipeNamesByItem = new Map<string, Set<string>>();
+        for (const r of recipes) {
+          for (const ing of ((r as any).ingredients || [])) {
+            const iid = String((ing as any).inventoryItem || '');
+            if (!iid || (itemIdSet.size && !itemIdSet.has(iid))) continue;
+            if (!recipeNamesByItem.has(iid)) recipeNamesByItem.set(iid, new Set());
+            recipeNamesByItem.get(iid)!.add((r as any).name || 'Recipe');
+          }
+        }
+
+        return items.map((it: any) => ({
+          itemId: String(it._id),
+          itemName: it.name,
+          vendorNames: Array.from(vendorNamesByItem.get(String(it._id)) || new Set()),
+          recipeNames: Array.from(recipeNamesByItem.get(String(it._id)) || new Set()),
+        }));
+      } catch (e) {
+        console.error('crossPanelLinks error', e);
+        return [];
+      }
+    },
+
+    // Menus
+    indexedMenus: async (_: unknown, { restaurantGuid }: { restaurantGuid: string }) => {
+      return MenuIndex.findOne({ restaurantGuid }).lean();
+    },
+    menuMappings: async (_: unknown, { restaurantGuid, toastItemGuid }: { restaurantGuid: string; toastItemGuid?: string }) => {
+      const q: any = { restaurantGuid };
+      if (toastItemGuid) q.toastItemGuid = toastItemGuid;
+      const docs = await MenuMapping.find(q).lean();
+      return docs.map((d: any) => ({ id: String(d._id), ...d }));
+    },
+    menuItemCost: async (_: unknown, { restaurantGuid, toastItemGuid }: { restaurantGuid: string; toastItemGuid: string }) => {
+      return computeMappedCost(restaurantGuid, toastItemGuid);
+    },
+    menuItemCapacity: async (_: unknown, { restaurantGuid, toastItemGuid, quantity = 1 }: { restaurantGuid: string; toastItemGuid: string; quantity?: number }) => {
+      const acc = new Map<string, Map<string, number>>();
+      await explodeToInventory(restaurantGuid, toastItemGuid, Number(quantity || 1), acc, new Set());
+      // Compute capacity by inventory availability
+      let capacity = Infinity as number;
+      let allHaveStock = true;
+      const requirements: Array<{ inventoryItem: string; unit: string; quantityPerOrder: number; available: number }> = [];
+      for (const [invId, byUnit] of acc.entries()) {
+        const item: any = await InventoryItem.findById(invId).lean();
+        const stock = Number(item?.currentStock || 0);
+        for (const [unit, qPer] of byUnit.entries()) {
+          const possible = qPer > 0 ? Math.floor(stock / qPer) : 0;
+          if (stock <= 0) allHaveStock = false;
+          if (qPer > 0) capacity = Math.min(capacity, possible);
+          requirements.push({ inventoryItem: String(invId), unit, quantityPerOrder: qPer, available: stock });
+        }
+      }
+      if (capacity === Infinity) capacity = 0;
+      if (!allHaveStock) capacity = 0;
+      return { capacity, allHaveStock, requirements };
+    },
+    orderTrackingStatus: async (_: unknown, { restaurantGuid }: { restaurantGuid: string }) => {
+      const cfg = await OrderTrackingConfig.findOne({ restaurantGuid }).lean();
+      return cfg || { restaurantGuid, enabled: false };
+    },
+    menuItemStock: async (_: unknown, { restaurantGuid, guids, multiLocationIds }: { restaurantGuid: string; guids?: string[]; multiLocationIds?: string[] }) => {
+      const client = new (require('../services/toast-api-client').default)();
+      try {
+        const rows = await client.getMenuItemInventory(restaurantGuid, guids || [], multiLocationIds || []);
+        return rows.map((r: any) => ({ guid: r.guid, multiLocationId: r.multiLocationId, status: r.status, quantity: r.quantity ?? null, versionId: r.versionId }));
+      } catch (e) {
+        console.warn('menuItemStock error', e);
+        return [];
+      }
+    },
+
     // Roster queries
     rosterConfigurations: async () => {
       const RosterConfiguration = (await import('@/lib/models/RosterConfiguration')).default;
@@ -345,6 +1092,29 @@ export const resolvers = {
       const RoleMapping = (await import('@/lib/models/RoleMapping')).default;
       return RoleMapping.find({});
     }),
+
+    // Orders
+    purchaseOrders: async (_: unknown, { vendorId, status }: { vendorId?: string; status?: string }, context: AuthContext) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return [];
+        const query: any = {};
+        if (vendorId) query.supplier = vendorId;
+        if (status) query.status = status;
+        return await PurchaseOrder.find(query).populate('supplier').sort({ createdAt: -1 });
+      } catch (e) {
+        console.error('purchaseOrders error', e);
+        return [];
+      }
+    },
+    purchaseOrder: async (_: unknown, { id }: { id: string }, context: AuthContext) => {
+      try {
+        if (!context.isAuthenticated || !context.hasPermission('inventory')) return null;
+        return await PurchaseOrder.findById(id).populate('supplier');
+      } catch (e) {
+        console.error('purchaseOrder error', e);
+        return null;
+      }
+    },
     savedRosters: withPermission('roster', async (_: unknown, { startDate, endDate }: { startDate: Date, endDate: Date }) => {
       const SavedRoster = (await import('@/lib/models/SavedRoster')).default;
       return SavedRoster.find({ rosterDate: { $gte: startDate, $lte: endDate } }).sort({ rosterDate: -1, shift: 1 });
@@ -599,7 +1369,10 @@ export const resolvers = {
       
       if (quantity === undefined) throw new Error('Quantity is required');
       
-      item.currentStock = quantity;
+      const before = Number(item.currentStock || 0);
+      const after = Number(quantity);
+      const delta = after - before;
+      item.currentStock = after;
       item.lastUpdated = new Date();
       item.updatedBy = context.user!.userId;
       
@@ -614,7 +1387,29 @@ export const resolvers = {
         item.status = 'normal';
       }
       
-      return await item.save();
+      const saved = await item.save();
+      // Record a count adjustment transaction for audit trail
+      try {
+        await InventoryTransaction.create({
+          inventoryItem: saved._id,
+          itemName: saved.name,
+          transactionType: 'count_adjustment',
+          quantity: delta,
+          unit: saved.unit,
+          unitCost: Number(saved.costPerUnit || 0),
+          totalCost: Math.abs(delta) * Number(saved.costPerUnit || 0),
+          balanceBefore: before,
+          balanceAfter: after,
+          location: saved.location,
+          reason: 'Manual count update',
+          referenceType: 'Manual',
+          referenceNumber: `CNT-${Date.now()}`,
+          createdBy: context.user!.userId,
+        });
+      } catch (e) {
+        console.warn('Failed to write count_adjustment transaction', e);
+      }
+      return saved;
     }),
 
     recordWaste: withPermission('inventory', async (_: unknown, { itemId, quantity, reason, notes }: { itemId: string; quantity: number; reason: string; notes?: string }, context: AuthContext) => {
@@ -625,6 +1420,7 @@ export const resolvers = {
         item.wasteLogs = [];
       }
 
+      const before = Number(item.currentStock || 0);
       const newWasteLog = {
         _id: new mongoose.Types.ObjectId(),
         date: new Date(),
@@ -636,7 +1432,7 @@ export const resolvers = {
 
       item.wasteLogs.push(newWasteLog);
 
-      item.currentStock -= quantity;
+      item.currentStock = Math.max(0, before - quantity);
       if (item.currentStock <= 0) {
         item.currentStock = 0;
         item.status = 'out_of_stock';
@@ -649,7 +1445,30 @@ export const resolvers = {
       }
       
       item.markModified('wasteLogs');
-      return await item.save();
+      const saved = await item.save();
+      // Create waste transaction for analytics
+      try {
+        await InventoryTransaction.create({
+          inventoryItem: saved._id,
+          itemName: saved.name,
+          transactionType: 'waste',
+          quantity: Math.abs(quantity),
+          unit: saved.unit,
+          unitCost: Number(saved.costPerUnit || 0),
+          totalCost: Math.abs(quantity) * Number(saved.costPerUnit || 0),
+          balanceBefore: before,
+          balanceAfter: Number(saved.currentStock || 0),
+          location: saved.location,
+          reason,
+          notes,
+          referenceType: 'Manual',
+          referenceNumber: `WASTE-${Date.now()}`,
+          createdBy: context.user!.userId,
+        });
+      } catch (e) {
+        console.warn('Failed to write waste transaction', e);
+      }
+      return saved;
     }),
 
     // Vendor mutations
@@ -743,6 +1562,245 @@ export const resolvers = {
       );
     }),
 
+    // Orders
+    createPurchaseOrder: withPermission('inventory', async (_: unknown, { input }: any, context: AuthContext) => {
+      const now = new Date();
+      const ymd = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+      const hm = `${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+      const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+      const poNumber = `PO-${ymd}-${hm}-${rand}`;
+      const payload: any = {
+        poNumber,
+        supplier: input.supplierId || undefined,
+        supplierName: input.supplierName || 'Unknown Supplier',
+        expectedDeliveryDate: input.expectedDeliveryDate ? new Date(input.expectedDeliveryDate) : undefined,
+        items: (input.items || []).map((it: any) => ({
+          inventoryItem: it.inventoryItem,
+          name: it.name,
+          sku: it.sku,
+          syscoSKU: it.syscoSKU,
+          vendorSKU: it.vendorSKU,
+          quantityOrdered: Number(it.quantityOrdered || 0),
+          quantityReceived: Number(it.quantityReceived || 0),
+          unit: it.unit,
+          unitCost: Number(it.unitCost || 0),
+          totalCost: Number(it.totalCost || (Number(it.unitCost || 0) * Number(it.quantityOrdered || 0))),
+          notes: it.notes,
+        })),
+        notes: input.notes || '',
+        status: ((): string => {
+          const s = String(input.status || '').toLowerCase();
+          if (s === 'ordered') return 'sent';
+          if (s === 'partial') return 'partially_received';
+          if (s === 'received') return 'received';
+          if (s === 'cancelled') return 'cancelled';
+          return 'draft';
+        })(),
+        createdBy: context.user?.userId,
+      };
+      payload.subtotal = (payload.items || []).reduce((s: number, i: any) => s + Number(i.totalCost || 0), 0);
+      payload.total = payload.subtotal + Number(payload.tax || 0) + Number(payload.shipping || 0);
+      const created = await PurchaseOrder.create(payload);
+      return created;
+    }),
+    updatePurchaseOrder: withPermission('inventory', async (_: unknown, { id, input }: any, context: AuthContext) => {
+      const prev = await PurchaseOrder.findById(id).lean();
+      const update: any = {};
+      if (input.supplierId !== undefined) update.supplier = input.supplierId;
+      if (input.supplierName !== undefined) update.supplierName = input.supplierName;
+      if (input.expectedDeliveryDate !== undefined) update.expectedDeliveryDate = input.expectedDeliveryDate ? new Date(input.expectedDeliveryDate) : undefined;
+      if (Array.isArray(input.items)) {
+        update.items = input.items.map((it: any) => ({
+          inventoryItem: it.inventoryItem,
+          name: it.name,
+          sku: it.sku,
+          syscoSKU: it.syscoSKU,
+          vendorSKU: it.vendorSKU,
+          quantityOrdered: Number(it.quantityOrdered || 0),
+          quantityReceived: Number(it.quantityReceived || 0),
+          unit: it.unit,
+          unitCost: Number(it.unitCost || 0),
+          totalCost: Number(it.totalCost || (Number(it.unitCost || 0) * Number(it.quantityOrdered || 0))),
+          notes: it.notes,
+        }));
+      }
+      if (input.notes !== undefined) update.notes = input.notes;
+      if (input.status !== undefined) {
+        const s = String(input.status || '').toLowerCase();
+        update.status = s === 'ordered' ? 'sent' : s === 'partial' ? 'partially_received' : s === 'received' ? 'received' : s === 'cancelled' ? 'cancelled' : 'draft';
+      }
+      const updated = await PurchaseOrder.findByIdAndUpdate(id, update, { new: true });
+      // If status changed off partially_received/received, reverse previous receiving
+      try {
+        const wasReceived = prev && ['partially_received','received'].includes(String((prev as any).status));
+        const nowReceived = updated && ['partially_received','received'].includes(String((updated as any).status));
+        if (wasReceived && !nowReceived) {
+          await reverseReceivingForOrder(String((updated as any)._id), context.user?.userId);
+        }
+      } catch (e) {
+        console.warn('updatePurchaseOrder reverse check failed', e);
+      }
+      return updated;
+    }),
+    receivePurchaseOrder: withPermission('inventory', async (_: unknown, { id, receipts }: any, context: AuthContext) => {
+      const order: any = await PurchaseOrder.findById(id);
+      if (!order) throw new Error('Order not found');
+
+      const now = new Date();
+      const originalItems = (order.items || []).map((it: any) => it.toObject?.() || { ...it });
+
+      let allReceived = true;
+      let anyReceived = false;
+      const missing: Array<{ name: string; missingQuantity: number; unitCost: number; totalCredit: number; } > = [];
+      let accumulatedCredit = 0;
+
+      order.items = order.items.map((it: any) => {
+        const r = receipts.find((rc: any) => String(rc.inventoryItem || rc.name) === String(it.inventoryItem || it.name));
+        const receivedQty = Number(r?.quantityReceived || 0);
+        const creditFlag = Boolean(r?.credit);
+        const orderedQty = Number(it.quantityOrdered || 0);
+        const priorReceived = Number(it.quantityReceived || 0);
+        const priorCredited = Number(it.creditedQuantity || 0);
+        const updatedReceived = Math.min(orderedQty, priorReceived + receivedQty);
+        let updatedCredited = priorCredited;
+        let missingQty = Math.max(0, orderedQty - updatedReceived - updatedCredited);
+        const unitCost = Number(it.unitCost || 0);
+        if (receivedQty > 0) anyReceived = true;
+        if (creditFlag && missingQty > 0) {
+          updatedCredited += missingQty;
+          accumulatedCredit += unitCost * missingQty;
+          missingQty = 0;
+        }
+        if (missingQty > 0) {
+          allReceived = false;
+          missing.push({ name: it.name, missingQuantity: missingQty, unitCost, totalCredit: unitCost * missingQty });
+        }
+        return {
+          ...it.toObject?.() || it,
+          quantityReceived: updatedReceived,
+          creditedQuantity: updatedCredited,
+        };
+      });
+
+      const allCleared = order.items.every((it: any) => Number(it.quantityReceived || 0) + Number(it.creditedQuantity || 0) >= Number(it.quantityOrdered || 0));
+      order.status = allCleared ? 'received' : (anyReceived || order.status === 'partially_received' ? 'partially_received' : order.status);
+      if (order.status === 'received') order.receivedDate = now;
+      order.creditTotal = Number(order.creditTotal || 0) + accumulatedCredit;
+      const savedOrder = await order.save();
+      const totalCredit = accumulatedCredit;
+
+      // Update inventory items and create transactions
+      try {
+        for (const it of savedOrder.items as any[]) {
+          const original = originalItems.find((orig: any) => String(orig.inventoryItem || orig.name) === String(it.inventoryItem || it.name));
+          const priorReceived = Number(original?.quantityReceived || 0);
+          const newlyReceived = Math.max(0, Number(it.quantityReceived || 0) - priorReceived);
+
+          if (newlyReceived > 0 && it.inventoryItem) {
+            const itemDoc: any = await InventoryItem.findById(it.inventoryItem);
+            if (itemDoc) {
+              const before = Number(itemDoc.currentStock || 0);
+              const after = before + newlyReceived;
+              itemDoc.currentStock = after;
+              itemDoc.lastUpdated = now;
+              if (after <= 0) itemDoc.status = 'out_of_stock';
+              else if (after <= itemDoc.minThreshold) itemDoc.status = 'critical';
+              else if (after <= itemDoc.minThreshold * 1.5) itemDoc.status = 'low';
+              else itemDoc.status = 'normal';
+              await itemDoc.save();
+
+              await InventoryTransaction.create({
+                inventoryItem: itemDoc._id,
+                itemName: itemDoc.name,
+                transactionType: 'receiving',
+                quantity: newlyReceived,
+                unit: it.unit,
+                unitCost: Number(it.unitCost || 0),
+                totalCost: newlyReceived * Number(it.unitCost || 0),
+                balanceBefore: before,
+                balanceAfter: after,
+                location: itemDoc.location,
+                referenceType: 'PurchaseOrder',
+                referenceId: order._id,
+                referenceNumber: order.poNumber,
+                supplier: order.supplier,
+                createdBy: context.user?.userId,
+                createdAt: now,
+                updatedAt: now,
+              });
+            }
+          }
+        }
+      } catch (txErr) {
+        console.warn('receivePurchaseOrder: failed to update inventory/transactions', txErr);
+      }
+
+      let replacementOrder: any = null;
+      const missingForReplacement = (savedOrder.items as any[])
+        .map((it: any) => {
+          const short = Math.max(0, Number(it.quantityOrdered || 0) - (Number(it.quantityReceived || 0) + Number(it.creditedQuantity || 0)));
+          if (short > 0) {
+            return {
+              inventoryItem: it.inventoryItem, name: it.name, sku: it.sku, syscoSKU: it.syscoSKU, vendorSKU: it.vendorSKU,
+              quantityOrdered: short, quantityReceived: 0, unit: it.unit,
+              unitCost: Number(it.unitCost || 0), totalCost: Number(it.unitCost || 0) * short,
+              notes: `Replacement for ${order.poNumber}`,
+            };
+          }
+          return null;
+        })
+        .filter(Boolean);
+
+      if (Array.isArray(missingForReplacement) && (missingForReplacement as any[]).length > 0) {
+        const ymd = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+        const hm = `${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+        const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+        replacementOrder = await PurchaseOrder.create({
+          poNumber: `PO-${ymd}-${hm}-${rand}`,
+          supplier: order.supplier, supplierName: order.supplierName, expectedDeliveryDate: undefined,
+          items: missingForReplacement as any,
+          subtotal: (missingForReplacement as any[]).reduce((s, i:any) => s + Number(i.totalCost || 0), 0),
+          total: (missingForReplacement as any[]).reduce((s, i:any) => s + Number(i.totalCost || 0), 0),
+          status: 'draft', notes: `Replacement order for missing items from ${order.poNumber}`,
+          parentOrder: order._id, isPartial: true,
+        });
+      }
+
+      return { order: savedOrder, missing, totalCredit, replacementOrder };
+    }),
+
+    resetPurchaseOrder: withRole(['Super Admin'], async (_: unknown, { id }: any, context: AuthContext) => {
+      // Reverse receiving counts before reset
+      try { await reverseReceivingForOrder(String(id), context.user?.userId); } catch {}
+      const order: any = await PurchaseOrder.findById(id);
+      if (!order) throw new Error('Order not found');
+      // Reset fields: quantities received/credited, status back to draft, dates cleared, credits cleared
+      order.items = (order.items || []).map((it: any) => ({
+        ...it.toObject?.() || it,
+        quantityReceived: 0,
+        creditedQuantity: 0,
+        totalCost: Number(it.unitCost || 0) * Number(it.quantityOrdered || 0),
+      }));
+      order.status = 'draft';
+      order.actualDeliveryDate = undefined;
+      order.receivedDate = undefined;
+      order.creditTotal = 0;
+      order.parentOrder = undefined;
+      order.isPartial = false;
+      order.subtotal = (order.items || []).reduce((s: number, i: any) => s + Number(i.totalCost || 0), 0);
+      order.total = order.subtotal + Number(order.tax || 0) + Number(order.shipping || 0);
+      await order.save();
+      return order;
+    }),
+
+    deletePurchaseOrder: withRole(['Super Admin'], async (_: unknown, { id }: any, context: AuthContext) => {
+      const existing = await PurchaseOrder.findById(id);
+      if (!existing) return false;
+      try { await reverseReceivingForOrder(String(id), context.user?.userId); } catch {}
+      await PurchaseOrder.findByIdAndDelete(id);
+      return true;
+    }),
+
     // Roster mutations
     createRosterConfiguration: withRole(['Super Admin', 'Manager'], async (_: unknown, { input }: any) => {
       const RosterConfiguration = (await import('@/lib/models/RosterConfiguration')).default;
@@ -801,6 +1859,129 @@ export const resolvers = {
       await SavedRoster.findByIdAndDelete(id);
       return true;
     }),
+
+    // Menus
+    indexMenus: withPermission('inventory', async (_: unknown, { restaurantGuid }: { restaurantGuid: string }) => {
+      const client = new ToastAPIClient();
+      // Use Menus V2 only as requested
+      const data = await client.makeRequest<any>(
+        '/menus/v2/menus',
+        'GET',
+        undefined,
+        { restaurantGuid },
+        { 'Toast-Restaurant-External-ID': restaurantGuid }
+      );
+      const payload: any = {
+        restaurantGuid,
+        lastUpdated: data.lastUpdated || new Date().toISOString(),
+        menus: data.menus || [],
+        modifierGroupReferences: new Map(Object.entries(data.modifierGroupReferences || {})),
+        modifierOptionReferences: new Map(Object.entries(data.modifierOptionReferences || {})),
+      };
+      await MenuIndex.findOneAndUpdate({ restaurantGuid }, payload, { upsert: true, new: true });
+      return true;
+    }),
+    upsertMenuMapping: withPermission('inventory', async (_: unknown, { input }: any) => {
+      const { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps } = input || {};
+      if (!restaurantGuid || !toastItemGuid) throw new Error('restaurantGuid and toastItemGuid required');
+      const doc = await MenuMapping.findOneAndUpdate(
+        { restaurantGuid, toastItemGuid },
+        { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps },
+        { new: true, upsert: true }
+      );
+      return { id: String(doc._id), ...doc.toObject() };
+    }),
+    setOrderTracking: withPermission('inventory', async (_: unknown, { restaurantGuid, enabled }: { restaurantGuid: string; enabled: boolean }) => {
+      const doc = await OrderTrackingConfig.findOneAndUpdate(
+        { restaurantGuid },
+        { restaurantGuid, enabled, lastRunAt: enabled ? new Date() : undefined },
+        { new: true, upsert: true }
+      );
+      return doc;
+    }),
+    runOrderTracking: withPermission('inventory', async (_: unknown, { restaurantGuid, businessDate }: { restaurantGuid: string; businessDate?: string }, context: AuthContext) => {
+      const client = new ToastAPIClient();
+      const headers = { 'Toast-Restaurant-External-ID': restaurantGuid } as Record<string, string>;
+      const params: Record<string, string> = {};
+      if (businessDate) params.businessDate = businessDate;
+      // Default to today in restaurant's tz if not provided
+      const resp = await client.makeRequest<any[]>(
+        '/orders/v2/ordersBulk',
+        'GET',
+        undefined,
+        params,
+        headers
+      );
+      const orders = Array.isArray(resp) ? resp : [];
+      const sold: Record<string, number> = {};
+      for (const order of orders) {
+        const checks = order?.checks || [];
+        for (const check of checks) {
+          const selections = check?.selections || [];
+          for (const sel of selections) {
+            if (sel?.voided) continue;
+            const itemGuid = sel?.item?.guid || sel?.itemGuid || sel?.guid;
+            const qty = Number(sel?.quantity || 0);
+            if (!itemGuid || qty <= 0) continue;
+            sold[itemGuid] = (sold[itemGuid] || 0) + qty;
+          }
+        }
+      }
+      const acc = new Map<string, Map<string, number>>();
+      for (const [toastItemGuid, qty] of Object.entries(sold)) {
+        await explodeToInventory(restaurantGuid, toastItemGuid, qty, acc, new Set());
+      }
+      // Write transactions and adjust inventory
+      let creator: any = context.user?.userId;
+      if (!creator) {
+        let sys: any = await User.findOne({ email: 'system@varuni.local' }).lean();
+        if (!sys) sys = await User.create({ name: 'System', email: 'system@varuni.local', password: 'ChangeMe123!@#', role: 'Super Admin', permissions: ['admin','inventory'] });
+        creator = String(sys._id);
+      }
+      const now = new Date();
+      for (const [invId, byUnit] of acc.entries()) {
+        const item: any = await InventoryItem.findById(invId);
+        if (!item) continue;
+        for (const [unit, quantity] of byUnit.entries()) {
+          const before = Number(item.currentStock || 0);
+          const after = Math.max(0, before - Number(quantity || 0));
+          item.currentStock = after;
+          if (after <= 0) item.status = 'out_of_stock';
+          else if (after <= item.minThreshold) item.status = 'critical';
+          else if (after <= item.minThreshold * 1.5) item.status = 'low';
+          else item.status = 'normal';
+          await item.save();
+          await InventoryTransaction.create({
+            inventoryItem: item._id,
+            itemName: item.name,
+            transactionType: 'consumption',
+            quantity: Math.abs(Number(quantity || 0)),
+            unit,
+            unitCost: Number(item.costPerUnit || 0),
+            totalCost: Math.abs(Number(quantity || 0)) * Number(item.costPerUnit || 0),
+            balanceBefore: before,
+            balanceAfter: after,
+            location: item.location,
+            referenceType: 'Sale',
+            referenceNumber: `ORD-${now.getTime()}`,
+            createdBy: creator,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+      await OrderTrackingConfig.findOneAndUpdate(
+        { restaurantGuid },
+        { restaurantGuid, enabled: true, lastRunAt: now, lastBusinessDate: businessDate },
+        { upsert: true }
+      );
+      return true;
+    }),
+    updateMenuItemStock: withPermission('inventory', async (_: unknown, { restaurantGuid, updates }: { restaurantGuid: string; updates: Array<{ guid?: string; multiLocationId?: string; status: string; quantity?: number | null; versionId?: string }> }) => {
+      const client = new (require('../services/toast-api-client').default)();
+      const rows = await client.updateMenuItemInventory(restaurantGuid, updates as any);
+      return rows.map((r: any) => ({ guid: r.guid, multiLocationId: r.multiLocationId, status: r.status, quantity: r.quantity ?? null, versionId: r.versionId }));
+    }),
   },
 
   WasteLog: {
@@ -837,4 +2018,20 @@ export const resolvers = {
       })
     }
   }
-}; 
+  ,
+  IndexedMenus: {
+    modifierGroupReferences: (parent: any) => {
+      const mg = parent?.modifierGroupReferences;
+      if (!mg) return [];
+      // Support Map or plain object
+      if (typeof mg.values === 'function') return Array.from(mg.values());
+      return Object.values(mg);
+    },
+    modifierOptionReferences: (parent: any) => {
+      const mo = parent?.modifierOptionReferences;
+      if (!mo) return [];
+      if (typeof mo.values === 'function') return Array.from(mo.values());
+      return Object.values(mo);
+    },
+  }
+};

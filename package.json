@@ -12,7 +12,9 @@
     "setup-auth": "tsx src/lib/db/create-admin.ts",
     "test:backend": "node test-backend.js",
     "test:connection": "tsx scripts/test-connection.ts",
-    "deploy:azure": "tsx scripts/deploy-azure.ts"
+    "deploy:azure": "tsx scripts/deploy-azure.ts",
+    "backfill:transactions": "tsx scripts/backfill-transactions.ts",
+    "repair:po-receipts": "tsx scripts/repair-po-receipts.ts"
   },
   "dependencies": {
     "@apollo/client": "^3.13.8",
@@ -47,11 +49,14 @@
     "google-protobuf": "^3.21.4",
     "graphql": "^16.11.0",
     "jsonwebtoken": "^9.0.2",
+    "jspdf": "^3.0.2",
+    "jspdf-autotable": "^5.0.2",
     "lucide-react": "^0.525.0",
     "mongodb": "^6.17.0",
     "mongoose": "^8.16.4",
     "next": "15.4.2",
     "next-themes": "^0.4.6",
+    "pdfkit": "0.13.0",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "19.1.0",
@@ -64,6 +69,7 @@
     "sonner": "^2.0.6",
     "speakeasy": "^2.0.0",
     "tailwind-merge": "^3.3.1",
+    "xlsx": "^0.18.5",
     "zod": "^4.0.5"
   },
   "devDependencies": {

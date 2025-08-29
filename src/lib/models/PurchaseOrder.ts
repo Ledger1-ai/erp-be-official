@@ -37,6 +37,12 @@ const purchaseOrderItemSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  // Quantity that was credited (vendor issued credit instead of fulfillment)
+  creditedQuantity: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   notes: String
 });
 
@@ -67,6 +73,21 @@ const purchaseOrderSchema = new mongoose.Schema({
   expectedDeliveryDate: Date,
   actualDeliveryDate: Date,
   items: [purchaseOrderItemSchema],
+  // Sum of credits earned for this order (missingQty * unitCost when credited)
+  creditTotal: {
+    type: Number,
+    default: 0
+  },
+  // Optional linkage to a parent order when this is a partial/replacement
+  parentOrder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder',
+    required: false
+  },
+  isPartial: {
+    type: Boolean,
+    default: false
+  },
   subtotal: {
     type: Number,
     default: 0
@@ -88,7 +109,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -102,7 +123,6 @@ const purchaseOrderSchema = new mongoose.Schema({
 });
 
 // Indexes
-purchaseOrderSchema.index({ poNumber: 1 });
 purchaseOrderSchema.index({ supplier: 1 });
 purchaseOrderSchema.index({ status: 1 });
 purchaseOrderSchema.index({ orderDate: 1 });

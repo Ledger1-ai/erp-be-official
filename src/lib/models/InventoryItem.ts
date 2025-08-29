@@ -24,6 +24,11 @@ const inventoryItemSchema = new mongoose.Schema({
     min: 0,
     default: 10
   },
+  parLevel: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   maxCapacity: {
     type: Number,
     required: true,
@@ -218,7 +223,6 @@ inventoryItemSchema.index({ name: 1 });
 inventoryItemSchema.index({ category: 1 });
 inventoryItemSchema.index({ status: 1 });
 inventoryItemSchema.index({ supplier: 1 });
-inventoryItemSchema.index({ syscoSKU: 1 });
 inventoryItemSchema.index({ vendorSKU: 1 });
 inventoryItemSchema.index({ syscoCategory: 1 });
 

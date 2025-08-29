@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { useToastIntegration } from "@/lib/hooks/use-toast-integration";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { PermissionTab } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +26,7 @@ import {
   Users,
   Copy,
   CheckCircle,
+  Key,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -33,7 +36,7 @@ const userRoles = [
     id: 1,
     name: "Super Admin",
     description: "Full system access with all permissions",
-    permissions: ["dashboard", "scheduling", "inventory", "invoicing", "team", "analytics", "settings"],
+    permissions: ["dashboard", "scheduling", "inventory", "team", "analytics", "settings"],
     userCount: 1,
     color: "bg-red-500",
   },
@@ -41,7 +44,7 @@ const userRoles = [
     id: 2,
     name: "Manager",
     description: "Management access to most features",
-    permissions: ["dashboard", "scheduling", "inventory", "invoicing", "team", "analytics"],
+    permissions: ["dashboard", "scheduling", "inventory", "team", "analytics"],
     userCount: 3,
     color: "bg-blue-500",
   },
@@ -105,19 +108,199 @@ const systemUsers = [
 // Toast integration data is now provided by the hook
 
 const permissionsList = [
-  { id: "dashboard", name: "Dashboard", description: "View dashboard and analytics" },
+  { id: "dashboard", name: "Dashboard", description: "View dashboard overview" },
   { id: "scheduling", name: "Scheduling", description: "Manage staff schedules and shifts" },
-  { id: "inventory", name: "Inventory", description: "Track and manage inventory" },
-  { id: "invoicing", name: "Invoicing", description: "Create and manage invoices" },
-  { id: "team", name: "Team Management", description: "Manage team members and roles" },
-  { id: "analytics", name: "Analytics", description: "View detailed analytics and reports" },
-  { id: "settings", name: "Settings", description: "System configuration and user management" },
+  { id: "inventory", name: "Inventory", description: "Basic inventory tracking" },
+  { id: "inventory:financial", name: "Inventory Financial", description: "View costs, purchase orders, financial inventory data" },
+  { id: "team", name: "Team Management", description: "View team member information" },
+  { id: "team:performance", name: "Team Performance", description: "View performance ratings and detailed analytics" },
+  { id: "team:management", name: "Team Management Admin", description: "Add/edit/delete users, reset passwords" },
+  { id: "analytics", name: "Analytics", description: "Basic analytics and reports" },
+  { id: "analytics:detailed", name: "Detailed Analytics", description: "Advanced analytics with financial data" },
+  { id: "settings", name: "Settings", description: "Basic system settings" },
+  { id: "settings:users", name: "User Management", description: "Manage user accounts and permissions" },
+  { id: "settings:system", name: "System Configuration", description: "Advanced system configuration" },
+  { id: "roster", name: "Roster Management", description: "Create and manage staff rosters" },
+  { id: "menu", name: "Menu Management", description: "Manage menu items and mappings" },
+  { id: "robotic-fleets", name: "Robotic Fleets", description: "Manage robotic fleet operations" },
+  { id: "admin", name: "Super Admin", description: "Full system administration access" },
 ];
 
 export default function SettingsPage() {
+  const permissions = usePermissions();
   const [selectedTab, setSelectedTab] = useState("permissions");
   const [isCreateRoleOpen, setIsCreateRoleOpen] = useState(false);
   const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  
+  // Permission checks for different settings sections
+  const canManageUsers = permissions.hasPermission('settings:users');
+  const canAccessSystemSettings = permissions.hasPermission('settings:system');
+  
+  // Users state & handlers aligned with User model and /api/team
+  type PermissionId = 'dashboard' | 'scheduling' | 'inventory' | 'inventory:financial' | 'team' | 'team:performance' | 'team:management' | 'analytics' | 'analytics:detailed' | 'settings' | 'settings:users' | 'settings:system' | 'roster' | 'menu' | 'robotic-fleets' | 'admin';
+  interface ManagedUser {
+    _id: string;
+    name: string;
+    email: string;
+    role: string;
+    isActive: boolean;
+    permissions?: PermissionId[];
+    isFirstLogin?: boolean;
+    mustChangePassword?: boolean;
+    lastLogin?: string;
+    avatar?: string;
+  }
+  interface CreateUserData {
+    name: string;
+    email: string;
+    role: string;
+    permissions?: PermissionId[];
+    isActive: boolean;
+    mustChangePassword: boolean;
+  }
+
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<ManagedUser | null>(null);
+  const [isEditUserOpen, setIsEditUserOpen] = useState(false);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [showTempPassword, setShowTempPassword] = useState(false);
+  const [newUser, setNewUser] = useState<CreateUserData>({
+    name: "",
+    email: "",
+    role: "",
+    permissions: [],
+    isActive: true,
+    mustChangePassword: true,
+  });
+
+  async function fetchUsers() {
+    try {
+      setLoadingUsers(true);
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch('/api/team', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!response.ok) throw new Error('Failed to load users');
+      const data = await response.json();
+      setUsers(data?.data?.users || []);
+    } catch (e) {
+      toast.error("Failed to load users");
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  useEffect(() => {
+    if (selectedTab === 'users') {
+      fetchUsers();
+    }
+  }, [selectedTab]);
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch('/api/team', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(newUser),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to create user');
+      setUsers([data.data.user, ...users]);
+      setTemporaryPassword(data.data.temporaryPassword);
+      setShowTempPassword(true);
+      setIsCreateUserOpen(false);
+      setNewUser({ name: "", email: "", role: "", permissions: [], isActive: true, mustChangePassword: true });
+      toast.success("User created successfully");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create user');
+    }
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser) return;
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch('/api/team', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          id: selectedUser._id,
+          name: selectedUser.name,
+          email: selectedUser.email,
+          role: selectedUser.role,
+          permissions: selectedUser.permissions || [],
+          isActive: selectedUser.isActive,
+          mustChangePassword: selectedUser.mustChangePassword ?? false,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to update user');
+      setUsers(users.map(u => (u._id === selectedUser._id ? data.data.user : u)));
+      setIsEditUserOpen(false);
+      setSelectedUser(null);
+      toast.success("User updated successfully");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update user');
+    }
+  };
+
+  const handleResetPassword = async (userId: string) => {
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch(`/api/team/${userId}/reset-password`, {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to reset password');
+      setTemporaryPassword(data.data.temporaryPassword);
+      setShowTempPassword(true);
+      toast.success("Password reset successfully");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to reset password');
+    }
+  };
+
+  const handleDeactivateUser = async (userId: string) => {
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch(`/api/team?id=${userId}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.error || 'Failed to deactivate user');
+      }
+      setUsers(users.map(u => (u._id === userId ? { ...u, isActive: false } : u)));
+      toast.success("User deactivated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to deactivate user');
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      toast.success("Copied to clipboard");
+    }
+  };
   
   const { 
     integrationStatus: toastIntegration, 
@@ -160,11 +343,11 @@ export default function SettingsPage() {
 
         {/* Main Content */}
         <Tabs value={selectedTab} onValueChange={setSelectedTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className={`grid w-full grid-cols-${2 + (canManageUsers ? 1 : 0) + (canAccessSystemSettings ? 1 : 0)}`}>
             <TabsTrigger value="permissions">Permissions</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
+            {canManageUsers && <TabsTrigger value="users">Users</TabsTrigger>}
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
-            <TabsTrigger value="system">System</TabsTrigger>
+            {canAccessSystemSettings && <TabsTrigger value="system">System</TabsTrigger>}
           </TabsList>
 
           {/* Permissions Tab */}
@@ -266,7 +449,8 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* Users Tab */}
-          <TabsContent value="users" className="space-y-6">
+          {canManageUsers && (
+            <TabsContent value="users" className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
                                                     <h2 className="text-xl font-semibold text-foreground">User Management</h2>
@@ -284,21 +468,23 @@ export default function SettingsPage() {
                     <DialogTitle>Add New User</DialogTitle>
                     <DialogDescription>Create a new user account</DialogDescription>
                   </DialogHeader>
-                  <div className="grid gap-4 py-4">
+                  <form onSubmit={handleCreateUser} className="grid gap-4 py-4">
                     <div className="grid grid-cols-4 items-center gap-4">
                       <Label htmlFor="user-name" className="text-right">Name</Label>
-                      <Input id="user-name" placeholder="Full name" className="col-span-3" />
+                      <Input id="user-name" placeholder="Full name" className="col-span-3" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required />
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                       <Label htmlFor="user-email" className="text-right">Email</Label>
-                      <Input id="user-email" type="email" placeholder="email@example.com" className="col-span-3" />
+                      <Input id="user-email" type="email" placeholder="email@example.com" className="col-span-3" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required />
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                       <Label htmlFor="user-role" className="text-right">Role</Label>
                       <select 
                         id="user-role" 
                         className="col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
-                        defaultValue=""
+                        value={newUser.role}
+                        onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                        required
                       >
                         <option value="">Select role...</option>
                         {userRoles.map((role) => (
@@ -306,11 +492,44 @@ export default function SettingsPage() {
                         ))}
                       </select>
                     </div>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsCreateUserOpen(false)}>Cancel</Button>
-                    <Button className="bg-orange-600 hover:bg-orange-700 text-white">Add User</Button>
-                  </DialogFooter>
+                    <div className="grid grid-cols-4 items-start gap-4">
+                      <Label className="text-right mt-2">Permissions</Label>
+                      <div className="col-span-3 space-y-2">
+                        {permissionsList.map((permission) => (
+                          <div key={permission.id} className="flex items-center space-x-2">
+                            <input 
+                              type="checkbox" 
+                              id={`perm-${permission.id}`} 
+                              checked={newUser.permissions?.includes(permission.id as any) || false}
+                              onChange={(e) => {
+                                const set = new Set(newUser.permissions);
+                                if (e.target.checked) set.add(permission.id as any); else set.delete(permission.id as any);
+                                setNewUser({ ...newUser, permissions: Array.from(set) as any });
+                              }}
+                              className="rounded"
+                            />
+                            <label htmlFor={`perm-${permission.id}`} className="text-sm">
+                              <span className="font-medium text-foreground">{permission.name}</span>
+                              <span className="text-muted-foreground ml-2">{permission.description}</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Require password change</Label>
+                      <div className="col-span-3">
+                        <label className="inline-flex items-center space-x-2">
+                          <input type="checkbox" checked={newUser.mustChangePassword} onChange={(e) => setNewUser({ ...newUser, mustChangePassword: e.target.checked })} />
+                          <span className="text-sm text-muted-foreground">User must change password on first login</span>
+                        </label>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setIsCreateUserOpen(false)}>Cancel</Button>
+                      <Button type="submit" className="bg-orange-600 hover:bg-orange-700 text-white">Add User</Button>
+                    </DialogFooter>
+                  </form>
                 </DialogContent>
               </Dialog>
             </div>
@@ -329,12 +548,20 @@ export default function SettingsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {systemUsers.map((user) => (
-                      <TableRow key={user.id}>
+                    {loadingUsers ? (
+                      <TableRow>
+                        <TableCell colSpan={6}>Loading users...</TableCell>
+                      </TableRow>
+                    ) : users.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6}>No users found</TableCell>
+                      </TableRow>
+                    ) : users.map((user) => (
+                      <TableRow key={user._id}>
                         <TableCell>
                           <div className="flex items-center space-x-3">
                             <Avatar>
-                              <AvatarImage src={user.avatar} alt={user.name} />
+                              <AvatarImage src={user.avatar || ''} alt={user.name} />
                               <AvatarFallback className="bg-orange-600 text-white">
                                 {user.name.split(" ").map(n => n[0]).join("")}
                               </AvatarFallback>
@@ -349,19 +576,20 @@ export default function SettingsPage() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          <span className={`px-2 py-1 rounded-full text-xs ${
-                            user.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                          }`}>
-                            {user.status}
+                          <span className={`px-2 py-1 rounded-full text-xs ${user.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                            {user.isActive ? 'active' : 'inactive'}
                           </span>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{user.lastLogin}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{user.lastLogin ? new Date(user.lastLogin).toLocaleString() : 'Never'}</TableCell>
                         <TableCell>
                           <div className="flex space-x-2">
-                            <Button variant="outline" size="sm">
+                            <Button variant="outline" size="sm" onClick={() => { setSelectedUser(user); setIsEditUserOpen(true); }}>
                               <Edit className="h-4 w-4" />
                             </Button>
-                            <Button variant="outline" size="sm">
+                            <Button variant="outline" size="sm" onClick={() => handleResetPassword(user._id)}>
+                              <Key className="h-4 w-4" />
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={!user.isActive} onClick={() => handleDeactivateUser(user._id)}>
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
@@ -372,7 +600,109 @@ export default function SettingsPage() {
                 </Table>
               </CardContent>
             </Card>
-          </TabsContent>
+
+            {/* Edit User Dialog */}
+            <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit User</DialogTitle>
+                </DialogHeader>
+                {selectedUser && (
+                  <form onSubmit={handleUpdateUser} className="grid gap-4 py-2">
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Name</Label>
+                      <Input className="col-span-3" value={selectedUser.name} onChange={(e) => setSelectedUser({ ...selectedUser, name: e.target.value })} required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Email</Label>
+                      <Input className="col-span-3" type="email" value={selectedUser.email} onChange={(e) => setSelectedUser({ ...selectedUser, email: e.target.value })} required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Role</Label>
+                      <select 
+                        className="col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                        value={selectedUser.role}
+                        onChange={(e) => setSelectedUser({ ...selectedUser, role: e.target.value })}
+                      >
+                        {userRoles.map((role) => (
+                          <option key={role.id} value={role.name}>{role.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-4 items-start gap-4">
+                      <Label className="text-right mt-2">Permissions</Label>
+                      <div className="col-span-3 space-y-2">
+                        {permissionsList.map((permission) => (
+                          <div key={permission.id} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`edit-perm-${permission.id}`}
+                              checked={(selectedUser.permissions || []).includes(permission.id as any)}
+                              onChange={(e) => {
+                                const set = new Set(selectedUser.permissions || []);
+                                if (e.target.checked) set.add(permission.id as any); else set.delete(permission.id as any);
+                                setSelectedUser({ ...selectedUser, permissions: Array.from(set) as any });
+                              }}
+                              className="rounded"
+                            />
+                            <label htmlFor={`edit-perm-${permission.id}`} className="text-sm">
+                              <span className="font-medium text-foreground">{permission.name}</span>
+                              <span className="text-muted-foreground ml-2">{permission.description}</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Active</Label>
+                      <div className="col-span-3">
+                        <label className="inline-flex items-center space-x-2">
+                          <input type="checkbox" checked={selectedUser.isActive} onChange={(e) => setSelectedUser({ ...selectedUser, isActive: e.target.checked })} />
+                          <span className="text-sm text-muted-foreground">User can sign in</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label className="text-right">Require password change</Label>
+                      <div className="col-span-3">
+                        <label className="inline-flex items-center space-x-2">
+                          <input type="checkbox" checked={selectedUser.mustChangePassword || false} onChange={(e) => setSelectedUser({ ...selectedUser, mustChangePassword: e.target.checked })} />
+                          <span className="text-sm text-muted-foreground">User must change password on next login</span>
+                        </label>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setIsEditUserOpen(false)}>Cancel</Button>
+                      <Button type="submit" className="bg-orange-600 hover:bg-orange-700 text-white">Save Changes</Button>
+                    </DialogFooter>
+                  </form>
+                )}
+              </DialogContent>
+            </Dialog>
+
+            {/* Temporary Password Dialog */}
+            <Dialog open={showTempPassword} onOpenChange={setShowTempPassword}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Temporary Password</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-600">Share this temporary password securely. The user will be required to change it on first login.</p>
+                  <div className="flex items-center space-x-2 p-3 bg-gray-100 rounded-lg">
+                    <code className="flex-1 text-sm font-mono">{temporaryPassword}</code>
+                    <Button size="sm" variant="outline" onClick={() => copyToClipboard(temporaryPassword)}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <Button className="w-full" onClick={() => setShowTempPassword(false)}>
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Done
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+            </TabsContent>
+          )}
 
           {/* Integrations Tab */}
           <TabsContent value="integrations" className="space-y-6">
@@ -582,7 +912,8 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* System Tab */}
-          <TabsContent value="system" className="space-y-6">
+          {canAccessSystemSettings && (
+            <TabsContent value="system" className="space-y-6">
             <div>
                                               <h2 className="text-xl font-semibold text-foreground">System Configuration</h2>
                 <p className="text-muted-foreground text-sm">General system settings and preferences</p>
@@ -730,6 +1061,7 @@ export default function SettingsPage() {
               </Card>
             </div>
           </TabsContent>
+          )}
         </Tabs>
       </div>
     </DashboardLayout>

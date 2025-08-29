@@ -4,6 +4,8 @@ import { useState, useCallback, useMemo } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { useToastIntegration } from "@/lib/hooks/use-toast-integration";
 import { useEffect, useRef } from "react";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { PermissionDenied, PermissionTab, ConditionalRender } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,6 +95,7 @@ interface TeamMember {
 export default function TeamPage() {
   const RosterPanel = dynamic(() => import("@/components/team/RosterPanel"), { ssr: false });
   const [selectedTab, setSelectedTab] = useState("overview");
+  const permissions = usePermissions();
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(null);
   
@@ -164,16 +167,10 @@ export default function TeamPage() {
     load();
   }, []);
   
-  // Simple permission check placeholder: allow write if token perms include manager/admin; default true
-  const getCanWritePerformance = () => {
-    try {
-      const raw = typeof window !== 'undefined' ? sessionStorage.getItem('permissions') : null;
-      if (!raw) return true; // default allow to avoid blocking usage in dev
-      const perms: string[] = JSON.parse(raw);
-      return perms.includes('admin') || perms.includes('team') || perms.includes('manager');
-    } catch { return true; }
-  };
-  const canWritePerformance = getCanWritePerformance();
+  // Permission checks using the new comprehensive system
+  const canWritePerformance = permissions.hasPermission('team:management');
+  const canViewPerformance = permissions.hasPermission('team:performance');
+  const canManageTeam = permissions.hasPermission('team:management');
 
   // Use real Toast employee data instead of dummy data
   const employeeData: Employee[] = employees || [];
@@ -1154,7 +1151,7 @@ export default function TeamPage() {
             <TabsList className="w-max md:w-full gap-2 flex-nowrap">
               <TabsTrigger value="overview" className="flex-none md:flex-1">Team Overview</TabsTrigger>
               <TabsTrigger value="members" className="flex-none md:flex-1">Team Members</TabsTrigger>
-              <TabsTrigger value="performance" className="flex-none md:flex-1">Performance</TabsTrigger>
+              {canViewPerformance && <TabsTrigger value="performance" className="flex-none md:flex-1">Performance</TabsTrigger>}
               <TabsTrigger value="roster" className="flex-none md:flex-1">Roster</TabsTrigger>
             </TabsList>
           </div>
@@ -1336,7 +1333,7 @@ export default function TeamPage() {
                           <TableHead>Member</TableHead>
                           <TableHead>Role</TableHead>
                           <TableHead>Department</TableHead>
-                          <TableHead>Performance</TableHead>
+                          {canViewPerformance && <TableHead>Performance</TableHead>}
                           <TableHead>Status</TableHead>
                           <TableHead>Actions</TableHead>
                         </TableRow>
@@ -1374,9 +1371,11 @@ export default function TeamPage() {
                                   return <span className={getDepartmentBadgeClasses(dept)}>{dept}</span>;
                                 })()}
                               </TableCell>
-                              <TableCell>
-                                <PerformanceCell employee={employee} selectedRestaurant={selectedRestaurant} mode="summary" />
-                              </TableCell>
+                              {canViewPerformance && (
+                                <TableCell>
+                                  <PerformanceCell employee={employee} selectedRestaurant={selectedRestaurant} mode="summary" />
+                                </TableCell>
+                              )}
                               <TableCell>
                                 <span className={`px-2 py-1 rounded-full text-xs capitalize ${employee.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                                   {employee.isActive ? 'active' : 'inactive'}
@@ -1477,8 +1476,9 @@ export default function TeamPage() {
             </Card>
           </TabsContent>
 
-          {/* Performance Tab */}
+          {/* Performance Tab - Only visible to users with team:performance permission */}
           <TabsContent value="performance" className="space-y-6">
+            <PermissionTab hasPermission={canViewPerformance} fallbackMessage="You need performance viewing permissions to access this section.">{/* Original performance content will be here */}
             {/* Simple visualizations with controls */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card>
@@ -1689,6 +1689,7 @@ export default function TeamPage() {
                 </div>
               </CardContent>
             </Card>
+            </PermissionTab>
           </TabsContent>
         </Tabs>
 

@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect, JSXElementConstructor, Key, ReactElement, ReactNode, ReactPortal } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { PermissionDenied, PermissionTab, ConditionalRender } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +36,7 @@ import {
   AlertTriangle,
   TrendingDown,
   TrendingUp,
+  DollarSign,
   Search,
   Filter,
   Download,
@@ -81,11 +84,74 @@ import {
   useCreateVendor,
   useUpdateVendor,
   useDeleteVendor,
-  useUpdateVendorRepresentative
+  useUpdateVendorRepresentative,
+  useInventoryMovement,
+  useWasteReport,
+  usePurchaseOrders,
+  useCreatePurchaseOrder,
+  useUpdatePurchaseOrder,
+  useReceivePurchaseOrder,
+  useResetPurchaseOrder,
+  useDeletePurchaseOrder,
+  useRecipeProfitability,
+  useMenuMappings
 } from "@/lib/hooks/use-graphql";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { Checkbox } from "@/components/ui/checkbox";
+import InventoryAnalyticsPanel from "@/components/inventory/InventoryAnalyticsPanel";
+import InventoryReportsPanel from "@/components/inventory/InventoryReportsPanel";
+// Vendor stats card (top-level to avoid element type issues)
+const VendorStatsCard: React.FC<{ vendorId: string }> = ({ vendorId }) => {
+  const [stats, setStats] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`/api/vendors/stats?vendorId=${vendorId}`);
+        const json = await res.json();
+        if (!json?.success) throw new Error(json?.error || 'Failed');
+        if (mounted) setStats(json.data);
+      } catch (e: any) {
+        if (mounted) setError(e.message || 'Failed');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [vendorId]);
+
+  if (loading) return <p className="text-sm">Loading…</p>;
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!stats) return <p className="text-sm text-muted-foreground">No data yet</p>;
+
+  const fully = stats.fullyReceived || 0;
+  const partial = stats.partial || 0;
+  const ordered = stats.ordered || 0;
+  const draft = stats.draft || 0;
+  const cancelled = stats.cancelled || 0;
+  const total = stats.totalOrders || 0;
+  const spent = Number(stats.totalSpent || 0);
+
+  return (
+    <div className="space-y-1 text-sm">
+      <p>Orders: {total} • Spent: ${spent.toFixed(2)}</p>
+      <p>Outcomes: Received {fully}, Partial {partial}, Ordered {ordered}, Draft {draft}, Cancelled {cancelled}</p>
+      {stats.categories && (
+        <div className="mt-2 max-h-24 overflow-auto pr-1">
+          <p className="text-xs text-muted-foreground mb-1">By Category</p>
+          {Object.entries(stats.categories).map(([cat, val]: any) => (
+            <div key={cat} className="text-xs">{cat}: {val.qty} items • ${Number(val.spent || 0).toFixed(2)}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // TypeScript interfaces
 interface InventoryItem {
@@ -96,6 +162,7 @@ interface InventoryItem {
   category: string;
   currentStock: number;
   minThreshold: number;
+  parLevel?: number;
   maxCapacity: number;
   unit: string;
   costPerUnit: number;
@@ -179,8 +246,7 @@ interface ScanResult {
   rawValue: string;
 }
 
-// Sample current user role - In real app, this would come from auth context
-const currentUserRole = "Super Admin";
+// User permissions are now handled by the comprehensive permissions system
 
 // Default label template with positioning
 const defaultLabelTemplate = {
@@ -239,9 +305,9 @@ const AZURE_SAM_CONFIG = {
   endpoint: "https://varuni.eastus2.inference.ml.azure.com/score",
   apiKey: "FtUsk1gSK6c7M3fLAor9mjEdWsd4bVUIRIs8G7zEgENA0HDluoC6JQQJ99BGAAAAAAAAAAAAINFRAZMLhPnN",
 };
-
 export default function InventoryPage() {
   const [selectedTab, setSelectedTab] = useState("overview");
+  const permissions = usePermissions();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<string>("name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
@@ -264,6 +330,15 @@ export default function InventoryPage() {
   const [isCameraCountingOpen, setIsCameraCountingOpen] = useState(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
   const [isVendorOrderExportOpen, setIsVendorOrderExportOpen] = useState(false);
+  const [isOrderHistoryDialogOpen, setIsOrderHistoryDialogOpen] = useState(false);
+  const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'quarterly'>('weekly');
+  const [reportStartDate, setReportStartDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [reportEndDate, setReportEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [receivedMap, setReceivedMap] = useState<Record<string, boolean>>({});
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmProcessing, setConfirmProcessing] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState<{ 
@@ -276,6 +351,424 @@ export default function InventoryPage() {
 
   // Nested help state for Par/On-hand tutorial
   const [isParHelpOpen, setIsParHelpOpen] = useState(false);
+  const [liveMetrics, setLiveMetrics] = useState<{ draft: number; sent: number; partially_received: number; received: number; cancelled: number; monthTotal: number; avgTotal: number; creditTotal: number; }>({ draft: 0, sent: 0, partially_received: 0, received: 0, cancelled: 0, monthTotal: 0, avgTotal: 0, creditTotal: 0 });
+
+  // Orders management state
+  const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState<boolean>(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [orderDialogOpen, setOrderDialogOpen] = useState<boolean>(false);
+  const [editingOrder, setEditingOrder] = useState<any | null>(null);
+  const [startOrderDialogOpen, setStartOrderDialogOpen] = useState<boolean>(false);
+  const [startOrderVendor, setStartOrderVendor] = useState<string>("");
+  const [receiveDialogOpen, setReceiveDialogOpen] = useState<boolean>(false);
+  const [receiveForm, setReceiveForm] = useState<Record<string, number>>({});
+  const [receiveCredit, setReceiveCredit] = useState<Record<string, boolean>>({});
+  const [orderBuilderSelected, setOrderBuilderSelected] = useState<Record<string, boolean>>({});
+  const [orderBuilderVendorMap, setOrderBuilderVendorMap] = useState<Record<string, string | null>>({});
+  const [orderBuilderQty, setOrderBuilderQty] = useState<Record<string, number>>({});
+  // Preselection state for order builder (used when launched from Critical Items)
+  const [orderBuilderPreselected, setOrderBuilderPreselected] = useState<Record<string, boolean> | null>(null);
+  const [orderBuilderPresetQty, setOrderBuilderPresetQty] = useState<Record<string, number> | null>(null);
+  useEffect(() => {
+    if (isVendorOrderExportOpen) {
+      const m: Record<string, boolean> = {};
+      const q: Record<string, number> = {};
+      const vm: Record<string, string | null> = {};
+      try {
+        const groups = exportVendorOrder();
+        groups.forEach((g: any) => {
+          const hasPreselected = orderBuilderPreselected && Object.keys(orderBuilderPreselected).length > 0;
+          (g.items || []).forEach((it: any) => {
+            const selected = hasPreselected ? !!(orderBuilderPreselected as any)[it.id] : true;
+            m[it.id] = selected;
+            const preset = orderBuilderPresetQty && orderBuilderPresetQty[it.id] !== undefined ? Number(orderBuilderPresetQty[it.id]) : undefined;
+            q[it.id] = Number(preset ?? it.orderQuantity ?? 0);
+          });
+          let selectedId = g.vendor?.id || null;
+          if (!selectedId) {
+            const vendorMatch = (vendorsData?.vendors || []).find((v: any) =>
+              (v?.name && v.name === g.supplier) ||
+              (v?.companyName && v.companyName === g.supplier) ||
+              ((g.items || []).some((it: any) => it.vendorCode && v?.supplierCode && v.supplierCode === it.vendorCode))
+            );
+            selectedId = vendorMatch?.id || null;
+          }
+          vm[g.supplier] = selectedId;
+        });
+      } catch {}
+      setOrderBuilderSelected(m);
+      setOrderBuilderQty(q);
+      setOrderBuilderVendorMap(vm);
+      // Clear presets after applying once
+      setOrderBuilderPreselected(null);
+      setOrderBuilderPresetQty(null);
+    }
+  }, [isVendorOrderExportOpen]);
+  const [orderBuilderVendor, setOrderBuilderVendor] = useState<string>("");
+  const [savingBuilder, setSavingBuilder] = useState<boolean>(false);
+
+  const { data: ordersQueryData, loading: ordersQueryLoading, error: ordersQueryError, refetch: refetchOrders } = usePurchaseOrders();
+  const [createPO] = useCreatePurchaseOrder();
+  const [updatePO] = useUpdatePurchaseOrder();
+  const [receivePO] = useReceivePurchaseOrder();
+  const [resetPO] = useResetPurchaseOrder();
+  const [deletePO] = useDeletePurchaseOrder();
+
+  // Recipes (GraphQL)
+  const { data: recipeProfitData, loading: recipesLoading, error: recipesError, refetch: refetchRecipes } = useRecipeProfitability();
+  const recipes = ((recipeProfitData?.recipeProfitabilityReport || []) as Array<{
+    recipeId: string;
+    name: string;
+    foodCost: number;
+    menuPrice: number;
+    foodCostPct: number;
+    grossMargin: number;
+    isPopular: boolean;
+  }>) || [];
+
+  // Also fetch menu mappings to show recipe steps if restaurant selected (persisted from Menu page)
+  const [selectedRestaurant, setSelectedRestaurant] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('toast-selected-restaurant');
+    return null;
+  });
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('toast-selected-restaurant') : null;
+    if (saved && saved !== selectedRestaurant) setSelectedRestaurant(saved);
+  }, [selectedRestaurant]);
+  useEffect(() => {
+    // Fallback: fetch from env API if no local selection
+    if (!selectedRestaurant && typeof window !== 'undefined') {
+      (async () => {
+        try {
+          const res = await fetch('/api/toast/restaurant-id', { cache: 'no-store' });
+          const json = await res.json();
+          if (json?.restaurantGuid) {
+            setSelectedRestaurant(json.restaurantGuid);
+            localStorage.setItem('toast-selected-restaurant', json.restaurantGuid);
+          }
+        } catch {}
+      })();
+    }
+  }, [selectedRestaurant]);
+
+  // Menu mappings as fallback source for recipes (uses selected restaurant)
+  const { data: mappingData, loading: mappingLoading, error: mappingError, refetch: refetchMappings } = useMenuMappings(selectedRestaurant || "");
+  const mappings = (mappingData?.menuMappings || []) as Array<{
+    id: string;
+    toastItemGuid: string;
+    toastItemName?: string;
+    computedCostCache?: number;
+    recipeSteps?: Array<{ step: number; instruction: string; time?: number; notes?: string }>;
+  }>;
+
+  const fetchOrders = useCallback(async () => {
+    try {
+      setOrdersLoading(true);
+      setOrdersError(null);
+      await refetchOrders();
+    } catch (e: any) {
+      setOrdersError(e.message || 'Failed to fetch orders');
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, [refetchOrders]);
+
+  useEffect(() => {
+    if (selectedTab === 'purchase-orders') {
+      fetchOrders();
+    }
+  }, [selectedTab, fetchOrders]);
+
+  useEffect(() => {
+    const list = ordersQueryData?.purchaseOrders || [];
+    setOrders(list);
+    if (Array.isArray(list) && list.length >= 0) {
+      const month = new Date().getMonth();
+      const year = new Date().getFullYear();
+      const draft = list.filter((o: any) => o.status === 'draft').length;
+      const sent = list.filter((o: any) => o.status === 'sent').length;
+      const pr = list.filter((o: any) => o.status === 'partially_received').length;
+      const rec = list.filter((o: any) => o.status === 'received').length;
+      const cancelled = list.filter((o: any) => o.status === 'cancelled').length;
+      const monthTotal = list
+        .filter((o: any) => o.createdAt && new Date(o.createdAt).getMonth() === month && new Date(o.createdAt).getFullYear() === year)
+        .reduce((s: number, o: any) => s + Number(o.total || o.subtotal || 0), 0);
+      const avgTotal = list.length ? list.reduce((s: number, o: any) => s + Number(o.total || o.subtotal || 0), 0) / list.length : 0;
+      const creditTotal = list.reduce((s: number, o: any) => s + Number(o.creditTotal || 0), 0);
+      setLiveMetrics({ draft, sent, partially_received: pr, received: rec, cancelled, monthTotal, avgTotal, creditTotal });
+    }
+  }, [ordersQueryData]);
+
+  const getUiStatusFromModel = (status: string): string => {
+    switch ((status || '').toLowerCase()) {
+      case 'draft': return 'open';
+      case 'sent': return 'ordered';
+      case 'partially_received': return 'partial';
+      case 'received': return 'received';
+      case 'cancelled': return 'cancelled';
+      default: return 'open';
+    }
+  };
+
+  const mapUiStatusToModel = (ui: string): string => {
+    switch ((ui || '').toLowerCase()) {
+      case 'open': return 'draft';
+      case 'ordered': return 'sent';
+      case 'partial': return 'partially_received';
+      case 'received': return 'received';
+      case 'cancelled': return 'cancelled';
+      default: return 'draft';
+    }
+  };
+  const buildOrderFromVendor = (vendorNameOrCode: string) => {
+    const groups = exportVendorOrder();
+    const group = groups.find(g => g.supplier === vendorNameOrCode) || groups.find(g => (g.vendor?.supplierCode && g.vendor.supplierCode === vendorNameOrCode));
+    if (!group) return null;
+    const items = group.items.map((it: any) => ({
+      inventoryItem: it.id,
+      name: it.name,
+      sku: it.vendorSKU || it.vendorCode || it.sku,
+      vendorSKU: it.vendorSKU,
+      syscoSKU: it.syscoSKU,
+      unit: it.unit,
+      unitCost: Number(it.costPerUnit || 0),
+      quantityOrdered: Number(it.orderQuantity || 0),
+      totalCost: Number(it.totalCost || 0),
+      notes: it.notes || ''
+    }));
+    return {
+      poNumber: undefined,
+      supplierId: group.vendor?.id,
+      supplierName: group.supplier,
+      status: 'open',
+      expectedDeliveryDate: undefined,
+      items,
+      subtotal: group.totalCost,
+      total: group.totalCost,
+      notes: ''
+    };
+  };
+
+  const openStartOrder = () => {
+    // Open the vendor order builder dialog (replaces old Export Vendor Orders form)
+    setOrderBuilderVendor("");
+    setIsVendorOrderExportOpen(true);
+  };
+
+  const createOrderFromVendor = async () => {
+    if (!startOrderVendor) {
+      toast.error('Select a vendor');
+      return;
+    }
+    const draft = buildOrderFromVendor(startOrderVendor);
+    if (!draft) {
+      toast.error('No items found for this vendor');
+      return;
+    }
+    setEditingOrder(draft);
+    setOrderDialogOpen(true);
+    setStartOrderDialogOpen(false);
+  };
+
+  const saveOrder = async () => {
+    if (!editingOrder) return;
+    try {
+      // Sanitize items for input (remove __typename, creditedQuantity, etc.)
+      const items = (editingOrder.items || []).map((it: any) => ({
+        inventoryItem: it.inventoryItem,
+        name: it.name,
+        sku: it.sku,
+        syscoSKU: it.syscoSKU,
+        vendorSKU: it.vendorSKU,
+        quantityOrdered: Number(it.quantityOrdered || 0),
+        quantityReceived: Number(it.quantityReceived || 0),
+        unit: it.unit,
+        unitCost: Number(it.unitCost || 0),
+        totalCost: Number(it.totalCost || (Number(it.unitCost || 0) * Number(it.quantityOrdered || 0))),
+        notes: it.notes || ''
+      }));
+
+      const body: any = {
+        supplierId: editingOrder.supplierId || editingOrder.supplier?.id,
+        supplierName: editingOrder.supplierName,
+        expectedDeliveryDate: editingOrder.expectedDeliveryDate || undefined,
+        status: editingOrder.status,
+        notes: editingOrder.notes,
+        items,
+      };
+
+      // If this is an existing order, update; otherwise create a new one
+      if (editingOrder._id || editingOrder.id) {
+        const id = editingOrder._id || editingOrder.id;
+        const { data } = await updatePO({ variables: { id, input: body } });
+        if (!data?.updatePurchaseOrder?.id) throw new Error('Failed to update order');
+        toast.success(`Order ${data.updatePurchaseOrder.poNumber || ''} updated`);
+      } else {
+      const { data } = await createPO({ variables: { input: body } });
+      if (!data?.createPurchaseOrder?.id) throw new Error('Failed to save order');
+      toast.success(`Order ${data.createPurchaseOrder.poNumber || ''} saved`);
+      }
+      setOrderDialogOpen(false);
+      setEditingOrder(null);
+      fetchOrders();
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to save order');
+    }
+  };
+
+  const updateOrder = async (id: string, update: any) => {
+    const { data } = await updatePO({ variables: { id, input: update } });
+    if (!data?.updatePurchaseOrder?.id) throw new Error('Failed to update order');
+    return data.updatePurchaseOrder;
+  };
+
+  const openReceiveOrder = (order: any) => {
+    try { toast.info(`Opening Receive for ${order?.poNumber || 'order'}…`); } catch {}
+    const cloned = JSON.parse(JSON.stringify(order || {}));
+    setEditingOrder(cloned);
+    const rf: Record<string, number> = {};
+    const rc: Record<string, boolean> = {};
+    (cloned.items || []).forEach((it: any) => { const k = it.inventoryItem || it.name; rf[k] = 0; rc[k] = false; });
+    setReceiveForm(rf);
+    setReceiveCredit(rc);
+    setTimeout(() => setReceiveDialogOpen(true), 0);
+  };
+
+  const submitReceiveOrder = async () => {
+    if (!editingOrder?._id && !editingOrder?.id) return;
+    try {
+      const id = editingOrder._id || editingOrder.id;
+      const receipts = Object.entries(receiveForm).map(([key, qty]) => ({ inventoryItem: key, quantityReceived: Number(qty || 0), credit: Boolean(receiveCredit[key]) }));
+      const { data } = await receivePO({ variables: { id, receipts } });
+      const status = data?.receivePurchaseOrder?.order?.status || '';
+      if (!status) throw new Error('Failed to receive order');
+      const replacement = data?.receivePurchaseOrder?.replacementOrder || null;
+      if (status === 'received' && replacement) {
+        toast.success('Order received. Replacement draft created for missing items');
+      } else if (status !== 'received') {
+        toast.success('Order partially received');
+      } else {
+        toast.success('Order received');
+      }
+      setReceiveDialogOpen(false);
+      setEditingOrder(null);
+      fetchOrders();
+
+      const missing = data?.receivePurchaseOrder?.missing || [];
+      const totalCredit = data?.receivePurchaseOrder?.totalCredit || 0;
+      if (Array.isArray(missing) && missing.length > 0) {
+        // Generate missing items CSV report
+        let csv = '';
+        csv += `Report,Missing Items After Receiving\n`;
+        csv += `PO Number,${editingOrder.poNumber || ''}\n`;
+        csv += `Vendor,${editingOrder.supplierName || ''}\n`;
+        csv += `Total Credit,${Number(totalCredit || 0).toFixed(2)}\n\n`;
+        csv += `Item,Missing Qty,Unit Cost,Total Credit\n`;
+        missing.forEach((m: any) => {
+          csv += `"${m.name}",${m.missingQuantity},${Number(m.unitCost || 0).toFixed(2)},${Number(m.totalCredit || 0).toFixed(2)}\n`;
+        });
+        downloadTextFile(`missing-items-${editingOrder.poNumber || ''}.csv`, csv);
+        if (replacement) {
+          // Open the replacement order to allow review
+          setEditingOrder(replacement);
+          setOrderDialogOpen(true);
+        }
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to receive order');
+    }
+  };
+
+  const exportOrderCsv = (order: any) => {
+    let csv = '';
+    csv += `Order,${order.poNumber || ''}\n`;
+    csv += `Vendor,${order.supplierName || ''}\n`;
+    csv += `Status,${getUiStatusFromModel(order.status)}\n`;
+    csv += `Expected Delivery,${order.expectedDeliveryDate || ''}\n\n`;
+    csv += `Item,SKU,Unit,Qty Ordered,Qty Received,Unit Cost,Line Total\n`;
+    (order.items || []).forEach((it: any) => {
+      const lineTotal = Number(it.unitCost || 0) * Number(it.quantityOrdered || 0);
+      csv += `"${it.name}","${it.vendorSKU || it.sku || ''}","${it.unit}",${it.quantityOrdered || 0},${it.quantityReceived || 0},${Number(it.unitCost || 0).toFixed(2)},${Number(lineTotal || 0).toFixed(2)}\n`;
+    });
+    downloadTextFile(`order-${order.poNumber || 'draft'}.csv`, csv);
+  };
+
+  const exportOrderXls = (order: any) => {
+    const meta = [
+      ['Purchase Order', order.poNumber || ''],
+      ['Vendor', order.supplierName || ''],
+      ['Status', getUiStatusFromModel(order.status)],
+      ['Expected Delivery', order.expectedDeliveryDate || ''],
+      ['Generated At', new Date().toISOString()],
+    ];
+    const metaRows = meta.map(r => `<tr>${r.map(c => `<td colspan=\"3\"><b>${String(c).replace(/&/g,'&amp;')}</b></td>`).join('')}</tr>`).join('');
+    const rows = (order.items || []).map((it: any) => `
+      <tr>
+        <td>${(it.name || '').replace(/&/g,'&amp;')}</td>
+        <td>${(it.vendorSKU || it.sku || '').replace(/&/g,'&amp;')}</td>
+        <td>${(it.unit || '').replace(/&/g,'&amp;')}</td>
+        <td style=\"mso-number-format:'0'; text-align:right\">${Number(it.quantityOrdered || 0)}</td>
+        <td style=\"mso-number-format:'0.00'; text-align:right\">${Number(it.unitCost || 0).toFixed(2)}</td>
+        <td style=\"mso-number-format:'0.00'; text-align:right\">${(Number(it.unitCost || 0) * Number(it.quantityOrdered || 0)).toFixed(2)}</td>
+      </tr>
+    `).join('');
+    const html = `\uFEFF<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">\n<head><meta charset=\"utf-8\" /><style>table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:12px} th,td{border:1px solid #E5E7EB;padding:6px} thead th{background:#F3F4F6}</style></head>\n<body>\n<table>\n${metaRows}\n<tr><th>Item</th><th>SKU</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Line Total</th></tr>\n<tbody>${rows}</tbody>\n</table>\n</body></html>`;
+    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `order-${order.poNumber || 'draft'}.xls`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportOrderPdf = (order: any) => {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const styles = `
+      <style>
+        body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; padding: 24px; color: #111827; }
+        h1 { font-size: 20px; margin: 0 0 4px 0; }
+        .muted { color:#6B7280; font-size: 12px; margin-bottom: 12px; }
+        table { width:100%; border-collapse: collapse; }
+        th, td { text-align:left; padding: 8px; border-bottom: 1px solid #E5E7EB; font-size: 12px; }
+        thead th { background: #F9FAFB; }
+        .summary { margin-top: 12px; font-size: 12px; }
+      </style>
+    `;
+    const header = `
+      <h1>Purchase Order ${order.poNumber || ''}</h1>
+      <div class="muted">Vendor: ${order.supplierName || ''} • Status: ${getUiStatusFromModel(order.status)} • Expected: ${order.expectedDeliveryDate || ''}</div>
+    `;
+    const rows = (order.items || []).map((it: any) => `
+      <tr>
+        <td>${it.name}</td>
+        <td>${it.vendorSKU || it.sku || ''}</td>
+        <td>${it.unit || ''}</td>
+        <td style="text-align:right">${it.quantityOrdered || 0}</td>
+        <td style="text-align:right">${Number(it.unitCost || 0).toFixed(2)}</td>
+        <td style="text-align:right">${(Number(it.unitCost || 0) * Number(it.quantityOrdered || 0)).toFixed(2)}</td>
+      </tr>
+    `).join('');
+    const html = `
+      <html><head><title>${order.poNumber || 'Order'}</title>${styles}</head><body>
+        ${header}
+        <table>
+          <thead><tr><th>Item</th><th>SKU</th><th>Unit</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Line Total</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="summary">Subtotal: $${Number(order.subtotal || 0).toFixed(2)} • Total: $${Number(order.total || order.subtotal || 0).toFixed(2)}</div>
+        <script>window.print();</script>
+      </body></html>
+    `;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+  };
+
 
   const openAddItemDialog = () => {
     setNewItemForm({
@@ -288,6 +781,7 @@ export default function InventoryPage() {
       supplier: "",
       currentStock: "0",
       minThreshold: "0",
+      parLevel: "0",
       maxCapacity: "0",
       location: "",
       description: "",
@@ -312,8 +806,56 @@ export default function InventoryPage() {
     });
     setIsAddItemOpen(true);
   };
-
   const VendorsPanel: React.FC = () => {
+    const VendorStats: React.FC<{ vendorId: string }> = ({ vendorId }) => {
+      const [stats, setStats] = useState<any>(null);
+      const [loadingStats, setLoadingStats] = useState(false);
+      const [errorStats, setErrorStats] = useState<string | null>(null);
+      useEffect(() => {
+        let mounted = true;
+        (async () => {
+          try {
+            setLoadingStats(true);
+            const res = await fetch(`/api/vendors/stats?vendorId=${vendorId}`);
+            const json = await res.json();
+            if (!json?.success) throw new Error(json?.error || 'Failed');
+            if (mounted) setStats(json.data);
+          } catch (e: any) {
+            if (mounted) setErrorStats(e.message || 'Failed');
+          } finally {
+            if (mounted) setLoadingStats(false);
+          }
+        })();
+        return () => { mounted = false; };
+      }, [vendorId]);
+
+      if (loadingStats) return <p className="text-sm">Loading…</p>;
+      if (errorStats) return <p className="text-sm text-red-600">{errorStats}</p>;
+      if (!stats) return <p className="text-sm text-muted-foreground">No data yet</p>;
+
+      const fully = stats.fullyReceived || 0;
+      const partial = stats.partial || 0;
+      const ordered = stats.ordered || 0;
+      const draft = stats.draft || 0;
+      const cancelled = stats.cancelled || 0;
+      const total = stats.totalOrders || 0;
+      const spent = Number(stats.totalSpent || 0);
+
+      return (
+        <div className="space-y-1 text-sm">
+          <p>Orders: {total} • Spent: ${spent.toFixed(2)}</p>
+          <p>Outcomes: Received {fully}, Partial {partial}, Ordered {ordered}, Draft {draft}, Cancelled {cancelled}</p>
+          {stats.categories && (
+            <div className="mt-2 max-h-24 overflow-auto pr-1">
+              <p className="text-xs text-muted-foreground mb-1">By Category</p>
+              {Object.entries(stats.categories).map(([cat, val]: any) => (
+                <div key={cat} className="text-xs">{cat}: {val.qty} items • ${Number(val.spent || 0).toFixed(2)}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
     const { data, loading, error } = useVendors();
     const [createVendor, { loading: creatingVendor }] = useCreateVendor();
     const [updateVendor, { loading: updatingVendor }] = useUpdateVendor();
@@ -430,7 +972,6 @@ export default function InventoryPage() {
         toast.error(e.message || 'Failed to update representative');
       }
     };
-
     const printVendors = () => {
       const vendors = data?.vendors || [];
       const win = window.open('', '_blank');
@@ -548,9 +1089,7 @@ export default function InventoryPage() {
                   </div>
                   <div className="p-3 rounded-lg border border-border">
                     <p className="text-xs text-muted-foreground mb-1">Performance</p>
-                    <p className="text-sm">On-time: {v.performanceMetrics?.onTimeDeliveryRate ?? 0}% • Quality: {v.performanceMetrics?.qualityRating ?? 0}/5</p>
-                    <p className="text-xs text-muted-foreground mt-2">Totals</p>
-                    <p className="text-sm">Orders: {v.performanceMetrics?.totalOrders ?? 0} • Spent: ${v.performanceMetrics?.totalSpent?.toFixed?.(2) ?? '0.00'}</p>
+                    <VendorStatsCard vendorId={v.id} />
                   </div>
                   <div className="p-3 rounded-lg border border-border">
                     <div className="flex items-center justify-between">
@@ -773,6 +1312,36 @@ export default function InventoryPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Start Order Dialog */}
+        <Dialog open={startOrderDialogOpen} onOpenChange={setStartOrderDialogOpen}>
+          <DialogContent className="max-w-md backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+            <DialogHeader>
+              <DialogTitle>Start Order</DialogTitle>
+              <DialogDescription>Choose a vendor to auto-populate items below par.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Label>Vendor</Label>
+              <Select value={startOrderVendor} onValueChange={setStartOrderVendor}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select vendor" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(vendorsData?.vendors || []).map((v: any) => (
+                    <SelectItem key={v.id} value={v.name || v.companyName || v.supplierCode}>{(v.name || v.companyName) + (v.supplierCode ? ` • ${v.supplierCode}` : '')}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStartOrderDialogOpen(false)}>Cancel</Button>
+              <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={createOrderFromVendor}>Create Draft</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Recipes Panel */}
+        <div />
       </div>
     );
   };
@@ -810,6 +1379,7 @@ export default function InventoryPage() {
     supplier: "",
     currentStock: "",
     minThreshold: "",
+    parLevel: "",
     maxCapacity: "",
     location: "",
     description: "",
@@ -863,6 +1433,7 @@ export default function InventoryPage() {
   // GraphQL hooks
   const { data: inventoryData, loading: inventoryLoading, error: inventoryError, refetch: refetchInventory } = useInventoryItems();
   const { data: lowStockData, loading: lowStockLoading } = useLowStockItems();
+  const { data: vendorsData } = useVendors();
   const [createInventoryItem, { loading: creating }] = useCreateInventoryItem();
   const [updateInventoryItem, { loading: updating }] = useUpdateInventoryItem();
   const [deleteInventoryItem, { loading: deleting }] = useDeleteInventoryItem();
@@ -872,7 +1443,6 @@ export default function InventoryPage() {
     setConfirmConfig(config);
     setConfirmOpen(true);
   };
-
   const executeConfirm = async () => {
     if (!confirmConfig.onConfirm) {
       setConfirmOpen(false);
@@ -888,8 +1458,6 @@ export default function InventoryPage() {
       setConfirmProcessing(false);
     }
   };
-
-
   // Extract data from GraphQL responses
   const inventoryItems = inventoryData?.inventoryItems || [];
   const lowStockItems = lowStockData?.lowStockItems || [];
@@ -901,49 +1469,81 @@ export default function InventoryPage() {
     );
   };
 
-  const getWeeklyWaste = () => {
-    return inventoryItems.reduce((sum: number, item: InventoryItem) => 
-      sum + (item.waste || 0) * item.costPerUnit, 0
-    );
-  };
+  // Deprecated: computed locally. We now show total from GraphQL wasteReport for parity with analytics
+  const getWeeklyWaste = () => Number(gqlWaste?.wasteReport?.totalCost || 0);
 
-  // Role-based access control
-  const isAdmin = currentUserRole === "Super Admin" || currentUserRole === "Manager";
-  const availableTabs = isAdmin
-    ? ["overview", "items", "recipes", "purchase-orders", "receiving", "vendors", "counts", "analytics", "reports"]
-    : ["overview", "items", "recipes"];
+  // Comprehensive permission-based access control
+  const canViewBasicInventory = permissions.hasPermission('inventory');
+  const canViewFinancialData = permissions.hasPermission('inventory:financial');
+  const canManageInventory = permissions.hasPermission('inventory:financial'); // Full inventory management requires financial permission
+  
+  // Determine available tabs based on permissions
+  const availableTabs = [];
+  if (canViewBasicInventory) {
+    availableTabs.push("overview", "items", "recipes");
+  }
+  if (canViewFinancialData) {
+    availableTabs.push("purchase-orders", "receiving", "vendors", "counts", "analytics", "reports");
+  }
 
   // Enhanced stock movement data with real transaction data
   const [movementPeriod, setMovementPeriod] = useState<'daily' | 'weekly' | 'yearly'>('daily');
-  const [movementDateRange, setMovementDateRange] = useState({
-    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days ago
-    end: new Date().toISOString().split('T')[0] // today
+  const [movementDateRange, setMovementDateRange] = useState(() => {
+    const today = new Date();
+    const dow = today.getDay();
+    const diff = (dow + 6) % 7;
+    const start = new Date(today);
+    start.setDate(start.getDate() - diff);
+    start.setHours(0,0,0,0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
   });
   const [movementData, setMovementData] = useState<any[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
   const [hasMovementData, setHasMovementData] = useState(false);
+  const [reportRange, setReportRange] = useState<{ start: string; end: string}>(() => ({
+    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
+  }));
 
-  // Fetch real inventory transaction data
+  // GraphQL movement data (keep local state for existing UI/refresh button)
+  const { data: gqlMovement, refetch: refetchGqlMovement, loading: gqlMovementLoading } = useInventoryMovement(
+    movementPeriod,
+    movementDateRange.start,
+    movementDateRange.end
+  );
+
+  // Weekly waste via GraphQL (aligned to Monday-start week)
+  const wasteWeekRange = React.useMemo(() => {
+    const now = new Date();
+    const day = now.getDay(); // 0=Sun, 1=Mon, ... 6=Sat
+    const diffToMonday = (day + 6) % 7; // days since Monday
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - diffToMonday); // Monday 00:00 local
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7); // next Monday 00:00
+    end.setMilliseconds(end.getMilliseconds() - 1); // inclusive end (Sunday 23:59:59.999)
+    return { startISO: start.toISOString(), endISO: end.toISOString() };
+  }, []);
+  const { data: gqlWaste, refetch: refetchGqlWaste } = useWasteReport(wasteWeekRange.startISO, wasteWeekRange.endISO);
+
+  // Sync local state from GraphQL results automatically
+  useEffect(() => {
+    const points = (gqlMovement?.inventoryMovement as any[]) || [];
+    setMovementData(points);
+    setHasMovementData(points.length > 0);
+  }, [gqlMovement]);
+
+  // Fetch real inventory transaction data (via GraphQL for consistency with analytics panel)
   const fetchMovementData = async () => {
     setMovementLoading(true);
     try {
-      const params = new URLSearchParams({
-        period: movementPeriod,
-        startDate: movementDateRange.start,
-        endDate: movementDateRange.end,
-      });
-
-      const response = await fetch(`/api/inventory/transactions?${params}`);
-      const result = await response.json();
-
-      if (result.success) {
-        setMovementData(result.data);
-        setHasMovementData(result.data.length > 0 && result.totalTransactions > 0);
-      } else {
-        console.error('Failed to fetch movement data:', result.error);
-        setMovementData([]);
-        setHasMovementData(false);
-      }
+      const res = await refetchGqlMovement();
+      const points = (res?.data?.inventoryMovement as any[]) || [];
+      setMovementData(points);
+      setHasMovementData(points.length > 0);
     } catch (error) {
       console.error('Error fetching movement data:', error);
       setMovementData([]);
@@ -953,37 +1553,43 @@ export default function InventoryPage() {
     }
   };
 
-  // Fetch movement data when period or date range changes
+  // Ensure refresh when period/date change (Apollo will also refetch due to variables change)
   useEffect(() => {
     fetchMovementData();
-  }, [movementPeriod, movementDateRange]);
+  }, [movementPeriod, movementDateRange.start, movementDateRange.end]);
 
-  // Set appropriate date ranges based on period
+  // Set appropriate date ranges based on period (default to current week for daily/weekly)
   const handlePeriodChange = (period: 'daily' | 'weekly' | 'yearly') => {
     setMovementPeriod(period);
     const today = new Date();
-    let startDate: Date;
+    const getCurrentWeek = () => {
+      const dow = today.getDay();
+      const diff = (dow + 6) % 7; // Monday start
+      const start = new Date(today);
+      start.setDate(start.getDate() - diff);
+      start.setHours(0,0,0,0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      end.setHours(23,59,59,999);
+      return { start, end };
+    };
 
-    switch (period) {
-      case 'daily':
-        startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days
-        break;
-      case 'weekly':
-        startDate = new Date(today.getTime() - 12 * 7 * 24 * 60 * 60 * 1000); // 12 weeks
-        break;
-      case 'yearly':
-        startDate = new Date(today.getFullYear() - 3, 0, 1); // 3 years
-        break;
-      default:
-        startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days
+    if (period === 'daily' || period === 'weekly') {
+      const { start, end } = getCurrentWeek();
+      setMovementDateRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
+      return;
     }
 
-    setMovementDateRange({
-      start: startDate.toISOString().split('T')[0],
-      end: today.toISOString().split('T')[0]
-    });
+    // For yearly, show Jan 1 to today
+    if (period === 'yearly') {
+      const start = new Date(today.getFullYear(), 0, 1);
+      const end = new Date(today);
+      setMovementDateRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
+      return;
+    }
   };
-
+  // New: Hook into GraphQL reports for exports and panel summaries
+  // We'll rely on server GraphQL for data-heavy computations
   const suppliers = [
     {
       id: 1,
@@ -1016,7 +1622,6 @@ export default function InventoryPage() {
       deliveryDays: "Mon, Wed, Fri",
     },
   ];
-
   const aiSuggestions = [
     {
       type: "reorder",
@@ -1047,6 +1652,55 @@ export default function InventoryPage() {
     },
   ];
 
+  // Export all reports across panels
+  const handleExportAll = async (format: 'csv' | 'xlsx' | 'pdf') => {
+    try {
+      const start = reportRange.start;
+      const end = reportRange.end;
+
+      // Compile datasets
+      const resp1 = await fetch(`/api/inventory/transactions?raw=true&startDate=${encodeURIComponent(start)}&endDate=${encodeURIComponent(end)}&period=daily`);
+      const movementRaw = await resp1.json();
+
+      // Build tables
+      const movementRows = (movementRaw?.data || []).map((t: any) => ({
+        date: t.createdAt ? new Date(t.createdAt).toISOString().slice(0,10) : '',
+        type: t.transactionType,
+        item: t.item?.name || '',
+        quantity: t.quantity,
+        unit: t.unit,
+        unitCost: t.unitCost,
+        totalCost: t.totalCost,
+        reference: t.referenceType || '',
+      }));
+
+      const filenameBase = `inventory-reports-${start}-to-${end}`;
+      if (format === 'csv') {
+        const { exportCSV } = await import('@/lib/reporting/exports');
+        exportCSV(`${filenameBase}.csv`, movementRows);
+      } else if (format === 'xlsx') {
+        const { exportXLSX } = await import('@/lib/reporting/exports');
+        await exportXLSX(`${filenameBase}.xlsx`, 'Transactions', movementRows);
+      } else {
+        const { exportPDFTable } = await import('@/lib/reporting/exports');
+        await exportPDFTable(`${filenameBase}.pdf`, 'Inventory Transactions', [
+          { header: 'Date', dataKey: 'date' },
+          { header: 'Type', dataKey: 'type' },
+          { header: 'Item', dataKey: 'item' },
+          { header: 'Qty', dataKey: 'quantity' },
+          { header: 'Unit', dataKey: 'unit' },
+          { header: 'Unit Cost', dataKey: 'unitCost' },
+          { header: 'Total', dataKey: 'totalCost' },
+          { header: 'Ref', dataKey: 'reference' },
+        ], movementRows);
+      }
+      toast.success('Export complete');
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || 'Export failed');
+    }
+  };
+
   // Get available cameras on component mount
   useEffect(() => {
     const getCameras = async () => {
@@ -1066,7 +1720,6 @@ export default function InventoryPage() {
 
     getCameras();
   }, [selectedCameraId]);
-
   // Handle form submission for creating new inventory item
   const handleCreateItem = async () => {
     try {
@@ -1078,6 +1731,7 @@ export default function InventoryPage() {
             category: newItemForm.category,
             currentStock: parseFloat(newItemForm.currentStock),
             minThreshold: parseFloat(newItemForm.minThreshold),
+            parLevel: parseFloat(String(newItemForm.parLevel || '0')),
             maxCapacity: parseFloat(newItemForm.maxCapacity),
             unit: newItemForm.unit,
             costPerUnit: parseFloat(newItemForm.costPerUnit),
@@ -1093,7 +1747,6 @@ export default function InventoryPage() {
           }
         }
       });
-      
       toast.success('Inventory item created successfully!');
       setIsAddItemOpen(false);
       setNewItemForm({
@@ -1106,6 +1759,7 @@ export default function InventoryPage() {
         supplier: "",
         currentStock: "",
         minThreshold: "",
+        parLevel: "",
         maxCapacity: "",
         location: "",
         description: "",
@@ -1145,6 +1799,7 @@ export default function InventoryPage() {
             category: newItemForm.category,
         currentStock: parseFloat(newItemForm.currentStock) || 0,
         minThreshold: parseFloat(newItemForm.minThreshold) || 0,
+        parLevel: parseFloat(String(newItemForm.parLevel || '0')),
         maxCapacity: parseFloat(newItemForm.maxCapacity) || 0,
             unit: newItemForm.unit,
         costPerUnit: parseFloat(newItemForm.costPerUnit) || 0,
@@ -1219,6 +1874,7 @@ export default function InventoryPage() {
       supplier: item.supplier || "",
       currentStock: item.currentStock?.toString() || "",
       minThreshold: item.minThreshold?.toString() || "",
+      parLevel: item.parLevel?.toString() || "",
       maxCapacity: item.maxCapacity?.toString() || "",
       location: item.location || "",
       description: item.description || "",
@@ -1290,7 +1946,9 @@ export default function InventoryPage() {
     switch (status) {
       case "critical": return "tag-red";
       case "low": return "tag-yellow";
-      case "out_of_stock": return "tag-red";
+      case "out_of_stock": return "tag-slate"; // gray
+      case "on_par": return "tag-blue"; // blue
+      case "surplus": return "tag-green"; // green
       case "adequate": 
       case "normal": return "tag-green";
       default: return "tag-slate";
@@ -1300,14 +1958,35 @@ export default function InventoryPage() {
   const friendlyStatusLabel = (status: string) => {
     if (!status) return "";
     if (status === "out_of_stock") return "Out of stock";
+    if (status === "on_par") return "On par";
     return status.charAt(0).toUpperCase() + status.slice(1);
   };
 
   // Compute status on the fly for display to avoid stale server values
-  const computeStatus = (stock: number, min: number) => {
+  const getParLevelValue = (item: InventoryItem): number => {
+    // Use minThreshold as the source of truth for Par Level, fallback to legacy fields if needed
+    return Number((item.minThreshold ?? item.parLevel ?? item.maxCapacity) || 0);
+  };
+
+  const computeStatus = (stock: number, min: number, par?: number) => {
     const s = Number(stock || 0);
     const m = Number(min || 0);
+    const p = Number(par || 0);
     if (s <= 0) return 'out_of_stock';
+
+    // If a par level is set, base primary classification on on-hand vs par
+    if (p > 0) {
+      // Critical still takes precedence if explicitly below the hard threshold
+      if (m > 0 && s <= m) return 'critical';
+
+      const lower = p * 0.9; // below 90% of par => low
+      const upper = p * 1.1; // above 110% of par => surplus
+      if (s < lower) return 'low';
+      if (s > upper) return 'surplus';
+      return 'on_par';
+    }
+
+    // Fallback when par is not set: use threshold-based logic
     if (s <= m) return 'critical';
     if (s <= m * 1.5) return 'low';
     return 'normal';
@@ -1359,17 +2038,14 @@ export default function InventoryPage() {
         return "bg-green-600 text-white";
     }
   };
-
   const getCriticalItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "critical");
   const getLowStockItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "low");
-
-
-
   // Vendor Order Export Functions
   const exportVendorOrder = () => {
-    const lowStockItems = inventoryItems.filter((item: InventoryItem) => 
-      item.currentStock <= (item.reorderPoint || item.minThreshold)
-    );
+    const lowStockItems = inventoryItems.filter((item: InventoryItem) => {
+      const parLevel = getParLevelValue(item);
+      return Number(item.currentStock || 0) < parLevel;
+    });
     
     // Group by supplier
     const ordersBySupplier = lowStockItems.reduce((acc: Record<string, InventoryItem[]>, item: InventoryItem) => {
@@ -1380,61 +2056,178 @@ export default function InventoryPage() {
       acc[supplier].push(item);
       return acc;
     }, {} as Record<string, InventoryItem[]>);
-
     // Generate order data
     const orderData = Object.entries(ordersBySupplier).map(([supplier, items]) => {
       const itemArray = items as InventoryItem[];
+      const groupItems = itemArray
+        .map((item: InventoryItem) => {
+          const parLevel = getParLevelValue(item);
+          const baseNeededUnits = Math.max(0, parLevel - Number(item.currentStock || 0));
+          const packSize = Math.max(1, Number(item.casePackSize || 1));
+          const minCases = Math.max(1, Number(item.minimumOrderQty ?? 1)); // default 1 case
+
+          const alignToPack = (qtyUnits: number) => Math.ceil(qtyUnits / packSize) * packSize;
+
+          const minUnits = minCases * packSize;
+          let orderQuantity = Math.max(alignToPack(baseNeededUnits), minUnits);
+
+          // If still zero or not needed, skip in a later filter
+          const totalCost = Number(item.costPerUnit || 0) * orderQuantity;
+
+          return {
+            id: item.id,
+            name: item.name,
+            sku: item.sku,
+            syscoSKU: item.syscoSKU,
+            vendorSKU: item.vendorSKU,
+            vendorCode: item.vendorCode,
+            currentStock: item.currentStock,
+            parLevel,
+            orderQuantity,
+            minCases,
+            unit: item.unit,
+            casePackSize: item.casePackSize,
+            minimumOrderQty: item.minimumOrderQty,
+            costPerUnit: item.costPerUnit,
+            pricePerCase: item.pricePerCase,
+            totalCost,
+            leadTimeDays: item.leadTimeDays,
+            syscoCategory: item.syscoCategory,
+            urgency: Number(item.currentStock || 0) <= Number(item.minThreshold || parLevel) ? 'High' : 'Medium',
+            notes: item.notes
+          };
+        })
+        .filter((gi) => gi.orderQuantity > 0);
+
+      const totalItems = groupItems.length;
+      const groupTotalCost = groupItems.reduce((sum: number, gi) => sum + gi.totalCost, 0);
+      const vendors = vendorsData?.vendors || [];
+      const vendorMatch = vendors.find((v: any) =>
+        (v?.name && v.name === supplier) ||
+        (v?.companyName && v.companyName === supplier) ||
+        (groupItems.some(gi => gi.vendorCode && v?.supplierCode && v.supplierCode === gi.vendorCode))
+      );
+      const minimumOrder = vendorMatch?.deliveryInfo?.minimumOrder || 0;
+      const expectedAmount = Math.max(groupTotalCost, minimumOrder || 0);
+
       return {
         supplier,
-        items: itemArray.map((item: InventoryItem) => ({
-          name: item.name,
-          sku: item.sku,
-          syscoSKU: item.syscoSKU,
-          vendorSKU: item.vendorSKU,
-          vendorCode: item.vendorCode,
-          currentStock: item.currentStock,
-          neededQuantity: (item.reorderQuantity || item.maxCapacity) - item.currentStock,
-          unit: item.unit,
-          casePackSize: item.casePackSize,
-          minimumOrderQty: item.minimumOrderQty,
-          costPerUnit: item.costPerUnit,
-          pricePerCase: item.pricePerCase,
-          totalCost: ((item.reorderQuantity || item.maxCapacity) - item.currentStock) * item.costPerUnit,
-          leadTimeDays: item.leadTimeDays,
-          syscoCategory: item.syscoCategory,
-          urgency: item.currentStock <= item.minThreshold ? 'High' : 'Medium',
-          notes: item.notes
-        })),
-        totalItems: itemArray.length,
-        totalCost: itemArray.reduce((sum: number, item: InventoryItem) => 
-          sum + (((item.reorderQuantity || item.maxCapacity) - item.currentStock) * item.costPerUnit), 0
-        )
+        items: groupItems,
+        totalItems,
+        totalCost: groupTotalCost,
+        minimumOrder,
+        expectedAmount,
+        vendor: vendorMatch || null,
       };
     });
 
     return orderData;
   };
 
-  const downloadCSV = () => {
-    const orderData = exportVendorOrder();
-    
-    let csvContent = "Supplier,Item Name,SKU,Sysco SKU,Vendor SKU,Vendor Code,Current Stock,Needed Quantity,Unit,Case Pack Size,Min Order Qty,Cost Per Unit,Price Per Case,Total Cost,Lead Time (Days),Sysco Category,Urgency,Notes\n";
-    
-    orderData.forEach((order) => {
-      (order.items).forEach((item) => {
-        csvContent += `"${order.supplier}","${item.name}","${item.sku || ''}","${item.syscoSKU || ''}","${item.vendorSKU || ''}","${item.vendorCode || ''}",${item.currentStock},${item.neededQuantity},"${item.unit}",${item.casePackSize || 1},${item.minimumOrderQty || 1},${item.costPerUnit.toFixed(2)},${item.pricePerCase?.toFixed(2) || '0.00'},${item.totalCost.toFixed(2)},${item.leadTimeDays || 1},"${item.syscoCategory || ''}","${item.urgency}","${item.notes || ''}"\n`;
-      });
-    });
+  // --- Critical Items inline reorder helpers ---
+  const [criticalSelected, setCriticalSelected] = useState<Record<string, boolean>>({});
+  const [criticalQty, setCriticalQty] = useState<Record<string, number>>({});
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const computeMinOrderQuantity = (item: InventoryItem): number => {
+    const parLevel = getParLevelValue(item);
+    const baseNeededUnits = Math.max(0, parLevel - Number(item.currentStock || 0));
+    const packSize = Math.max(1, Number(item.casePackSize || 1));
+    const minCases = Math.max(1, Number(item.minimumOrderQty ?? 1));
+    const alignToPack = (qtyUnits: number) => Math.ceil(qtyUnits / packSize) * packSize;
+    const minUnits = minCases * packSize;
+    return Math.max(alignToPack(baseNeededUnits), minUnits);
+  };
+
+  const handleCriticalToggle = (id: string, checked: boolean, item: InventoryItem) => {
+    setCriticalSelected((m) => ({ ...m, [id]: checked }));
+    if (checked && criticalQty[id] === undefined) {
+      setCriticalQty((q) => ({ ...q, [id]: computeMinOrderQuantity(item) }));
+    }
+  };
+
+  const handleCriticalQtyChange = (id: string, value: number) => {
+    setCriticalQty((q) => ({ ...q, [id]: Math.max(0, Number(value || 0)) }));
+  };
+
+  const reorderSelectedCriticalItems = () => {
+    const selectedIds = Object.entries(criticalSelected).filter(([, v]) => v).map(([k]) => k);
+    if (selectedIds.length === 0) {
+      try { toast.error('Select at least one item to reorder'); } catch {}
+      return;
+    }
+    // Preselect only chosen items and preset their quantities in the builder
+    const pre: Record<string, boolean> = {};
+    const qty: Record<string, number> = {};
+    for (const id of selectedIds) {
+      pre[id] = true;
+      if (criticalQty[id] !== undefined) qty[id] = Number(criticalQty[id]);
+    }
+    setOrderBuilderPreselected(pre);
+    setOrderBuilderPresetQty(qty);
+    setSelectedTab('purchase-orders');
+    setIsVendorOrderExportOpen(true);
+  };
+
+  // --- Weekly Waste Summary data (counts by reason over last 7 days) ---
+  const weeklyWasteData = React.useMemo(() => {
+    const start = new Date(wasteWeekRange.startISO);
+    const end = new Date(wasteWeekRange.endISO);
+    const counts: Record<string, number> = {};
+    let totalCost = 0;
+    for (const it of inventoryItems as any[]) {
+      const cpu = Number(it.costPerUnit || 0);
+      const logs = Array.isArray(it.wasteLogs) ? it.wasteLogs : [];
+      for (const log of logs) {
+        const d = new Date(log.date);
+        if (d >= start && d <= end) {
+          const reason = (log.reason || 'Other').trim();
+          counts[reason] = (counts[reason] || 0) + 1;
+          totalCost += Number(log.quantity || 0) * cpu;
+        }
+      }
+    }
+    const data = Object.entries(counts).map(([reason, count]) => ({ reason, count }));
+    data.sort((a, b) => b.count - a.count);
+    return { data, totalCost };
+  }, [inventoryItems, wasteWeekRange.startISO, wasteWeekRange.endISO]);
+
+  const downloadTextFile = (filename: string, content: string) => {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `sysco-vendor-order-${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', filename);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const downloadVendorOrderCSV = () => {
+    const orderData = exportVendorOrder();
+    const generatedAt = new Date().toISOString();
+
+    let csvContent = '';
+    csvContent += `Report,Vendor Orders Export\n`;
+    csvContent += `Generated At,${generatedAt}\n`;
+    csvContent += `Suppliers,${orderData.length}\n`;
+    csvContent += `\n`;
+
+    orderData.forEach((order) => {
+      csvContent += `Supplier,${order.supplier}\n`;
+      csvContent += `Minimum Order,${Number(order.minimumOrder || 0).toFixed(2)}\n`;
+      csvContent += `Order Total,${Number(order.totalCost || 0).toFixed(2)}\n`;
+      csvContent += `Expected Amount,${Number(order.expectedAmount || 0).toFixed(2)}\n`;
+      csvContent += `\n`;
+      csvContent += `Item Name,SKU,Unit,Order Quantity,Par Level,Current Stock,Received\n`;
+      order.items.forEach((item) => {
+        const sku = item.vendorSKU || item.vendorCode || item.sku || '';
+        csvContent += `"${item.name}","${sku}","${item.unit}",${item.orderQuantity},${item.parLevel},${item.currentStock},${receivedMap[item.id] ? 'TRUE' : 'FALSE'}\n`;
+      });
+      csvContent += `\n`;
+    });
+
+    downloadTextFile(`vendor-orders-${new Date().toISOString().split('T')[0]}.csv`, csvContent);
   };
 
   const downloadJSON = () => {
@@ -1459,6 +2252,124 @@ export default function InventoryPage() {
     document.body.removeChild(link);
   };
 
+  // Reports - CSV generators
+  const exportCriticalItemsCsv = () => {
+    const critical = getCriticalItems();
+    const generatedAt = new Date().toISOString();
+    let csv = '';
+    csv += `Report,Critical Items Report\n`;
+    csv += `Generated At,${generatedAt}\n`;
+    csv += `Total Items,${critical.length}\n`;
+    csv += `\n`;
+    csv += `Item ID,Name,Category,Current Stock,Min Threshold,Unit,Supplier,Cost/Unit,Reorder Point,Reorder Qty,Last Updated\n`;
+    critical.forEach((it: any) => {
+      csv += `${it.id},"${it.name}","${it.category}",${it.currentStock},${it.minThreshold},"${it.unit}","${it.supplier || ''}",${Number(it.costPerUnit || 0).toFixed(2)},${it.reorderPoint || ''},${it.reorderQuantity || ''},${it.lastUpdated || ''}\n`;
+    });
+    downloadTextFile(`critical-items-${new Date().toISOString().split('T')[0]}.csv`, csv);
+  };
+
+  const bucketForDate = (d: Date, period: 'daily'|'weekly'|'monthly'|'quarterly') => {
+    switch (period) {
+      case 'daily': return d.toISOString().split('T')[0];
+      case 'weekly': {
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - d.getDay());
+        return weekStart.toISOString().split('T')[0];
+      }
+      case 'monthly': return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      case 'quarterly': {
+        const q = Math.floor(d.getMonth()/3)+1; return `${d.getFullYear()}-Q${q}`;
+      }
+    }
+  };
+
+  const exportOrderHistoryCsv = async () => {
+    try {
+      const qp: string[] = [`period=${reportPeriod}`, 'raw=true'];
+      if (reportStartDate) qp.push(`startDate=${encodeURIComponent(reportStartDate)}`);
+      if (reportEndDate) qp.push(`endDate=${encodeURIComponent(reportEndDate)}`);
+      const res = await fetch(`/api/inventory/transactions?${qp.join('&')}`);
+      const json = await res.json();
+      if (!json?.success) throw new Error(json?.error || 'Failed to fetch transactions');
+      const txns = (json.data || []) as Array<any>;
+      const allowedTypes = new Set(['purchase','receiving']);
+      const filtered = txns.filter(t => allowedTypes.has(String(t.transactionType)));
+
+      const itemMap: Record<string, { name: string; parLevel: number; unit: string; totalOrderedQty: number; totalOrderedValue: number; ordersCount: number; buckets: Record<string, number>; } > = {};
+      const itemsById: Record<string, any> = {};
+      inventoryItems.forEach((it: any) => { itemsById[it.id] = it; });
+
+      filtered.forEach(t => {
+        const itemId = t.item?.id || t.inventoryItem || 'unknown';
+        const itemDoc = itemsById[itemId];
+        const name = (t.item?.name) || itemDoc?.name || 'Unknown';
+        const unit = (t.item?.unit) || itemDoc?.unit || '';
+        const parLevel = Number(itemDoc?.parLevel ?? itemDoc?.minThreshold ?? 0);
+        if (!itemMap[itemId]) itemMap[itemId] = { name, parLevel, unit, totalOrderedQty: 0, totalOrderedValue: 0, ordersCount: 0, buckets: {} };
+        const bucket = bucketForDate(new Date(t.createdAt), reportPeriod);
+        itemMap[itemId].totalOrderedQty += Number(t.quantity || 0);
+        itemMap[itemId].totalOrderedValue += Number(t.totalCost || 0);
+        itemMap[itemId].ordersCount += 1;
+        itemMap[itemId].buckets[bucket] = (itemMap[itemId].buckets[bucket] || 0) + 1;
+      });
+
+      const generatedAt = new Date().toISOString();
+      let csv = '';
+      csv += `Report,Order History Report\n`;
+      csv += `Generated At,${generatedAt}\n`;
+      csv += `Period,${reportPeriod}\n`;
+      csv += `Start Date,${reportStartDate || ''}\n`;
+      csv += `End Date,${reportEndDate || ''}\n`;
+      csv += `\n`;
+      csv += `Item ID,Item Name,Unit,Par Level,Total Ordered Qty,Total Ordered Value,Orders Count,Unique ${reportPeriod} Buckets\n`;
+      Object.entries(itemMap).forEach(([id, rec]) => {
+        const uniqueBuckets = Object.keys(rec.buckets).length;
+        csv += `${id},"${rec.name}","${rec.unit}",${rec.parLevel},${rec.totalOrderedQty},${rec.totalOrderedValue.toFixed(2)},${rec.ordersCount},${uniqueBuckets}\n`;
+      });
+      downloadTextFile(`order-history-${reportPeriod}-${new Date().toISOString().split('T')[0]}.csv`, csv);
+      setIsOrderHistoryDialogOpen(false);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to export order history');
+    }
+  };
+
+  const exportWasteReportCsv = () => {
+    const generatedAt = new Date().toISOString();
+    // Aggregate by item
+    const agg: Array<{ id: string; name: string; totalWasteQty: number; totalWasteValue: number; unit: string; logs: any[]; costPerUnit: number; } > = [];
+    inventoryItems.forEach((it: any) => {
+      const logs = Array.isArray(it.wasteLogs) ? it.wasteLogs : [];
+      const totalWasteQty = logs.reduce((s: number, l: any) => s + Number(l.quantity || 0), 0);
+      const costPerUnit = Number(it.costPerUnit || 0);
+      const totalWasteValue = totalWasteQty * costPerUnit;
+      if (totalWasteQty > 0) {
+        agg.push({ id: it.id, name: it.name, totalWasteQty, totalWasteValue, unit: it.unit, logs, costPerUnit });
+      }
+    });
+    agg.sort((a,b) => b.totalWasteValue - a.totalWasteValue);
+
+    let csv = '';
+    csv += `Report,Waste Report\n`;
+    csv += `Generated At,${generatedAt}\n`;
+    csv += `Total Items With Waste,${agg.length}\n`;
+    csv += `\n`;
+    csv += `Top Wasted Items (Aggregated)\n`;
+    csv += `Item ID,Item Name,Unit,Total Waste Qty,Cost/Unit,Total Waste Value\n`;
+    agg.forEach(r => {
+      csv += `${r.id},"${r.name}","${r.unit}",${r.totalWasteQty},${r.costPerUnit.toFixed(2)},${r.totalWasteValue.toFixed(2)}\n`;
+    });
+    csv += `\n`;
+    csv += `Waste Logs (Detailed)\n`;
+    csv += `Item ID,Item Name,Date,Quantity,Reason,Notes\n`;
+    agg.forEach(r => {
+      r.logs.forEach((l: any) => {
+        csv += `${r.id},"${r.name}",${l.date || ''},${l.quantity || 0},"${l.reason || ''}","${l.notes || ''}"\n`;
+      });
+    });
+
+    downloadTextFile(`waste-report-${new Date().toISOString().split('T')[0]}.csv`, csv);
+  };
+
   // QR Code generation function
   const generateQRData = (item: InventoryItem) => {
     return JSON.stringify({
@@ -1473,7 +2384,6 @@ export default function InventoryPage() {
       timestamp: new Date().toISOString(),
     });
   };
-
   // Lookup barcode in internal database
   const lookupBarcode = async (barcode: string) => {
     try {
@@ -1492,7 +2402,6 @@ export default function InventoryPage() {
       setBarcodeLoading(false);
     }
   };
-
   // Map barcode to existing item
   const mapBarcodeToItem = async (itemId: string, scannedBarcode: string) => {
     try {
@@ -1534,7 +2443,6 @@ export default function InventoryPage() {
       toast.error('Please select a valid CSV file');
     }
   };
-
   const previewCSVData = async () => {
     if (!csvFile) return;
     
@@ -1622,7 +2530,6 @@ export default function InventoryPage() {
     setImportStep('upload');
     setIsCSVImportOpen(false);
   };
-
   const toggleItemSelection = (index: number) => {
     setSelectedImportItems(prev => 
       prev.includes(index) 
@@ -1656,7 +2563,6 @@ export default function InventoryPage() {
       toast.error('Failed to fetch debug info');
     }
   };
-
   const testDirectInventoryFetch = async () => {
     try {
       const response = await fetch('/api/inventory/list');
@@ -1733,7 +2639,6 @@ export default function InventoryPage() {
       toast.error('Cache refresh failed');
     }
   };
-
   // QR Scan handler
   const handleQRScan = async (result: ScanResult[]) => {
     if (result && result.length > 0) {
@@ -1765,6 +2670,7 @@ export default function InventoryPage() {
             supplier: parsedData.supplier || "",
             currentStock: "",
             minThreshold: "",
+            parLevel: "",
             maxCapacity: "",
             location: "",
             description: "",
@@ -1874,7 +2780,6 @@ export default function InventoryPage() {
       return null;
     }
   };
-
   // Start object tracking
   const startTracking = () => {
     if (trackingInterval) {
@@ -2234,7 +3139,6 @@ export default function InventoryPage() {
       setIsProcessing(false);
     }
   };
-
   // Process the actual binary mask from Azure SAM
   const processSAMMask = async (base64Mask: string, clickPoint: {x: number, y: number}): Promise<{maskImageUrl: string, bounds: {x: number, y: number, width: number, height: number}}> => {
     try {
@@ -2362,7 +3266,6 @@ export default function InventoryPage() {
     
     return bounds;
   };
-
   // Identify what the object is using Computer Vision
   const identifyObject = async (point: {x: number, y: number, id: string}): Promise<string> => {
     try {
@@ -2409,7 +3312,6 @@ export default function InventoryPage() {
       return "Object";
     }
   };
-
   // Print label function
   // Label element drag handlers
   const handleMouseDown = (e: React.MouseEvent, elementType: string) => {
@@ -2438,7 +3340,6 @@ export default function InventoryPage() {
       },
     }));
   };
-
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragState.isDragging || !dragState.element) return;
     
@@ -2491,7 +3392,6 @@ export default function InventoryPage() {
     if (!printWindow) return;
     
     const qrData = generateQRData(item);
-    
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
@@ -2697,6 +3597,29 @@ export default function InventoryPage() {
     }
   };
 
+  const handleResetOrder = async (order: any) => {
+    try {
+      await resetPO({ variables: { id: order._id || order.id } });
+      toast.success('Order reset to draft');
+      fetchOrders();
+    } catch (e:any) {
+      toast.error(e.message || 'Failed to reset order');
+    }
+  };
+  const handleDeleteOrder = async (order: any) => {
+    openConfirm({
+      title: 'Delete Order',
+      message: `This will permanently delete ${order.poNumber}.`,
+      confirmText: 'Delete',
+      danger: true,
+      onConfirm: async () => {
+        const { data } = await deletePO({ variables: { id: order._id || order.id } });
+        if (!data?.deletePurchaseOrder) throw new Error('Delete failed');
+        toast.success('Order deleted');
+        fetchOrders();
+      }
+    });
+  };
   return (
     <DashboardLayout>
       <div className="p-6 space-y-6">
@@ -2706,14 +3629,10 @@ export default function InventoryPage() {
             <h1 className="text-3xl font-bold text-foreground">Inventory Management</h1>
             <p className="text-muted-foreground mt-1">
               Advanced inventory tracking with QR codes, labels, and AI-powered counting
-              {!isAdmin && <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">Staff View</span>}
+              {!canViewFinancialData && <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">Basic View</span>}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setIsVendorOrderExportOpen(true)}>
-              <Download className="mr-2 h-4 w-4" />
-                Export Vendor Orders
-              </Button>
             <Button onClick={openAddItemDialog} className="bg-orange-600 hover:bg-orange-700 text-white" size="sm">
               <Plus className="mr-2 h-4 w-4" /> Add Item
                     </Button>
@@ -2721,10 +3640,25 @@ export default function InventoryPage() {
               <Trash2 className="mr-2 h-4 w-4" /> Clear All
             </Button>
             <div className="flex space-x-2">
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Export Report
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export Report
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={exportCriticalItemsCsv}>
+                  Critical items report (CSV)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsOrderHistoryDialogOpen(true)}>
+                  Order history report (CSV)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportWasteReportCsv}>
+                  Waste report (CSV)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
               <Button variant="outline" onClick={testDirectInventoryFetch} size="sm">
                 <ScanLine className="mr-2 h-4 w-4" /> Test API
               </Button>
@@ -2791,7 +3725,6 @@ export default function InventoryPage() {
                       )}
                     </div>
                   )}
-                  
                   {importStep === 'review' && csvPreviewData && (
                     <div className="py-4">
                       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -2946,6 +3879,223 @@ export default function InventoryPage() {
                   )}
                 </DialogContent>
               </Dialog>
+              {/* Vendor Order Export Dialog */}
+              <Dialog open={isVendorOrderExportOpen} onOpenChange={setIsVendorOrderExportOpen}>
+                <DialogContent className="w-full max-w-5xl md:max-w-6xl backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Build Order</DialogTitle>
+                    <DialogDescription>Select items below par per vendor, adjust quantities, then Save as an order or export.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+                    {exportVendorOrder().map((order) => (
+                      <div key={order.supplier} className="rounded-md border">
+                        <div className="flex items-center justify-between px-4 py-2 bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <div className="font-medium">{order.supplier}</div>
+                            <div className="text-sm text-muted-foreground">Assign Vendor:</div>
+                            <Select value={orderBuilderVendorMap[order.supplier] ?? ''} onValueChange={(v) => setOrderBuilderVendorMap((m) => ({ ...m, [order.supplier]: v }))}>
+                              <SelectTrigger className="h-8 w-[220px]">
+                                <SelectValue placeholder="Pick vendor" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(vendorsData?.vendors || []).map((v: any) => (
+                                  <SelectItem key={v.id} value={v.id}>{v.name || v.companyName}{v.supplierCode ? ` • ${v.supplierCode}` : ''}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {(() => {
+                            const selectedItems = order.items.filter((it: any) => orderBuilderSelected[it.id]);
+                            const selectedTotal = selectedItems.reduce((sum: number, it: any) => {
+                              const fallbackOrderQty = typeof it.orderQuantity === 'number' ? it.orderQuantity : 0;
+                              const rawQty = orderBuilderQty[it.id] !== undefined ? orderBuilderQty[it.id] : fallbackOrderQty;
+                              const qty = Number(rawQty);
+                              return sum + Number(it.costPerUnit || 0) * qty;
+                            }, 0);
+                            const fullTotal = order.items.reduce((sum: number, it: any) => {
+                              const fallbackOrderQty = typeof it.orderQuantity === 'number' ? it.orderQuantity : 0;
+                              const rawQty = orderBuilderQty[it.id] !== undefined ? orderBuilderQty[it.id] : fallbackOrderQty;
+                              const qty = Number(rawQty);
+                              return sum + Number(it.costPerUnit || 0) * qty;
+                            }, 0);
+                            const minOrder = Number(order.minimumOrder || 0);
+                            const expected = Math.max(fullTotal, minOrder);
+                            return (
+                              <div className="text-sm text-muted-foreground">
+                                Selected: {selectedItems.length} • Min Order: ${minOrder.toFixed(2)} • Selected Total: ${selectedTotal.toFixed(2)} • Expected Amount: ${expected.toFixed(2)}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-muted/30">
+                                <th className="px-3 py-2 text-center">
+                                  <Checkbox
+                                    checked={order.items.every((it: any) => orderBuilderSelected[it.id])}
+                                    onCheckedChange={(v) => {
+                                      const all = !!v;
+                                      setOrderBuilderSelected((m) => {
+                                        const next = { ...m };
+                                        order.items.forEach((it: any) => next[it.id] = all);
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </th>
+                                <th className="text-left px-3 py-2">Item</th>
+                                <th className="text-left px-3 py-2">SKU</th>
+                                <th className="text-left px-3 py-2">Unit</th>
+                                <th className="text-right px-3 py-2">Order Qty (units)</th>
+                                <th className="text-right px-3 py-2">Min (cases)</th>
+                                <th className="text-right px-3 py-2">Case Size</th>
+                                <th className="text-right px-3 py-2">Par</th>
+                                <th className="text-right px-3 py-2">On Hand</th>
+                                <th className="text-right px-3 py-2">Cost/Unit</th>
+                                <th className="text-right px-3 py-2">Line Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {order.items.map((it: any) => {
+                                const fallbackOrderQty = typeof it.orderQuantity === 'number' ? it.orderQuantity : 0;
+                                const rawQty = orderBuilderQty[it.id] !== undefined ? orderBuilderQty[it.id] : fallbackOrderQty;
+                                const qty = Number(rawQty);
+                                const minUnits = Math.max(1, Number(it.minCases || 1)) * Math.max(1, Number(it.casePackSize || 1));
+                                const tooLow = qty > 0 && qty < minUnits;
+                                return (
+                                <tr key={it.id} className={`border-t ${tooLow ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''}`}>
+                                  <td className="px-3 py-2 text-center">
+                                    <Checkbox checked={!!orderBuilderSelected[it.id]} onCheckedChange={(v) => setOrderBuilderSelected((m) => ({ ...m, [it.id]: !!v }))} />
+                                  </td>
+                                  <td className="px-3 py-2">{it.name}</td>
+                                  <td className="px-3 py-2">{it.vendorSKU || it.vendorCode || it.sku || ''}</td>
+                                  <td className="px-3 py-2">{it.unit}</td>
+                                  <td className="px-3 py-2 text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      {tooLow ? <AlertTriangle className="h-3.5 w-3.5 text-yellow-600" /> : null}
+                                      <Input
+                                        type="number"
+                                        className={`h-8 w-24 text-right ${tooLow ? 'border-yellow-500' : ''}`}
+                                        value={orderBuilderQty[it.id] ?? it.orderQuantity}
+                                        onChange={(e) => setOrderBuilderQty((q) => ({ ...q, [it.id]: Math.max(0, Number(e.target.value || 0)) }))}
+                                      />
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-2 text-right">{it.minCases || 1}</td>
+                                  <td className="px-3 py-2 text-right">{it.casePackSize || 1}</td>
+                                  <td className="px-3 py-2 text-right">{it.parLevel}</td>
+                                  <td className="px-3 py-2 text-right">{it.currentStock}</td>
+                                  <td className="px-3 py-2 text-right">${Number(it.costPerUnit || 0).toFixed(2)}</td>
+                                  <td className="px-3 py-2 text-right">${(Number(it.costPerUnit || 0) * qty).toFixed(2)}</td>
+                                </tr>
+                              );})}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <DialogFooter className="flex flex-wrap gap-2 justify-between">
+                    <div className="text-sm text-muted-foreground">
+                      Tip: Use this builder to preview and tune quantities before saving as an order.
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={() => setIsVendorOrderExportOpen(false)}>Close</Button>
+                      <Button variant="outline" onClick={downloadVendorOrderCSV}>
+                        <FileSpreadsheet className="mr-2 h-4 w-4" /> Export CSV
+                      </Button>
+                      <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={() => {
+                        try {
+                          setSavingBuilder(true);
+                          // Save each vendor group as separate order via GraphQL
+                          const groups = exportVendorOrder();
+                          const run = async () => {
+                            for (const g of groups) {
+                              const items = g.items.filter((it: any) => orderBuilderSelected[it.id]).map((it: any) => {
+                                const fallbackOrderQty = typeof it.orderQuantity === 'number' ? it.orderQuantity : 0;
+                                const rawQty = orderBuilderQty[it.id] !== undefined ? orderBuilderQty[it.id] : fallbackOrderQty;
+                                const qty = Number(rawQty);
+                                const line = Number(it.costPerUnit || 0) * qty;
+                                return {
+                                inventoryItem: it.id,
+                                name: it.name,
+                                sku: it.vendorSKU || it.sku,
+                                vendorSKU: it.vendorSKU,
+                                syscoSKU: it.syscoSKU,
+                                unit: it.unit,
+                                unitCost: Number(it.costPerUnit || 0),
+                                quantityOrdered: qty,
+                                totalCost: line,
+                              };}).filter((x: any) => x.quantityOrdered > 0);
+                              if (!items.length) continue;
+                              const supplierId = orderBuilderVendorMap[g.supplier] || g.vendor?.id || null;
+                              if (!supplierId) {
+                                toast.error(`Select a vendor for ${g.supplier} before saving`);
+                                continue;
+                              }
+                              await createPO({ variables: { input: { supplierId, supplierName: g.supplier, items, status: 'open' } } });
+                            }
+                          };
+                          run().then(() => {
+                            toast.success('Orders created');
+                            setIsVendorOrderExportOpen(false);
+                            fetchOrders();
+                          }).finally(() => setSavingBuilder(false));
+                        } catch (e: any) {
+                          setSavingBuilder(false);
+                          toast.error(e.message || 'Failed to create orders');
+                        }
+                      }} disabled={savingBuilder}>
+                        {savingBuilder ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Save Order(s)
+                      </Button>
+                    </div>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Order History Report Options */}
+              <Dialog open={isOrderHistoryDialogOpen} onOpenChange={setIsOrderHistoryDialogOpen}>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Order History Report</DialogTitle>
+                    <DialogDescription>Select a period and date range for the report.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label>Start date</Label>
+                        <Input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} />
+                      </div>
+                      <div>
+                        <Label>End date</Label>
+                        <Input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Period</Label>
+                      <Select value={reportPeriod} onValueChange={(v: any) => setReportPeriod(v)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select period" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="daily">Daily</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="quarterly">Quarterly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setIsOrderHistoryDialogOpen(false)}>Cancel</Button>
+                    <Button onClick={exportOrderHistoryCsv} className="bg-orange-600 hover:bg-orange-700 text-white">
+                      <FileSpreadsheet className="mr-2 h-4 w-4" /> Export CSV
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
             
             <Dialog open={isAddItemOpen || isEditItemOpen} onOpenChange={(isOpen) => {
@@ -3020,17 +4170,19 @@ export default function InventoryPage() {
                           onChange={(e) => setNewItemForm(prev => ({ ...prev, unit: e.target.value }))}
                         />
                       </div>
-                      <div>
-                        <Label htmlFor="cost-per-unit">Cost Per Unit</Label>
-                        <Input 
-                          id="cost-per-unit" 
-                          type="number" 
-                          step="0.01" 
-                          placeholder="0.00" 
-                          value={newItemForm.costPerUnit}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, costPerUnit: e.target.value }))}
-                        />
-                      </div>
+                      {canViewFinancialData && (
+                        <div>
+                          <Label htmlFor="cost-per-unit">Cost Per Unit</Label>
+                          <Input 
+                            id="cost-per-unit" 
+                            type="number" 
+                            step="0.01" 
+                            placeholder="0.00" 
+                            value={newItemForm.costPerUnit}
+                            onChange={(e) => setNewItemForm(prev => ({ ...prev, costPerUnit: e.target.value }))}
+                          />
+                        </div>
+                      )}
                       <div>
                         <Label htmlFor="supplier">Supplier</Label>
                         <Input 
@@ -3063,23 +4215,23 @@ export default function InventoryPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="min-threshold">Min Threshold</Label>
+                        <Label htmlFor="min-threshold">Par Level</Label>
                         <Input 
                           id="min-threshold" 
                           type="number" 
-                          placeholder="Minimum stock" 
+                          placeholder="Ideal stock (target)" 
                           value={newItemForm.minThreshold}
                           onChange={(e) => setNewItemForm(prev => ({ ...prev, minThreshold: e.target.value }))}
                         />
                       </div>
                       <div>
-                        <Label htmlFor="max-capacity">Par Level (Max Capacity)</Label>
+                        <Label htmlFor="par-level">Par Level</Label>
                         <Input 
-                          id="max-capacity" 
+                          id="par-level" 
                           type="number" 
-                          placeholder="Maximum stock" 
-                          value={newItemForm.maxCapacity}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, maxCapacity: e.target.value }))}
+                          placeholder="Ideal stock (target)" 
+                          value={newItemForm.parLevel || ''}
+                          onChange={(e) => setNewItemForm(prev => ({ ...prev, parLevel: e.target.value }))}
                         />
                       </div>
                       <div>
@@ -3152,7 +4304,7 @@ export default function InventoryPage() {
                         <div className="text-muted-foreground">Order to Par</div>
                         <div className="font-medium">
                           {(() => {
-                            const par = parseFloat(newItemForm.maxCapacity || '0');
+                            const par = parseFloat(newItemForm.minThreshold || '0');
                             const stock = parseFloat(newItemForm.currentStock || '0');
                             const needed = Math.max(0, par - stock);
                             return needed;
@@ -3335,9 +4487,8 @@ export default function InventoryPage() {
             </Dialog>
           </div>
         </div>
-
-        {/* Varuni AI Insights - Only visible to Super Admins */}
-        {isAdmin && (
+        {/* Varuni AI Insights - Only visible to users with financial permissions */}
+        {canViewFinancialData && (
           <Card className="border-orange-200 bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20">
             <CardContent className="p-6">
               <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Inventory Insights</h3>
@@ -3405,35 +4556,38 @@ export default function InventoryPage() {
               </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Total Value</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    ${getTotalValue().toFixed(0)}
-                  </p>
+          {canViewFinancialData && (
+            <Card>
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Total Value</p>
+                    <p className="text-2xl font-bold text-foreground">
+                      ${getTotalValue().toFixed(0)}
+                    </p>
+                  </div>
+                  <TrendingUp className="h-8 w-8 text-orange-600 dark:text-orange-400" />
                 </div>
-                <TrendingUp className="h-8 w-8 text-orange-600 dark:text-orange-400" />
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
-
         {/* Main Content */}
         <Tabs value={selectedTab} onValueChange={setSelectedTab}>
-          <TabsList className={`grid w-full ${isAdmin ? 'grid-cols-4' : 'grid-cols-2'}`}>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="items">Items</TabsTrigger>
-            {isAdmin && <TabsTrigger value="vendors">Vendors</TabsTrigger>}
-            {isAdmin && <TabsTrigger value="analytics">Analytics</TabsTrigger>}
+          <TabsList className="w-full flex flex-wrap gap-2">
+            {availableTabs.includes("overview") && <TabsTrigger className="flex-1 min-w-[120px]" value="overview">Overview</TabsTrigger>}
+            {availableTabs.includes("items") && <TabsTrigger className="flex-1 min-w-[120px]" value="items">Items</TabsTrigger>}
+            {availableTabs.includes("recipes") && <TabsTrigger className="flex-1 min-w-[120px]" value="recipes">Recipes</TabsTrigger>}
+            {canViewFinancialData && <TabsTrigger className="flex-1 min-w-[120px]" value="vendors">Vendors</TabsTrigger>}
+            {canViewFinancialData && <TabsTrigger className="flex-1 min-w-[120px]" value="purchase-orders">Orders</TabsTrigger>}
+            {canViewFinancialData && <TabsTrigger className="flex-1 min-w-[120px]" value="analytics">Analytics</TabsTrigger>}
           </TabsList>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Critical Items */}
-              <Card>
+              <Card className="flex flex-col h-full lg:min-h-[420px]">
                 <CardHeader>
                   <CardTitle className="flex items-center text-red-600">
                     <AlertTriangle className="mr-2 h-5 w-5" />
@@ -3441,61 +4595,73 @@ export default function InventoryPage() {
                   </CardTitle>
                   <CardDescription>Items requiring immediate reordering</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {getCriticalItems().map((item: InventoryItem) => (
-                      <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
+                <CardContent className="flex-1 flex flex-col">
+                  <div className="flex-1 overflow-auto space-y-3 pr-1">
+                    {getCriticalItems().map((item: InventoryItem) => {
+                      const qty = criticalQty[item.id] ?? computeMinOrderQuantity(item);
+                      const checked = !!criticalSelected[item.id];
+                      return (
+                        <div key={item.id} className="p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200/60 dark:border-red-900/30">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <Checkbox checked={checked} onCheckedChange={(v) => handleCriticalToggle(item.id, !!v, item)} />
                         <div>
                           <p className="font-medium text-foreground">{item.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            On Hand: {item.currentStock} {item.unit} • Reorder at: {item.reorderPoint} {item.unit}
+                                <p className="text-xs text-muted-foreground">
+                                  On Hand: {item.currentStock} {item.unit} • Par: {getParLevelValue(item)} {item.unit}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Daily usage: {item.dailyUsage} {item.unit}
+                                  Min Order: {(Math.max(1, Number(item.minimumOrderQty ?? 1)))} case(s) • Case Size: {Math.max(1, Number(item.casePackSize || 1))} {item.unit}/case
                           </p>
                         </div>
-                        <div className="flex space-x-2">
-                          <Button size="sm" className="bg-red-600 hover:bg-red-700">
-                            Reorder
-                          </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-right">
+                                <Label className="text-xs">Qty</Label>
+                                <Input type="number" className="h-8 w-28 text-right" value={qty} onChange={(e) => handleCriticalQtyChange(item.id, Number(e.target.value || 0))} disabled={!checked} />
+                              </div>
                           <Button size="sm" variant="outline" onClick={() => printLabel(item)}>
                             <Printer className="h-4 w-4" />
                           </Button>
                         </div>
                       </div>
-                    ))}
+                        </div>
+                      );
+                    })}
                     {getCriticalItems().length === 0 && (
                       <p className="text-muted-foreground text-center py-4">No critical items - great job!</p>
                     )}
+                  </div>
+                  <div className="mt-4 flex justify-end">
+                    <Button onClick={reorderSelectedCriticalItems} className="bg-red-600 hover:bg-red-700">
+                      Reorder ({Object.values(criticalSelected).filter(Boolean).length} Items)
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
 
               {/* Weekly Waste Summary */}
-              <Card>
+              <Card className="flex flex-col h-full lg:min-h-[420px]">
                 <CardHeader>
                   <CardTitle>Weekly Waste Summary</CardTitle>
                   <CardDescription>Track food waste and cost impact</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
+                <CardContent className="flex-1 flex flex-col">
+                  <div className="space-y-4 flex-1 flex flex-col">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-muted-foreground">Total Waste Cost</span>
-                      <span className="text-lg font-bold text-red-600">${getWeeklyWaste().toFixed(2)}</span>
+                      <span className="text-lg font-bold text-red-600">${Number(getWeeklyWaste() || 0).toFixed(2)}</span>
                     </div>
-                    <div className="space-y-3">
-                      {inventoryItems.filter((item: InventoryItem) => (item.waste || 0) > 0).map((item: InventoryItem) => (
-                        <div key={item.id} className="flex items-center justify-between py-2 border-b border-border">
-                          <div>
-                            <p className="text-sm font-medium text-foreground">{item.name}</p>
-                            <p className="text-xs text-muted-foreground">{item.wasteReason}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-medium">{item.waste || 0} {item.unit}</p>
-                            <p className="text-xs text-red-600">${((item.waste || 0) * item.costPerUnit).toFixed(2)}</p>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="flex-1 min-h-[180px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={weeklyWasteData.data}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
+                          <XAxis dataKey="reason" tick={{ fontSize: 12 }} interval={0} angle={-20} textAnchor="end" height={50} />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                          <Tooltip content={<CustomChartTooltip />} />
+                          <Bar dataKey="count" name="Count" fill="#ef4444" radius={[4,4,0,0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
                     </div>
                   </div>
                 </CardContent>
@@ -3503,7 +4669,7 @@ export default function InventoryPage() {
             </div>
 
             {/* Enhanced Stock Movement Chart */}
-            {isAdmin && (
+            {canViewFinancialData && (
               <Card>
                 <CardHeader>
                   <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
@@ -3669,7 +4835,6 @@ export default function InventoryPage() {
                       </div>
                     )}
                   </div>
-
                   {/* Chart Legend & Summary */}
                   {hasMovementData && (
                     <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -3711,128 +4876,221 @@ export default function InventoryPage() {
                     </CardTitle>
                     <CardDescription>Manage recipes, ingredient costing, and food cost analysis</CardDescription>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button className="bg-orange-600 hover:bg-orange-700 text-white">
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Recipe
-                    </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => refetchRecipes()}>Refresh</Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {/* Recipe Cards */}
-                  <div className="bg-card border border-border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-medium">Chicken Fajitas</h3>
-                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Active</span>
+                {recipesLoading && <p className="text-sm text-muted-foreground">Loading recipes…</p>}
+                {recipesError && <p className="text-sm text-red-600">Failed to load recipes</p>}
+                {!recipesLoading && !recipesError && (recipes.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {recipes.map((r) => (
+                      <div key={r.recipeId} className="p-4 rounded-lg border bg-card text-card-foreground">
+                        <div className="flex items-center justify-between">
+                          <p className="font-medium">{r.name}</p>
+                          {r.isPopular && <Badge variant="secondary">Popular</Badge>}
+                        </div>
+                        <div className="mt-2 text-sm text-muted-foreground space-y-1">
+                          <p>Food Cost: ${Number(r.foodCost || 0).toFixed(2)}</p>
+                          <p>Menu Price: ${Number(r.menuPrice || 0).toFixed(2)}</p>
+                          <p>Food Cost %: {Number(r.foodCostPct || 0).toFixed(1)}%</p>
+                          <p>Gross Margin: ${Number(r.grossMargin || 0).toFixed(2)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-3">No recipes returned from GraphQL.</p>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium">Mapped Toast Items {selectedRestaurant ? `(Restaurant: ${selectedRestaurant})` : ''}</p>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={() => refetchMappings()} disabled={mappingLoading || !selectedRestaurant}>Refresh</Button>
+                      </div>
                     </div>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost:</span>
-                        <span>$8.50</span>
+                    {mappingError && <p className="text-xs text-red-600">Failed to load menu mappings</p>}
+                    {!mappingLoading && mappings.length === 0 && (
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-muted-foreground">{selectedRestaurant ? 'No menu mappings found for selected restaurant.' : 'Select a restaurant in Menu page to view mappings.'}</p>
+                        <Button variant="outline" size="sm" onClick={() => { try { window.location.href = '/dashboard/menu'; } catch {} }}>Open Menu</Button>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Menu Price:</span>
-                        <span>$16.95</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost %:</span>
-                        <span className="text-green-600 font-medium">25.1%</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Margin:</span>
-                        <span className="font-medium">$8.45</span>
-                      </div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t border-border">
-                      <div className="flex space-x-2">
-                        <Button size="sm" variant="outline">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button size="sm" variant="outline">
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {mappings.map((m) => (
+                        <div key={m.id} className="p-4 rounded-lg border bg-card text-card-foreground">
+                          <p className="font-medium">{m.toastItemName || m.toastItemGuid}</p>
+                          <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                            {typeof m.computedCostCache === 'number' && <p>Computed Cost: ${Number(m.computedCostCache || 0).toFixed(2)}</p>}
+                            {Array.isArray(m.recipeSteps) && m.recipeSteps.length > 0 ? (
+                              <div>
+                                <p className="font-medium text-foreground mb-1">Recipe Steps</p>
+                                <ol className="list-decimal list-inside space-y-1">
+                                  {m.recipeSteps.map((s) => (
+                                    <li key={s.step}>{s.instruction}</li>
+                                  ))}
+                                </ol>
+                              </div>
+                            ) : (
+                              <p>No recipe steps mapped.</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-
-                  <div className="bg-card border border-border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-medium">Caesar Salad</h3>
-                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Active</span>
-                    </div>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost:</span>
-                        <span>$3.25</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Menu Price:</span>
-                        <span>$12.95</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost %:</span>
-                        <span className="text-green-600 font-medium">25.1%</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Margin:</span>
-                        <span className="font-medium">$9.70</span>
-                      </div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t border-border">
-                      <div className="flex space-x-2">
-                        <Button size="sm" variant="outline">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button size="sm" variant="outline">
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-card border border-border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-medium">House Burger</h3>
-                      <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs">High Cost</span>
-                    </div>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost:</span>
-                        <span>$7.80</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Menu Price:</span>
-                        <span>$14.95</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Food Cost %:</span>
-                        <span className="text-red-600 font-medium">52.2%</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Margin:</span>
-                        <span className="font-medium">$7.15</span>
-                      </div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t border-border">
-                      <div className="flex space-x-2">
-                        <Button size="sm" variant="outline">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button size="sm" variant="outline">
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
 
-          {/* Purchase Orders Tab */}
-          {isAdmin && (
+          {/* Order View/Edit Dialog (global to avoid tab content unmount) */}
+          <Dialog open={orderDialogOpen} onOpenChange={setOrderDialogOpen}>
+            <DialogContent className="w-full max-w-5xl md:max-w-6xl backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+              <DialogHeader>
+                <DialogTitle>{editingOrder?.poNumber || 'New Order'}</DialogTitle>
+                <DialogDescription>Review and modify the order, then save or export.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <Label>Vendor</Label>
+                    <Input value={editingOrder?.supplierName || ''} onChange={(e) => setEditingOrder((o: any) => ({ ...o, supplierName: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Expected Delivery</Label>
+                    <Input type="date" value={editingOrder?.expectedDeliveryDate || ''} onChange={(e) => setEditingOrder((o: any) => ({ ...o, expectedDeliveryDate: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Status</Label>
+                    <Select value={editingOrder?.status || 'open'} onValueChange={(v) => setEditingOrder((o: any) => ({ ...o, status: v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="open">Open</SelectItem>
+                        <SelectItem value="ordered">Ordered</SelectItem>
+                        <SelectItem value="partial">Partial</SelectItem>
+                        <SelectItem value="received">Received</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label>Notes</Label>
+                  <Textarea value={editingOrder?.notes || ''} onChange={(e) => setEditingOrder((o: any) => ({ ...o, notes: e.target.value }))} />
+                </div>
+                <div className="max-h-[60vh] overflow-auto rounded border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/30">
+                        <th className="px-3 py-2 text-left">Item</th>
+                        <th className="px-3 py-2 text-left">SKU</th>
+                        <th className="px-3 py-2 text-left">Unit</th>
+                        <th className="px-3 py-2 text-right">Qty</th>
+                        <th className="px-3 py-2 text-right">Unit Cost</th>
+                        <th className="px-3 py-2 text-right">Line Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(editingOrder?.items || []).map((it: any, idx: number) => (
+                        <tr key={idx} className="border-t">
+                          <td className="px-3 py-2">{it.name}</td>
+                          <td className="px-3 py-2">{it.vendorSKU || it.sku || ''}</td>
+                          <td className="px-3 py-2">{it.unit}</td>
+                          <td className="px-3 py-2 text-right">
+                            <Input
+                              type="number"
+                              className="h-8 w-24 text-right"
+                              value={it.quantityOrdered}
+                              onChange={(e) => setEditingOrder((o: any) => {
+                                const items = [...o.items];
+                                items[idx] = { ...items[idx], quantityOrdered: Number(e.target.value || 0), totalCost: Number(items[idx].unitCost || 0) * Number(e.target.value || 0) };
+                                return { ...o, items };
+                              })}
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <Input
+                              type="number"
+                              className="h-8 w-24 text-right"
+                              value={it.unitCost}
+                              onChange={(e) => setEditingOrder((o: any) => {
+                                const items = [...o.items];
+                                items[idx] = { ...items[idx], unitCost: Number(e.target.value || 0), totalCost: Number(e.target.value || 0) * Number(items[idx].quantityOrdered || 0) };
+                                return { ...o, items };
+                              })}
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right">${Number(it.totalCost || 0).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOrderDialogOpen(false)}>Close</Button>
+                <Button onClick={saveOrder} className="bg-orange-600 hover:bg-orange-700 text-white">
+                  <Save className="mr-2 h-4 w-4" /> Save Order
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Receive Order Dialog (global) */}
+          <Dialog open={receiveDialogOpen} onOpenChange={setReceiveDialogOpen}>
+            <DialogContent className="w-full max-w-3xl backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
+              <DialogHeader>
+                <DialogTitle>Receive Order</DialogTitle>
+                <DialogDescription>Enter quantities received for each item.</DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[60vh] overflow-auto rounded border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-muted/30">
+                      <th className="px-3 py-2 text-left">Item</th>
+                      <th className="px-3 py-2 text-right">Qty Ordered</th>
+                      <th className="px-3 py-2 text-right">Qty Received</th>
+                      <th className="px-3 py-2 text-center">Confirm</th>
+                      <th className="px-3 py-2 text-center">Credit Missing</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(editingOrder?.items || []).map((it: any, idx: number) => {
+                      const key = it.inventoryItem || it.name;
+                      const ordered = Number(it.quantityOrdered || 0);
+                      const received = Number(receiveForm[key] ?? 0);
+                      const rowClass = received === 0 ? 'bg-red-50 dark:bg-red-900/20' : (received < ordered ? 'bg-yellow-50 dark:bg-yellow-900/20' : '');
+                      return (
+                        <tr key={idx} className={`border-t ${rowClass}`}>
+                          <td className="px-3 py-2">{it.name}</td>
+                          <td className="px-3 py-2 text-right">{ordered}</td>
+                          <td className="px-3 py-2 text-right">
+                            <Input type="number" className="h-8 w-28 text-right" value={receiveForm[key] ?? 0} onChange={(e) => setReceiveForm((f) => ({ ...f, [key]: Number(e.target.value || 0) }))} />
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <Checkbox checked={(receiveForm[key] ?? 0) > 0} onCheckedChange={(v) => setReceiveForm((f) => ({ ...f, [key]: v ? (f[key] || ordered) : 0 }))} />
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <Checkbox checked={Boolean(receiveCredit[key])} onCheckedChange={(v) => setReceiveCredit((c) => ({ ...c, [key]: Boolean(v) }))} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setReceiveDialogOpen(false)}>Cancel</Button>
+                <Button onClick={submitReceiveOrder} className="bg-orange-600 hover:bg-orange-700 text-white">
+                  Submit
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          {/* Purchase Orders Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="purchase-orders" className="space-y-6">
               <Card>
                 <CardHeader>
@@ -3845,25 +5103,25 @@ export default function InventoryPage() {
                       <CardDescription>Create, track, and manage purchase orders</CardDescription>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="outline">
-                        <Filter className="mr-2 h-4 w-4" />
-                        Filter
+                      <Button variant="outline" onClick={fetchOrders}>
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        Refresh
                       </Button>
-                      <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                      <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={openStartOrder}>
                         <Plus className="mr-2 h-4 w-4" />
-                        Create PO
+                        Start Order
                       </Button>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                  <div className="grid grid-cols-1 md:grid-cols-8 gap-4 mb-6">
                     <Card>
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="text-sm text-muted-foreground">Draft POs</p>
-                            <p className="text-2xl font-bold">3</p>
+                            <p className="text-2xl font-bold">{liveMetrics.draft}</p>
                           </div>
                           <Clock className="h-8 w-8 text-yellow-600" />
                         </div>
@@ -3873,8 +5131,8 @@ export default function InventoryPage() {
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="text-sm text-muted-foreground">Pending</p>
-                            <p className="text-2xl font-bold">7</p>
+                            <p className="text-sm text-muted-foreground">Ordered</p>
+                            <p className="text-2xl font-bold">{liveMetrics.sent}</p>
                           </div>
                           <Truck className="h-8 w-8 text-blue-600" />
                         </div>
@@ -3884,8 +5142,30 @@ export default function InventoryPage() {
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div>
+                            <p className="text-sm text-muted-foreground">Partial</p>
+                            <p className="text-2xl font-bold">{liveMetrics.partially_received}</p>
+                          </div>
+                          <AlertTriangle className="h-8 w-8 text-yellow-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Received</p>
+                            <p className="text-2xl font-bold">{liveMetrics.received}</p>
+                          </div>
+                          <CheckCircle className="h-8 w-8 text-green-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
                             <p className="text-sm text-muted-foreground">This Month</p>
-                            <p className="text-2xl font-bold">$12,450</p>
+                            <p className="text-2xl font-bold">${liveMetrics.monthTotal.toFixed(2)}</p>
                           </div>
                           <TrendingUp className="h-8 w-8 text-green-600" />
                         </div>
@@ -3896,9 +5176,31 @@ export default function InventoryPage() {
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="text-sm text-muted-foreground">Average PO</p>
-                            <p className="text-2xl font-bold">$890</p>
+                            <p className="text-2xl font-bold">${liveMetrics.avgTotal.toFixed(2)}</p>
                           </div>
                           <Package className="h-8 w-8 text-purple-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Credits Earned</p>
+                            <p className="text-2xl font-bold">${liveMetrics.creditTotal.toFixed(2)}</p>
+                          </div>
+                          <DollarSign className="h-8 w-8 text-emerald-600" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Cancelled</p>
+                            <p className="text-2xl font-bold">{liveMetrics.cancelled}</p>
+                          </div>
+                          <XCircle className="h-8 w-8 text-red-600" />
                         </div>
                       </CardContent>
                     </Card>
@@ -3917,47 +5219,90 @@ export default function InventoryPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      <TableRow>
-                        <TableCell className="font-medium">PO-2024-001</TableCell>
-                        <TableCell>Sysco Foods</TableCell>
-                        <TableCell>Jan 15, 2024</TableCell>
-                        <TableCell>Jan 17, 2024</TableCell>
-                        <TableCell>$1,245.50</TableCell>
-                        <TableCell>
-                          <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Received</span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
-                            <Button size="sm" variant="outline">View</Button>
-                            <Button size="sm" variant="outline">Print</Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-medium">PO-2024-002</TableCell>
-                        <TableCell>Fresh Farm Co</TableCell>
-                        <TableCell>Jan 16, 2024</TableCell>
-                        <TableCell>Jan 18, 2024</TableCell>
-                        <TableCell>$890.25</TableCell>
-                        <TableCell>
-                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">Sent</span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
-                            <Button size="sm" variant="outline">View</Button>
-                            <Button size="sm" variant="outline">Track</Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                      {ordersLoading && (
+                        <TableRow><TableCell colSpan={7}>Loading orders…</TableCell></TableRow>
+                      )}
+                      {ordersError && !ordersLoading && (
+                        <TableRow><TableCell colSpan={7} className="text-red-600">{ordersError}</TableCell></TableRow>
+                      )}
+                      {!ordersLoading && !ordersError && orders.length === 0 && (
+                        <TableRow><TableCell colSpan={7}>No orders yet</TableCell></TableRow>
+                      )}
+                      {orders.map((o: any) => (
+                        <TableRow key={o._id || o.id}>
+                          <TableCell className="font-medium">{o.poNumber}</TableCell>
+                          <TableCell>{o.supplierName || o.supplier?.name || ''}</TableCell>
+                          <TableCell>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}</TableCell>
+                          <TableCell>{o.expectedDeliveryDate ? new Date(o.expectedDeliveryDate).toLocaleDateString() : ''}</TableCell>
+                          <TableCell>${Number(o.total || 0).toFixed(2)}</TableCell>
+                          <TableCell>
+                            {(() => {
+                              const s = getUiStatusFromModel(o.status);
+                              const map: any = {
+                                open: 'bg-gray-100 text-gray-800',
+                                ordered: 'bg-blue-100 text-blue-800',
+                                partial: 'bg-yellow-100 text-yellow-800',
+                                received: 'bg-green-100 text-green-800',
+                                cancelled: 'bg-red-100 text-red-800',
+                              };
+                              return <span className={`px-2 py-1 rounded text-xs font-medium ${map[s] || 'bg-gray-100 text-gray-800'}`}>{s.charAt(0).toUpperCase()+s.slice(1)}</span>;
+                            })()}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" onClick={() => { try { toast.info(`Opening order ${o?.poNumber || 'order'}…`); } catch {} setTimeout(() => { setEditingOrder(JSON.parse(JSON.stringify(o))); setOrderDialogOpen(true); }, 0); }}>View</Button>
+                              <Button size="sm" variant="outline" onClick={() => exportOrderCsv(o)}><FileSpreadsheet className="mr-2 h-4 w-4" />CSV</Button>
+                              <Button size="sm" variant="outline" onClick={() => exportOrderXls(o)}><FileSpreadsheet className="mr-2 h-4 w-4" />Excel</Button>
+                              <Button size="sm" variant="outline" onClick={() => exportOrderPdf(o)}><FileText className="mr-2 h-4 w-4" />PDF</Button>
+                              <Button size="sm" variant="outline" onClick={() => openReceiveOrder(o)} disabled={!(o?.items && o.items.length)}><CheckCircle className="mr-2 h-4 w-4" />Receive</Button>
+                              {getUiStatusFromModel(o.status) === 'partial' && (
+                                <Button size="sm" variant="outline" onClick={() => {
+                                  // Build replacement order draft from missing items heuristic: items with qtyOrdered > qtyReceived
+                                  const missingItems = (o.items || []).filter((it: any) => Number(it.quantityOrdered || 0) > (Number(it.quantityReceived || 0) + Number(it.creditedQuantity || 0)));
+                                  if (missingItems.length === 0) { toast.info('No missing items to reorder'); return; }
+                                  const draftItems = missingItems.map((it: any) => ({
+                                    inventoryItem: it.inventoryItem,
+                                    name: it.name,
+                                    sku: it.vendorSKU || it.sku,
+                                    vendorSKU: it.vendorSKU,
+                                    syscoSKU: it.syscoSKU,
+                                    unit: it.unit,
+                                    unitCost: Number(it.unitCost || 0),
+                                    quantityOrdered: Math.max(1, Number(it.quantityOrdered || 0) - Number(it.quantityReceived || 0)),
+                                    totalCost: Number(it.unitCost || 0) * Math.max(1, Number(it.quantityOrdered || 0) - Number(it.quantityReceived || 0)),
+                                    notes: `Replacement for ${o.poNumber}`
+                                  }));
+                                  setEditingOrder({
+                                    poNumber: undefined,
+                                    supplierId: o.supplier?._id || o.supplier,
+                                    supplierName: o.supplierName || o.supplier?.name,
+                                    status: 'open',
+                                    expectedDeliveryDate: '',
+                                    items: draftItems,
+                                    notes: `Replacement order for missing items from ${o.poNumber}`
+                                  });
+                                  try { toast.info(`Opening replacement order for ${o?.poNumber || 'order'}…`); } catch {}
+                                  setTimeout(() => setOrderDialogOpen(true), 0);
+                                }}>Create Replacement</Button>
+                              )}
+                              {canViewFinancialData && (
+                                <>
+                                  <Button size="sm" variant="outline" onClick={() => handleResetOrder(o)}>Reset</Button>
+                                  <Button size="sm" variant="destructive" onClick={() => handleDeleteOrder(o)}>Delete</Button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
                     </TableBody>
                   </Table>
                 </CardContent>
               </Card>
             </TabsContent>
           )}
-
-          {/* Receiving Tab */}
-          {isAdmin && (
+          {/* Receiving Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="receiving" className="space-y-6">
               <Card>
                 <CardHeader>
@@ -4050,9 +5395,8 @@ export default function InventoryPage() {
               </Card>
             </TabsContent>
           )}
-
-          {/* Inventory Counts Tab */}
-          {isAdmin && (
+          {/* Inventory Counts Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="counts" className="space-y-6">
               <Card>
                 <CardHeader>
@@ -4176,129 +5520,12 @@ export default function InventoryPage() {
               </Card>
             </TabsContent>
           )}
-
-          {/* Enhanced Reports Tab */}
-          {isAdmin && (
+          {/* Enhanced Reports Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="reports" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
-                    <div>
-                      <CardTitle className="flex items-center">
-                        <BarChart className="mr-2 h-5 w-5" />
-                        Advanced Reports & Analytics
-                      </CardTitle>
-                      <CardDescription>Comprehensive reporting and business intelligence</CardDescription>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="outline">
-                        <Filter className="mr-2 h-4 w-4" />
-                        Filter
-                      </Button>
-                      <Button variant="outline">
-                        <Download className="mr-2 h-4 w-4" />
-                        Export All Reports
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">Food Cost Analysis</h3>
-                          <TrendingUp className="h-5 w-5 text-green-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Detailed food cost percentages, trends, and variance analysis
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">ABC Analysis</h3>
-                          <Package className="h-5 w-5 text-blue-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Categorize inventory by value and importance for optimization
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">Supplier Performance</h3>
-                          <Truck className="h-5 w-5 text-purple-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          On-time delivery, quality ratings, and cost analysis
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">Waste Analysis</h3>
-                          <TrendingDown className="h-5 w-5 text-red-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Track waste patterns, reasons, and cost impact
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">Recipe Profitability</h3>
-                          <Scale className="h-5 w-5 text-orange-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Menu item margins, food costs, and pricing optimization
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="cursor-pointer hover:shadow-md transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="font-medium">Inventory Turnover</h3>
-                          <Clock className="h-5 w-5 text-teal-600" />
-                        </div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Track inventory velocity and cash flow optimization
-                        </p>
-                        <Button size="sm" variant="outline" className="w-full">
-                          Generate Report
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </CardContent>
-              </Card>
+              <InventoryReportsPanel />
             </TabsContent>
           )}
-
           {/* Items Tab - Restaurant Standard Inventory */}
           <TabsContent value="items" className="space-y-6">
             <Card>
@@ -4414,10 +5641,12 @@ export default function InventoryPage() {
                           <TableCell>
                             <div>
                               <p className="font-medium">{item.currentStock} {item.unit}</p>
-                              <p className="text-xs text-muted-foreground">${(item.currentStock * item.costPerUnit).toFixed(2)}</p>
+                              {canViewFinancialData && (
+                                <p className="text-xs text-muted-foreground">${(item.currentStock * item.costPerUnit).toFixed(2)}</p>
+                              )}
                             </div>
                           </TableCell>
-                          <TableCell className="text-muted-foreground">{item.minThreshold} {item.unit}</TableCell>
+                          <TableCell className="text-muted-foreground">{getParLevelValue(item)} {item.unit}</TableCell>
                           <TableCell>
                             <div className="flex flex-wrap gap-1">
                               {(() => {
@@ -4430,7 +5659,7 @@ export default function InventoryPage() {
                           </TableCell>
                           <TableCell>
                             {(() => {
-                              const liveStatus = computeStatus(item.currentStock, item.minThreshold);
+                              const liveStatus = computeStatus(item.currentStock, item.minThreshold, getParLevelValue(item));
                               return (
                                 <span className={`px-2 py-1 text-xs rounded ${getStatusColor(liveStatus)}`}>
                                   {friendlyStatusLabel(liveStatus)}
@@ -4444,7 +5673,7 @@ export default function InventoryPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            {Math.max(0, (item.maxCapacity || 0) - (item.currentStock || 0))}
+                            {Math.max(0, (getParLevelValue(item)) - (item.currentStock || 0))}
                           </TableCell>
                           <TableCell className="text-muted-foreground">{format(new Date(item.lastUpdated), "P")}</TableCell>
                           <TableCell>
@@ -4536,8 +5765,8 @@ export default function InventoryPage() {
             </Card>
           </TabsContent>
 
-          {/* Vendors Tab - Only visible to admins */}
-          {isAdmin && (
+          {/* Vendors Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="vendors" className="space-y-6">
               <Card>
                 <CardHeader>
@@ -4551,163 +5780,10 @@ export default function InventoryPage() {
             </TabsContent>
           )}
 
-          {/* Analytics Tab - Only visible to admins */}
-          {isAdmin && (
+          {/* Analytics Tab - Financial permission required */}
+          {canViewFinancialData && (
             <TabsContent value="analytics" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Inventory Analytics</CardTitle>
-                  <CardDescription>Detailed performance metrics and trends</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {/* Enhanced Analytics Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    <Card>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-muted-foreground">Total Value</p>
-                            <p className="text-2xl font-bold">${getTotalValue().toLocaleString()}</p>
-                            <p className="text-xs text-green-600">+2.5% month</p>
-                    </div>
-                          <Package className="h-8 w-8 text-blue-600" />
-                    </div>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-muted-foreground">Food Cost %</p>
-                            <p className="text-2xl font-bold">28.5%</p>
-                            <p className="text-xs text-green-600">Target: 30%</p>
-                    </div>
-                          <TrendingDown className="h-8 w-8 text-green-600" />
-                    </div>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-muted-foreground">Weekly Waste</p>
-                            <p className="text-2xl font-bold">${getWeeklyWaste().toFixed(0)}</p>
-                            <p className="text-xs text-red-600">+12% week</p>
-                          </div>
-                          <AlertTriangle className="h-8 w-8 text-red-600" />
-                        </div>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-muted-foreground">Turnover Rate</p>
-                            <p className="text-2xl font-bold">6.2x</p>
-                            <p className="text-xs text-green-600">Above average</p>
-                          </div>
-                          <TrendingUp className="h-8 w-8 text-green-600" />
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-                  
-                  {/* AI Insights Section */}
-                  <div className="mb-6 p-4 bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
-                    <div className="flex items-center mb-3">
-                      <Brain className="mr-2 h-5 w-5 text-orange-600" />
-                      <h3 className="font-medium text-orange-900 dark:text-orange-100">AI-Powered Insights</h3>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
-                        <div className="flex items-center mb-2">
-                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                          <span className="text-sm font-medium">Auto-Reorder Active</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">12 items scheduled for reordering</p>
-                      </div>
-                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
-                        <div className="flex items-center mb-2">
-                          <div className="w-2 h-2 bg-yellow-500 rounded-full mr-2"></div>
-                          <span className="text-sm font-medium">Price Alerts</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">3 items with price increases</p>
-                      </div>
-                      <div className="bg-white dark:bg-gray-800 p-3 rounded border">
-                        <div className="flex items-center mb-2">
-                          <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
-                          <span className="text-sm font-medium">Usage Forecast</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">15% protein increase predicted</p>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="relative">
-                    <div className={`transition-all duration-300 ${!hasMovementData ? 'blur-sm pointer-events-none' : ''}`}>
-                  <ResponsiveContainer width="100%" height={400}>
-                        <BarChart data={hasMovementData ? movementData : []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                      <XAxis 
-                        dataKey="date" 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
-                        className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
-                      />
-                      <YAxis 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
-                        className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
-                      />
-                          <Tooltip 
-                            content={({ active, payload, label }) => {
-                              if (active && payload && payload.length > 0) {
-                                return (
-                                  <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
-                                    <p className="font-medium text-gray-900 dark:text-gray-100">{label}</p>
-                                    {payload.map((entry, index) => (
-                                      <p key={index} style={{ color: entry.color }} className="text-sm">
-                                        {entry.name}: {entry.value} units
-                                      </p>
-                                    ))}
-                                  </div>
-                                );
-                              }
-                              return null;
-                            }}
-                          />
-                          <Bar dataKey="usage" fill="#ef4444" name="Daily Usage" />
-                          <Bar dataKey="received" fill="#22c55e" name="Received" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                    </div>
-
-                    {/* Analytics Data Unavailable Overlay */}
-                    {!hasMovementData && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
-                        <div className="text-center">
-                          <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center">
-                            <BarChartIcon className="w-8 h-8 text-gray-400" />
-                          </div>
-                          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
-                            Analytics Unavailable
-                          </h3>
-                          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 max-w-xs">
-                            Advanced analytics require transaction history. Start using the inventory system to generate insights.
-                          </p>
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => setSelectedTab('overview')}
-                          >
-                            View Overview
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <InventoryAnalyticsPanel />
             </TabsContent>
           )}
         </Tabs>
@@ -4948,7 +6024,6 @@ export default function InventoryPage() {
                      💡 Drag elements to reposition them
                    </div>
                  </div>
-                 
                  <div className="border-2 border-dashed border-border rounded-lg p-6 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
                    <div 
                      className="relative border-2 border-border bg-white shadow-lg overflow-hidden"
@@ -5105,9 +6180,7 @@ export default function InventoryPage() {
              </DialogFooter>
            </DialogContent>
          </Dialog>
-
         {/* Quantity Modification Modal (repurposed to Quick Count later; keeping for SAM future) */}
-
         {/* Quick Count Modal */}
         <Dialog open={isQuickCountOpen} onOpenChange={setIsQuickCountOpen}>
           <DialogContent className="max-w-2xl p-0">
@@ -5255,7 +6328,6 @@ export default function InventoryPage() {
             </div>
           </DialogContent>
         </Dialog>
-
         {/* Camera Counting Modal */}
         <Dialog open={isCameraCountingOpen} onOpenChange={setIsCameraCountingOpen}>
           <DialogContent className="max-w-4xl">
@@ -5826,7 +6898,6 @@ export default function InventoryPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-
         {/* Item Detail Modal */}
         {selectedItem && detailViewItem && (
           <Dialog open={!!selectedItem} onOpenChange={() => {
