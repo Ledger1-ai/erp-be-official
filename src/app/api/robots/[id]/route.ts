@@ -3,7 +3,7 @@ import { createServerBearCloudAPI } from '@/lib/services/bear-cloud-server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: any
 ) {
   try {
     console.log(`📡 API Route: Getting robot ${params.id}`);

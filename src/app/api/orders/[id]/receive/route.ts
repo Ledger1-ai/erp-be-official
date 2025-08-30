@@ -6,7 +6,7 @@ import { InventoryTransaction } from "@/lib/models/InventoryTransaction";
 import { extractTokenFromHeader, verifyToken } from "@/lib/auth/jwt";
 import { User } from "@/lib/models/User";
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: any) {
   try {
     await connectDB();
     const body = await request.json();

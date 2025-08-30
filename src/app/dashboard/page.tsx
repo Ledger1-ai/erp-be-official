@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { usePermissions } from "@/lib/hooks/use-permissions";
 import { ConditionalRender } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRouter } from "next/navigation";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
+import { LoadingBarChart, LoadingDonutPie } from "@/components/ui/loading-charts";
 import {
   BarChart,
   Bar,
@@ -36,8 +38,12 @@ import {
   Star,
   Zap,
   Loader2,
+  Bot,
+  Utensils,
 } from "lucide-react";
 import { useTeamMembers, useInventoryItems, useAnalytics, useLowStockItems } from "@/lib/hooks/use-graphql";
+import WidgetsGrid from "@/components/dashboard/WidgetsGrid";
+import Link from "next/link";
 
 interface TeamMember {
   name: string;
@@ -64,40 +70,103 @@ const inventoryData = [
   { name: "Beverages", value: 5, color: "#ffedd5" },
 ];
 
-const recentActivities = [
-  {
-    id: 1,
-    type: "order",
-    message: "New order #2841 received",
-    time: "2 minutes ago",
-    status: "success",
-  },
-  {
-    id: 2,
-    type: "inventory",
-    message: "Low stock alert: Chicken breast",
-    time: "15 minutes ago",
-    status: "warning",
-  },
-  {
-    id: 3,
-    type: "staff",
-    message: "Sarah clocked in for evening shift",
-    time: "1 hour ago",
-    status: "info",
-  },
-  {
-    id: 4,
-    type: "payment",
-    message: "Invoice #INV-2024-001 paid",
-    time: "2 hours ago",
-    status: "success",
-  },
-];
+function timeAgo(iso: string | number | Date | undefined) {
+  if (!iso) return "just now";
+  const t = typeof iso === 'string' || typeof iso === 'number' ? new Date(iso).getTime() : (iso as Date).getTime();
+  const diff = Math.max(0, Date.now() - t);
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h>1?'s':''} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d>1?'s':''} ago`;
+}
+
+function RecentActivity() {
+  const [items, setItems] = useState<Array<{ id: string; type: string; message: string; time: string; status: 'success'|'warning'|'info' }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/activity/recent');
+        const json = await res.json();
+        if (mounted && json?.success && Array.isArray(json.data)) setItems(json.data);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 60 * 1000);
+    return () => { mounted = false; clearInterval(id); };
+  }, []);
+
+  if (loading && items.length === 0) {
+    return <div className="space-y-3">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />
+      ))}
+    </div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {items.map((activity) => (
+        <div key={activity.id} className="flex items-start space-x-3">
+          <div className={`rounded-full p-1 ${
+            activity.status === "success" ? "bg-green-100 dark:bg-green-900/30" :
+            activity.status === "warning" ? "bg-yellow-100 dark:bg-yellow-900/30" :
+            "bg-blue-100 dark:bg-blue-900/30"
+          }`}>
+            {activity.status === "success" && <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />}
+            {activity.status === "warning" && <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />}
+            {activity.status === "info" && <Clock className="h-4 w-4 text-blue-600 dark:text-blue-400" />}
+          </div>
+          <div className="flex-1">
+            <p className="text-sm text-foreground">{activity.message}</p>
+            <p className="text-xs text-muted-foreground">{timeAgo(activity.time)}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function QuickActions() {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Link href="/dashboard/inventory" className="h-auto p-3 flex flex-col items-center border rounded-md hover:bg-muted transition-colors">
+        <Package className="h-4 w-4 mb-1" />
+        <span className="text-xs">Inventory</span>
+      </Link>
+      <Link href="/dashboard/menu" className="h-auto p-3 flex flex-col items-center border rounded-md hover:bg-muted transition-colors">
+        <Utensils className="h-4 w-4 mb-1" />
+        <span className="text-xs">Menu</span>
+      </Link>
+      <Link href="/dashboard/team" className="h-auto p-3 flex flex-col items-center border rounded-md hover:bg-muted transition-colors">
+        <Users className="h-4 w-4 mb-1" />
+        <span className="text-xs">Team</span>
+      </Link>
+      <Link href="/dashboard/robotic-fleets" className="h-auto p-3 flex flex-col items-center border rounded-md hover:bg-muted transition-colors">
+        <Bot className="h-4 w-4 mb-1" />
+        <span className="text-xs">Robotics</span>
+      </Link>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
+  const router = useRouter();
   const permissions = usePermissions();
   const [selectedMetric, setSelectedMetric] = useState("sales");
+  const [ordersToday, setOrdersToday] = useState<{ revenue: number; ordersCompleted: number; avgOrderValue: number; avgTurnoverMinutes?: number } | null>(null);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [weeklySeries, setWeeklySeries] = useState<Array<{ date: string; sales: number; orders: number; avgTurnoverMinutes?: number }>>([]);
+  const [staffSchedule, setStaffSchedule] = useState<Array<{ name: string; role: string; shift: string; status: string }>>([]);
+  const [activeShiftsCount, setActiveShiftsCount] = useState(0);
+  const [activeShiftsLoading, setActiveShiftsLoading] = useState(false);
   
   // Permission checks for dashboard content
   const canViewFinancialData = permissions.canViewFinancialData();
@@ -112,36 +181,36 @@ export default function DashboardPage() {
   const activeStaff = teamData?.teamMembers?.filter((member: TeamMember) => member.status === 'active').length || 0;
   const revenue = analyticsData?.analytics?.revenue || 0;
   const orders = analyticsData?.analytics?.orders || 0;
-  const tableTurnover = analyticsData?.analytics?.tableTurnover || 0;
+  const tableTurnover = ordersToday?.avgTurnoverMinutes || analyticsData?.analytics?.tableTurnover || 0;
 
   const metrics = [
     {
       title: "Today's Revenue",
-      value: `$${revenue.toLocaleString()}`,
+      value: `$${(ordersToday?.revenue ?? revenue).toLocaleString()}`,
       change: "+12.5%",
       changeType: "positive",
       icon: DollarSign,
-      loading: analyticsLoading,
+      loading: analyticsLoading || ordersLoading,
     },
     {
       title: "Orders",
-      value: orders.toString(),
+      value: (ordersToday?.ordersCompleted ?? orders).toString(),
       change: "+8.2%",
       changeType: "positive",
       icon: Package,
-      loading: analyticsLoading,
+      loading: analyticsLoading || ordersLoading,
     },
     {
       title: "Active Staff",
-      value: activeStaff.toString(),
+      value: activeShiftsCount.toString(),
       change: "No change",
       changeType: "neutral",
       icon: Users,
-      loading: teamLoading,
+      loading: activeShiftsLoading,
     },
     {
-      title: "Table Turnover",
-      value: `${tableTurnover.toFixed(1)}x`,
+      title: "Avg Table Time",
+      value: `${Number(tableTurnover).toFixed(1)} min`,
       change: "-2.1%",
       changeType: "negative",
       icon: Calendar,
@@ -149,17 +218,89 @@ export default function DashboardPage() {
     },
   ];
 
-  // Generate staff schedule from real data
-  const staffSchedule = teamData?.teamMembers?.slice(0, 4).map((member: TeamMember) => ({
-    name: member.name,
-    role: member.role,
-    shift: "2:00 PM - 10:00 PM", // This would come from shifts data
-    status: member.status === 'active' ? 'active' : 'scheduled'
-  })) || [];
+  // Live orders metrics from Toast
+  const fetchOrdersToday = async (force = false) => {
+    try {
+      setOrdersLoading(true);
+      const res = await fetch(`/api/toast/orders-metrics${force ? '?force=true' : ''}`);
+      const json = await res.json();
+      if (json?.success) setOrdersToday(json.data);
+    } catch {
+      // ignore
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrdersToday();
+    const id = setInterval(() => fetchOrdersToday(false), 10 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Load weekly performance for charts
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/toast/weekly-performance');
+        const json = await res.json();
+        if (json?.success) setWeeklySeries(json.data);
+      } catch {}
+    })();
+  }, []);
+
+  const chartData = weeklySeries.length > 0
+    ? weeklySeries.map(d => ({ name: d.date.slice(5), sales: d.sales, orders: d.orders, turnover: d.avgTurnoverMinutes || 0 }))
+    : salesData;
+
+  // Load active staff from 7shifts (show real names and times)
+  useEffect(() => {
+    (async () => {
+      try {
+        setActiveShiftsLoading(true);
+        const res = await fetch('/api/7shifts/active-shifts');
+        const json = await res.json();
+        if (json?.success && (Array.isArray(json?.data) || json?.grouped)) {
+          // Prefer grouped if available
+          const grouped = json.grouped as Record<string, any[]> | undefined;
+          let list: any[] = [];
+          if (grouped && typeof grouped === 'object') {
+            for (const [dept, arr] of Object.entries(grouped)) {
+              for (const s of (arr as any[])) list.push({ ...s, department: dept });
+            }
+          } else if (Array.isArray(json.data)) {
+            list = json.data;
+          }
+          const mapped = list.map((s: any) => ({
+            name: s.name,
+            role: s.role || 'Shift',
+            shift: s.range || '—',
+            status: 'active',
+            department: s.department || 'Other',
+          }));
+          setActiveShiftsCount(mapped.length);
+          setStaffSchedule(mapped);
+          return;
+        }
+      } catch {}
+      finally {
+        setActiveShiftsLoading(false);
+      }
+      const fallback = teamData?.teamMembers?.slice(0, 4).map((member: TeamMember) => ({
+        name: member.name,
+        role: member.role,
+        shift: '—',
+        status: member.status === 'active' ? 'active' : 'scheduled'
+      })) || [];
+      setStaffSchedule(fallback);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
+        {/* No-op */}
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -250,9 +391,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
           {/* Analytics Charts */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 h-full flex flex-col space-y-6">
             {/* Sales Chart - Financial permission required */}
             {canViewFinancialData && (
               <Card>
@@ -262,13 +403,17 @@ export default function DashboardPage() {
                 </CardHeader>
               <CardContent>
                 <Tabs value={selectedMetric} onValueChange={setSelectedMetric}>
-                  <TabsList className="grid w-full grid-cols-2">
+                  <TabsList className="grid w-full grid-cols-3">
                     <TabsTrigger value="sales">Sales</TabsTrigger>
                     <TabsTrigger value="orders">Orders</TabsTrigger>
+                    <TabsTrigger value="turnover">Turnover</TabsTrigger>
                   </TabsList>
                   <TabsContent value="sales" className="mt-6">
+                    {weeklySeries.length === 0 ? (
+                      <LoadingBarChart />
+                    ) : (
                     <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={salesData}>
+                      <BarChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
                         <XAxis 
                           dataKey="name" 
@@ -281,14 +426,46 @@ export default function DashboardPage() {
                           axisLine={{ stroke: "#e2e8f0" }}
                           className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                         />
-                        <Tooltip content={<CustomChartTooltip />} />
-                        <Bar dataKey="sales" fill="#ea580c" />
+                        <Tooltip content={<CustomChartTooltip formatter={(v) => [
+                          typeof v === 'number' ? `$${v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}` : String(v),
+                          'Sales'
+                        ]} />} />
+                        {
+                          (() => {
+                            const values = chartData.map((d: any) => Number(d.sales || 0));
+                            const max = Math.max(1, ...values);
+                            // Stepped solid orange palette (light -> dark)
+                            const shades = [
+                              '#ffedd5', // 100 - lightest
+                              '#fed7aa', // 200
+                              '#fdba74', // 300
+                              '#fb923c', // 400
+                              '#f97316', // 500
+                              '#ea580c', // 600
+                              '#c2410c'  // 700 - darkest
+                            ];
+                            return (
+                              <Bar dataKey="sales">
+                                {chartData.map((entry: any, index: number) => {
+                                  const ratio = Math.min(1, Number(entry.sales || 0) / max);
+                                  const shadeIndex = Math.max(0, Math.min(shades.length - 1, Math.floor(ratio * (shades.length - 1))));
+                                  const color = shades[shadeIndex];
+                                  return <Cell key={`cell-sales-${index}`} fill={color} />
+                                })}
+                              </Bar>
+                            );
+                          })()
+                        }
                       </BarChart>
                     </ResponsiveContainer>
+                    )}
                   </TabsContent>
                   <TabsContent value="orders" className="mt-6">
+                    {weeklySeries.length === 0 ? (
+                      <LoadingBarChart />
+                    ) : (
                     <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={salesData}>
+                      <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
                         <XAxis 
                           dataKey="name" 
@@ -301,7 +478,10 @@ export default function DashboardPage() {
                           axisLine={{ stroke: "#e2e8f0" }}
                           className="dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700 dark:[&_.recharts-text]:fill-slate-400"
                         />
-                        <Tooltip content={<CustomChartTooltip />} />
+                        <Tooltip content={<CustomChartTooltip formatter={(v, name) => [
+                          typeof v === 'number' ? v.toFixed(0) : String(v),
+                          name
+                        ]} />} />
                         <Line 
                           type="monotone" 
                           dataKey="orders" 
@@ -312,6 +492,44 @@ export default function DashboardPage() {
                         />
                       </LineChart>
                     </ResponsiveContainer>
+                    )}
+                  </TabsContent>
+                  <TabsContent value="turnover" className="mt-6">
+                    {weeklySeries.length === 0 ? (
+                      <LoadingBarChart />
+                    ) : (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
+                        <XAxis 
+                          dataKey="name" 
+                          tick={{ fill: "#64748b", fontSize: 12 }}
+                          axisLine={{ stroke: "#e2e8f0" }}
+                          className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
+                        />
+                        <YAxis 
+                          tick={{ fill: "#64748b", fontSize: 12 }}
+                          axisLine={{ stroke: "#e2e8f0" }}
+                          className="dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700 dark:[&_.recharts-text]:fill-slate-400"
+                        />
+                        <Tooltip content={<CustomChartTooltip formatter={(v) => {
+                          const val = Number(v || 0);
+                          const mins = Math.floor(val);
+                          const secs = Math.round((val - mins) * 60);
+                          const label = `${mins}m ${secs.toString().padStart(2,'0')}s`;
+                          return [label, 'Avg Table Time'];
+                        }} />} />
+                        <Line 
+                          type="monotone" 
+                          dataKey="turnover" 
+                          stroke="#0ea5e9" 
+                          strokeWidth={2}
+                          dot={{ fill: "#0ea5e9", strokeWidth: 2, r: 4 }}
+                          activeDot={{ r: 6, fill: "#0ea5e9" }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                    )}
                   </TabsContent>
                 </Tabs>
               </CardContent>
@@ -319,75 +537,147 @@ export default function DashboardPage() {
             )}
 
             {/* Current Staff Schedule */}
-            <Card>
+            <Card className="flex-1 flex flex-col">
               <CardHeader>
                 <CardTitle>Today&apos;s Staff Schedule</CardTitle>
-                <CardDescription>Current and upcoming shifts</CardDescription>
+                <CardDescription>Current and upcoming shifts, grouped by department</CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {staffSchedule.map((staff: { name: string; role: string; shift: string; status: string }, index: number) => (
-                                                                <div key={index} className="flex items-center justify-between p-4 bg-card rounded-lg border-2 border-border shadow-md hover:shadow-lg transition-shadow">
-                        <div className="flex items-center space-x-3">
-                          <div className="bg-orange-600 rounded-full w-10 h-10 flex items-center justify-center text-white font-semibold">
-                            {staff.name.split(" ").map((n: string) => n[0]).join("")}
-                          </div>
-                        <div>
-                          <p className="font-semibold text-foreground">{staff.name}</p>
-                          <p className="text-sm text-muted-foreground">{staff.role}</p>
+              <CardContent className="flex-1">
+                <div className="h-full overflow-y-auto pr-1 space-y-4">
+                  {(() => {
+                    const groups: Record<string, Array<{ name: string; role: string; shift: string; status: string }>> = {};
+                    for (const s of staffSchedule as any[]) {
+                      const dept = (s.department || 'Other') as string;
+                      if (!groups[dept]) groups[dept] = [];
+                      groups[dept].push(s);
+                    }
+                    const entries = Object.entries(groups);
+                    if (entries.length === 0) return <p className="text-sm text-muted-foreground">No active shifts</p>;
+                    return entries.map(([dept, members]) => (
+                      <div key={dept}>
+                        <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">{dept}</div>
+                        <div className="space-y-3">
+                          {members.map((staff, index) => (
+                            <div key={`${dept}-${index}`} className="flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border">
+                              <div className="flex items-center space-x-3">
+                                <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
+                                  {staff.name.split(" ").map((n: string) => n[0]).join("")}
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-foreground text-sm">{staff.name}</p>
+                                  <p className="text-xs text-muted-foreground">{staff.role}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-semibold text-foreground">{staff.shift}</p>
+                                <div className="flex items-center justify-end mt-1">
+                                  {staff.status === "active" ? (
+                                    <div className="flex items-center text-green-600 dark:text-green-400">
+                                      <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full mr-2"></div>
+                                      <span className="text-[10px]">Active</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center text-muted-foreground">
+                                      <Clock className="w-3 h-3 mr-1" />
+                                      <span className="text-[10px]">Scheduled</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-foreground">{staff.shift}</p>
-                        <div className="flex items-center justify-end mt-1">
-                          {staff.status === "active" ? (
-                            <div className="flex items-center text-green-600 dark:text-green-400">
-                              <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full mr-2"></div>
-                              <span className="text-xs">Active</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center text-muted-foreground">
-                              <Clock className="w-3 h-3 mr-1" />
-                              <span className="text-xs">Scheduled</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    ));
+                  })()}
                 </div>
               </CardContent>
             </Card>
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-6">
+          <div className="space-y-4 h-full flex flex-col">
             {/* Inventory Overview */}
-            <Card>
+            <Card className="flex-1">
               <CardHeader>
                 <CardTitle>Inventory Overview</CardTitle>
                 <CardDescription>Current stock levels by category</CardDescription>
               </CardHeader>
               <CardContent>
+                {!(inventoryApiData?.inventoryItems && Array.isArray(inventoryApiData.inventoryItems) && inventoryApiData.inventoryItems.length > 0) ? (
+                  <LoadingDonutPie />
+                ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
                     <Pie
-                      data={inventoryData}
+                      data={(inventoryApiData?.inventoryItems && Array.isArray(inventoryApiData.inventoryItems) && inventoryApiData.inventoryItems.length > 0)
+                        ? (() => {
+                            const byCat: Record<string, number> = {};
+                            for (const it of inventoryApiData.inventoryItems as Array<{ category?: string; currentStock?: number }>) {
+                              const cat = it.category || 'Other';
+                              byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
+                            }
+                            const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
+                            const palette = {
+                              Proteins: '#ea580c',
+                              Vegetables: '#f97316',
+                              Dairy: '#fb923c',
+                              Pantry: '#fed7aa',
+                              Beverages: '#ffedd5'
+                            } as Record<string, string>;
+                            return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                          })()
+                        : inventoryData}
                       cx="50%"
                       cy="50%"
                       innerRadius={60}
                       outerRadius={80}
                       dataKey="value"
                     >
-                      {inventoryData.map((entry: { color: string | undefined }, index: number) => (
+                      {((inventoryApiData?.inventoryItems && Array.isArray(inventoryApiData.inventoryItems) && inventoryApiData.inventoryItems.length > 0)
+                        ? (() => {
+                            const byCat: Record<string, number> = {};
+                            for (const it of inventoryApiData.inventoryItems as Array<{ category?: string; currentStock?: number }>) {
+                              const cat = it.category || 'Other';
+                              byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
+                            }
+                            const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
+                            const palette = {
+                              Proteins: '#ea580c',
+                              Vegetables: '#f97316',
+                              Dairy: '#fb923c',
+                              Pantry: '#fed7aa',
+                              Beverages: '#ffedd5'
+                            } as Record<string, string>;
+                            return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                          })()
+                        : inventoryData).map((entry: { color: string | undefined }, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
                     <Tooltip content={<CustomChartTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>
+                )}
                 <div className="mt-4 space-y-2">
-                  {inventoryData.map((item: { color: string | undefined; name: string; value: number }, index: number) => (
+                  {((inventoryApiData?.inventoryItems && Array.isArray(inventoryApiData.inventoryItems) && inventoryApiData.inventoryItems.length > 0)
+                    ? (() => {
+                        const byCat: Record<string, number> = {};
+                        for (const it of inventoryApiData.inventoryItems as Array<{ category?: string; currentStock?: number }>) {
+                          const cat = it.category || 'Other';
+                          byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
+                        }
+                        const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
+                        const palette = {
+                          Proteins: '#ea580c',
+                          Vegetables: '#f97316',
+                          Dairy: '#fb923c',
+                          Pantry: '#fed7aa',
+                          Beverages: '#ffedd5'
+                        } as Record<string, string>;
+                        return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                      })()
+                    : inventoryData).map((item: { color: string | undefined; name: string; value: number }, index: number) => (
                     <div key={index} className="flex items-center justify-between">
                       <div className="flex items-center">
                         <div
@@ -404,63 +694,33 @@ export default function DashboardPage() {
             </Card>
 
             {/* Recent Activity */}
-            <Card>
+            <Card className="flex-1">
               <CardHeader>
                 <CardTitle>Recent Activity</CardTitle>
                 <CardDescription>Latest updates and notifications</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {recentActivities.map((activity) => (
-                    <div key={activity.id} className="flex items-start space-x-3">
-                      <div className={`rounded-full p-1 ${
-                        activity.status === "success" ? "bg-green-100 dark:bg-green-900/30" :
-                        activity.status === "warning" ? "bg-yellow-100 dark:bg-yellow-900/30" :
-                        "bg-blue-100 dark:bg-blue-900/30"
-                      }`}>
-                        {activity.status === "success" && <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />}
-                        {activity.status === "warning" && <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />}
-                        {activity.status === "info" && <Clock className="h-4 w-4 text-blue-600 dark:text-blue-400" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm text-foreground">{activity.message}</p>
-                        <p className="text-xs text-muted-foreground">{activity.time}</p>
-                      </div>
-                    </div>
-                  ))}
+                <div className="max-h-auto overflow-y-auto pr-1">
+                  <RecentActivity />
                 </div>
               </CardContent>
             </Card>
 
             {/* Quick Actions */}
-            <Card>
+            <Card className="flex-none">
               <CardHeader>
                 <CardTitle>Quick Actions</CardTitle>
                 <CardDescription>Common tasks and shortcuts</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 gap-3">
-                  <Button variant="outline" size="sm" className="h-auto p-3 flex flex-col items-center">
-                    <Calendar className="h-4 w-4 mb-1" />
-                    <span className="text-xs">Schedule</span>
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-auto p-3 flex flex-col items-center">
-                    <Package className="h-4 w-4 mb-1" />
-                    <span className="text-xs">Inventory</span>
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-auto p-3 flex flex-col items-center">
-                    <DollarSign className="h-4 w-4 mb-1" />
-                    <span className="text-xs">Invoice</span>
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-auto p-3 flex flex-col items-center">
-                    <Users className="h-4 w-4 mb-1" />
-                    <span className="text-xs">Team</span>
-                  </Button>
-                </div>
+                <QuickActions />
               </CardContent>
             </Card>
           </div>
         </div>
+
+        {/* Draggable Widgets Section */}
+        <WidgetsGrid />
       </div>
     </DashboardLayout>
   );

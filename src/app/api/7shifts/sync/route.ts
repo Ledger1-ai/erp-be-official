@@ -7,7 +7,7 @@ import ToastEmployee from '@/lib/models/ToastEmployee';
 
 async function sync7ShiftsData() {
   console.log('sync7ShiftsData: Starting...');
-  const accessToken = process.env['7SHIFTS_ACCESS_TOKEN'];
+  const accessToken = process.env['SEVENSHIFTS_ACCESS_TOKEN'];
   console.log('sync7ShiftsData: Access token present:', !!accessToken);
   if (!accessToken) {
     throw new Error('7shifts Access Token is not configured.');
@@ -149,9 +149,10 @@ async function sync7ShiftsData() {
     startDate.setDate(startDate.getDate() - 30);
     const endDate = new Date();
     
-    // Format dates as YYYY-MM-DD for 7shifts API
-    const startDateStr = startDate.toISOString().split('T')[0];
-    const endDateStr = endDate.toISOString().split('T')[0];
+    // Format dates as YYYY-MM-DD in Mountain Time for 7shifts API
+    const tz = process.env.TOAST_TIMEZONE || 'America/Denver';
+    const startDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(startDate);
+    const endDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(endDate);
     
     console.log('Fetching shifts from', startDateStr, 'to', endDateStr, 'for location', locationId);
     const sevenShiftsShifts = await client.listShifts(locationId, startDateStr, endDateStr, context);

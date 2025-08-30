@@ -9,6 +9,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { useGlobalSearch } from "@/lib/hooks/use-graphql";
 import {
   Menu,
   Home,
@@ -88,6 +90,8 @@ const sidebarItems = [
     href: "/dashboard/analytics",
     icon: BarChart3,
     permission: "analytics" as const,
+    disabled: true,
+    tag: "Coming soon",
   },
   {
     title: "Settings",
@@ -101,8 +105,27 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const permissions = usePermissions();
   const [user, setUser] = useState<User | null>(null);
   const [isVaruniOpen, setIsVaruniOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const pathname = usePathname();
+
+  // Debounce search queries for UX & performance
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [isIdleTyping, setIsIdleTyping] = useState(false);
+  useEffect(() => {
+    setIsIdleTyping(true);
+    const id = setTimeout(() => {
+      setDebouncedQuery(searchQuery.trim());
+      setIsIdleTyping(false);
+    }, 250); // Shorter debounce for snappier results
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+  const minSearchChars = 2;
+  const shouldFetch = debouncedQuery.length >= minSearchChars;
+  const { data: searchData, loading: searchLoading, networkStatus } = useGlobalSearch(shouldFetch ? debouncedQuery : "", 8, { skip: !shouldFetch });
+  const isRefetching = networkStatus === 4;
+  const effectiveResults = shouldFetch ? (searchData?.globalSearch || []) : [];
   
   // Filter sidebar items based on user permissions (but always show disabled items)
   const visibleSidebarItems = sidebarItems.filter(item => 
@@ -126,7 +149,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       {/* Logo */}
-      <div className="flex items-center px-6 py-4 border-b">
+      <div className="flex items-center h-16 px-6 border-b">
         <div className="mr-3">
           <Image 
             src="/tgl.png" 
@@ -189,8 +212,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
             <div className="min-h-screen bg-background">
       {/* Desktop Sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-72 lg:flex-col">
-        <div className="flex flex-col flex-grow bg-background border-r border-border shadow-sm">
+      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[18rem] lg:flex-col">
+        <div className="flex flex-col flex-grow bg-background border-r border-border/90 shadow-sm">
           <SidebarContent />
         </div>
       </div>
@@ -208,21 +231,58 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       </Sheet>
 
       {/* Main Content */}
-      <div className="lg:pl-72 min-h-screen bg-background">
+      <div className="lg:pl-[18rem] pt-16 min-h-screen bg-background">
         {/* Header */}
-        <header className="bg-background shadow-sm border-b border-border">
-          <div className="px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
+        <header className="fixed top-0 right-0 left-0 lg:left-[18rem] z-30 h-16 border-b border-border backdrop-blur supports-[backdrop-filter]:bg-background/60 bg-background/80">
+          <div className="px-4 sm:px-6 lg:px-8 h-full">
+            <div className="flex items-center justify-between h-full">
               {/* Search */}
               <div className="flex-1 max-w-lg ml-12 lg:ml-0">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                   <input
                     type="text"
                     placeholder="Search anything..."
-                    className="w-full pl-10 pr-4 py-2 border border-input bg-background text-foreground rounded-lg focus:ring-2 focus:ring-ring focus:border-ring"
+                    className="w-full pl-10 pr-4 py-2 border border-input bg-background/60 text-foreground rounded-lg focus:ring-2 focus:ring-ring focus:border-ring backdrop-blur-sm cursor-text"
+                    onFocus={() => setIsSearchOpen(true)}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    value={searchQuery}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') setIsSearchOpen(true);
+                    }}
                   />
                 </div>
+                <CommandDialog open={isSearchOpen} onOpenChange={(v) => { setIsSearchOpen(v); if (!v) { setSearchQuery(""); setDebouncedQuery(""); } }}>
+                  <CommandInput
+                    placeholder="Search anything..."
+                    value={searchQuery}
+                    onValueChange={setSearchQuery}
+                    autoFocus
+                  />
+                  <CommandList>
+                    {isSearchOpen && searchQuery.trim().length < minSearchChars && (
+                      <div className="py-3 px-3 text-sm text-muted-foreground">Type at least {minSearchChars} characters…</div>
+                    )}
+                    {isSearchOpen && searchQuery.trim().length >= minSearchChars && (isIdleTyping || searchLoading || isRefetching) && (
+                      <div className="py-3 px-3 text-sm text-muted-foreground">Searching…</div>
+                    )}
+                    {isSearchOpen && searchQuery.trim().length >= minSearchChars && !searchLoading && effectiveResults.length === 0 && (
+                      <CommandEmpty>No results found.</CommandEmpty>
+                    )}
+                    <CommandGroup heading="Results">
+                      {effectiveResults.map((r: any) => (
+                        <CommandItem
+                          value={`${r.title} ${r.kind} ${r.description || ''}`}
+                          key={`${r.kind}-${r.id}`}
+                          onSelect={() => { setIsSearchOpen(false); setSearchQuery(""); router.push(r.route); }}
+                        >
+                          {r.title}
+                          <span className="ml-2 text-xs text-muted-foreground">{r.kind}</span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </CommandDialog>
               </div>
 
               {/* Right side */}

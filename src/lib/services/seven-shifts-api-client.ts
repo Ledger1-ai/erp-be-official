@@ -27,11 +27,27 @@ const ShiftSchema = z.object({
   user_id: z.coerce.number(),
   start: z.string(),
   end: z.string(),
-  late_minutes: z.number().nullable(),
+  late_minutes: z.number().nullable().optional(),
+  role_id: z.coerce.number().optional(),
+  department_id: z.coerce.number().optional(),
+  location_id: z.coerce.number().optional(),
+  open: z.boolean().optional(),
+  draft: z.boolean().optional(),
 });
 
 type User = z.infer<typeof UserSchema>;
 type Shift = z.infer<typeof ShiftSchema>;
+const RoleSchema = z.object({
+  id: z.coerce.number(),
+  name: z.string(),
+  department_id: z.coerce.number().optional(),
+});
+
+const DepartmentSchema = z.object({
+  id: z.coerce.number(),
+  name: z.string(),
+});
+
 type Company = z.infer<typeof CompanySchema>;
 type Location = z.infer<typeof LocationSchema>;
 
@@ -210,9 +226,12 @@ class SevenShiftsApiClient {
 
   async listUsers(locationId: string, ctx?: { companyId?: number; companyGuid?: string }): Promise<User[]> {
     const params: Record<string, string> = { 
-      location_id: locationId, 
       limit: '500' 
     };
+    // Only filter by location if a real location id was provided
+    if (locationId && locationId !== '0') {
+      params.location_id = locationId;
+    }
     
     // Add company_id as required query parameter
     if (ctx?.companyId) {
@@ -267,6 +286,18 @@ class SevenShiftsApiClient {
   async listLocations(companyId: number): Promise<Location[]> {
     const response = await this.makeRequest<{ data: Location[] }>(`/company/${companyId}/locations`);
     return z.array(LocationSchema).parse(response.data);
+  }
+
+  async listRoles(companyId: number): Promise<Array<{ id: number; name: string; department_id?: number }>> {
+    const response = await this.makeRequest<{ data: any[] }>(`/company/${companyId}/roles`);
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    return z.array(RoleSchema).parse(rows);
+  }
+
+  async listDepartments(companyId: number): Promise<Array<{ id: number; name: string }>> {
+    const response = await this.makeRequest<{ data: any[] }>(`/company/${companyId}/departments`);
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    return z.array(DepartmentSchema).parse(rows);
   }
 
   async getExternalUserMapping(userId: number, companyId?: number): Promise<{ external_id: string } | null> {
@@ -338,16 +369,51 @@ class SevenShiftsApiClient {
       deleted: 'false',
       include_deleted: 'false',
       draft: 'false',
-      include_draft: 'false'
+      include_draft: 'false',
+      company_id: String(ctx.companyId),
     };
     
-    // Add date filtering if start/end provided
-    if (start) params.start = start;
-    if (end) params.end = end;
+    // Date filtering: use start[gte] and end[lte] (ISO8601)
+    if (start) {
+      // If date only (YYYY-MM-DD), assume Mountain Time and convert to UTC
+      if (start.length === 10) {
+        const tz = process.env.TOAST_TIMEZONE || 'America/Denver';
+        const [y, m, d] = start.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, (m as number) - 1, d));
+        // Midnight in MT for that date -> compute offset via Intl
+        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        const parts = dtf.formatToParts(dt);
+        const map: Record<string, string> = {};
+        for (const p of parts) map[p.type] = p.value;
+        const utcMs = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), 0, 0, 0);
+        const offsetMs = utcMs - dt.getTime();
+        const startUtc = new Date(dt.getTime() - offsetMs).toISOString();
+        params['start[gte]'] = startUtc;
+      } else {
+        params['start[gte]'] = start;
+      }
+    }
+    if (end) {
+      if (end.length === 10) {
+        const tz = process.env.TOAST_TIMEZONE || 'America/Denver';
+        const [y, m, d] = end.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, (m as number) - 1, d));
+        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        const parts = dtf.formatToParts(dt);
+        const map: Record<string, string> = {};
+        for (const p of parts) map[p.type] = p.value;
+        const utcMs = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), 23, 59, 59);
+        const offsetMs = utcMs - dt.getTime();
+        const endUtc = new Date(dt.getTime() - offsetMs).toISOString();
+        params['end[lte]'] = endUtc;
+      } else {
+        params['end[lte]'] = end;
+      }
+    }
     
-    // Add location filtering
+    // Location filtering (singular per API docs)
     if (locationId && locationId !== '0') {
-      params.location_ids = locationId;
+      params.location_id = locationId;
     }
     
     const headers: Record<string, string> = {};
@@ -356,12 +422,7 @@ class SevenShiftsApiClient {
     }
     
     const endpoint = `/company/${ctx.companyId}/shifts`;
-    console.log(`7shifts: Using documented shifts endpoint: ${endpoint}`);
-    console.log(`7shifts: Shifts params:`, params);
-    
     const response = await this.makeRequest<any>(endpoint, params, headers);
-    console.log('7shifts /shifts raw response:', JSON.stringify(response, null, 2));
-    console.log('7shifts /shifts response keys:', Object.keys(response));
     
     // The response structure might be { results: [...] } or { data: [...] }
     let shifts;
@@ -375,7 +436,6 @@ class SevenShiftsApiClient {
       shifts = [];
     }
     
-    console.log('7shifts /shifts parsed shifts:', Array.isArray(shifts), shifts ? shifts.length : 'no length');
     return z.array(ShiftSchema).parse(shifts);
   }
 }

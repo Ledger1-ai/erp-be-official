@@ -4,7 +4,7 @@ import ToastEmployee from '@/lib/models/ToastEmployee';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: any
 ) {
   try {
     await connectDB();
@@ -55,7 +55,7 @@ export async function POST(
 // Restore a locally deleted employee
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: any
 ) {
   try {
     await connectDB();

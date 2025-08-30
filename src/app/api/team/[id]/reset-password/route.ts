@@ -22,7 +22,10 @@ async function checkPermissions(request: NextRequest) {
       return { authorized: false, error: 'User not found or inactive' };
     }
     
-    const permissions = user.getPermissions();
+    const permissions: string[] =
+      typeof (user as any).getPermissions === 'function'
+        ? (user as any).getPermissions()
+        : ((user as any).permissions || []);
     if (!permissions.includes('team') && !permissions.includes('admin')) {
       return { authorized: false, error: 'Insufficient permissions' };
     }
@@ -36,7 +39,7 @@ async function checkPermissions(request: NextRequest) {
 // POST /api/team/[id]/reset-password - Force password reset
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: any
 ) {
   try {
     const auth = await checkPermissions(request);

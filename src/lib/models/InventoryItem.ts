@@ -226,6 +226,11 @@ inventoryItemSchema.index({ supplier: 1 });
 inventoryItemSchema.index({ vendorSKU: 1 });
 inventoryItemSchema.index({ syscoCategory: 1 });
 
+// Text index for global search
+try {
+  inventoryItemSchema.index({ name: 'text', category: 'text', description: 'text', brand: 'text', vendorSKU: 'text', syscoSKU: 'text' }, { name: 'inventory_text', weights: { name: 10, brand: 5, category: 3, description: 2 } });
+} catch {}
+
 // Virtual for total value
 inventoryItemSchema.virtual('totalValue').get(function() {
   return this.currentStock * this.costPerUnit;

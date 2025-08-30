@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
 import SevenShiftsApiClient from '@/lib/services/seven-shifts-api-client';
 import ToastEmployee from '@/lib/models/ToastEmployee';
+import type { IToastEmployee } from '@/lib/models/ToastEmployee';
 
 // Optional: RoleMapping model to normalize departments
 async function loadRoleMappings() {
@@ -33,7 +34,7 @@ function inferDepartment(roleName: string): string {
 export async function GET(_req: NextRequest) {
   try {
     await connectDB();
-    const accessToken = process.env['7SHIFTS_ACCESS_TOKEN'];
+    const accessToken = process.env['SEVENSHIFTS_ACCESS_TOKEN'];
     if (!accessToken) {
       return NextResponse.json({ success: false, error: '7shifts Access Token is not configured' }, { status: 500 });
     }
@@ -84,7 +85,7 @@ export async function GET(_req: NextRequest) {
 
       // Try to map to Toast employee to collect toastGuids for client-side rating aggregation
       try {
-        const toastEmp = await ToastEmployee.findOne({ sevenShiftsId: u.id }).lean();
+        const toastEmp = await ToastEmployee.findOne({ sevenShiftsId: u.id }).lean() as IToastEmployee | null;
         if (toastEmp?.toastGuid) {
           if (!deptToToastGuids.has(dept)) deptToToastGuids.set(dept, new Set());
           deptToToastGuids.get(dept)!.add(String(toastEmp.toastGuid));

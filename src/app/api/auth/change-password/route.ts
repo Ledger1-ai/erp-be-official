@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { 
           error: 'Validation failed',
-          details: validation.error.errors
+          details: validation.error.issues
         },
         { status: 400 }
       );
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+      const isCurrentPasswordValid = await (user as any).comparePassword(currentPassword);
       if (!isCurrentPasswordValid) {
         return NextResponse.json(
           { error: 'Current password is incorrect' },
@@ -105,9 +105,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update password and clear flags
+    // Update password and clear flags (avoid calling model method for TS compatibility)
     user.password = newPassword;
-    user.markPasswordChanged();
+    user.isFirstLogin = false;
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
     await user.save();
 
     // Generate new full tokens for the user

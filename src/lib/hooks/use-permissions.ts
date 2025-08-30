@@ -6,6 +6,7 @@ export type Permission =
   | 'dashboard'
   | 'scheduling'
   | 'inventory' 
+  | 'invoicing'
   | 'inventory:financial' // Financial data like costs, purchase orders
   | 'team'
   | 'team:performance' // View performance ratings and analytics

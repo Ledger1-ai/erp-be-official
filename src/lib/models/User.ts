@@ -51,6 +51,7 @@ const userSchema = new mongoose.Schema({
       'dashboard', 
       'scheduling', 
       'inventory', 
+      'invoicing',
       'inventory:financial',
       'team', 
       'team:performance',
@@ -123,6 +124,10 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ role: 1 });
 userSchema.index({ isActive: 1 });
 userSchema.index({ lockUntil: 1 });
+// Text index for global/user search
+try {
+  userSchema.index({ name: 'text', email: 'text', role: 'text' }, { name: 'user_text', weights: { name: 10, email: 8, role: 4 } });
+} catch {}
 
 // Virtual for checking if account is locked
 userSchema.virtual('isLocked').get(function() {

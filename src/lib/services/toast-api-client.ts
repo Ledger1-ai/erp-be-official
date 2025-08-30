@@ -519,8 +519,11 @@ export class ToastAPIClient {
    */
   public async getRestaurant(restaurantGuid: string): Promise<ToastRestaurant> {
     const endpoint = `/restaurants/v1/restaurants/${restaurantGuid}`;
-
-    const response = await this.makeRequest<unknown>(endpoint, 'GET');
+    // Some tenants require the restaurant external id header even for this endpoint
+    const headers = {
+      'Toast-Restaurant-External-ID': restaurantGuid,
+    } as Record<string, string>;
+    const response = await this.makeRequest<unknown>(endpoint, 'GET', undefined, undefined, headers);
     
     // Log response for debugging
     if (process.env.NODE_ENV === 'development') {
@@ -570,7 +573,7 @@ export class ToastAPIClient {
         phoneNumber: data.phoneNumber || '',
         emailAddress: data.emailAddress || '',
         website: data.website || '',
-        timeZone: data.timeZone || 'America/New_York',
+        timeZone: data.timeZone || (process.env.TOAST_TIMEZONE || 'America/Denver'),
         createdDate: data.isoCreatedDate || 
                     (typeof data.createdDate === 'number' ? new Date(data.createdDate).toISOString() : 
                      data.createdDate) || new Date().toISOString(),
@@ -649,7 +652,7 @@ export class ToastAPIClient {
         phoneNumber: data.phoneNumber || '',
         emailAddress: data.emailAddress || '',
         website: data.website || '',
-        timeZone: data.timeZone || 'America/New_York',
+        timeZone: data.timeZone || (process.env.TOAST_TIMEZONE || 'America/Denver'),
         createdDate: data.isoCreatedDate || 
                     (typeof data.createdDate === 'number' ? new Date(data.createdDate).toISOString() : 
                      data.createdDate) || new Date().toISOString(),

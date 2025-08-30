@@ -197,6 +197,11 @@ supplierSchema.index({ categories: 1 });
 supplierSchema.index({ isPreferred: 1 });
 supplierSchema.index({ 'currentRepresentative.name': 1 });
 
+// Text index for global search
+try {
+  supplierSchema.index({ name: 'text', companyName: 'text', supplierCode: 'text', 'contacts.name': 'text' }, { name: 'supplier_text', weights: { name: 10, companyName: 8, supplierCode: 6 } });
+} catch {}
+
 // Virtual for primary contact
 supplierSchema.virtual('primaryContact').get(function() {
   return this.contacts.find(contact => contact.isPrimary) || this.contacts[0];

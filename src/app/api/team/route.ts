@@ -9,9 +9,31 @@ const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
   email: z.string().email('Invalid email address'),
   role: z.enum(['Super Admin', 'Manager', 'Shift Supervisor', 'Staff']),
-  permissions: z.array(z.enum(['dashboard', 'scheduling', 'inventory', 'invoicing', 'team', 'analytics', 'settings', 'admin'])).optional(),
+  permissions: z
+    .array(
+      z.enum([
+        'dashboard',
+        'scheduling',
+        'inventory',
+        'invoicing',
+        'inventory:financial',
+        'team',
+        'team:performance',
+        'team:management',
+        'analytics',
+        'analytics:detailed',
+        'settings',
+        'settings:users',
+        'settings:system',
+        'roster',
+        'menu',
+        'robotic-fleets',
+        'admin',
+      ])
+    )
+    .optional(),
   isActive: z.boolean().optional().default(true),
-  mustChangePassword: z.boolean().optional().default(true)
+  mustChangePassword: z.boolean().optional().default(true),
 });
 
 const updateUserSchema = createUserSchema.partial().extend({
@@ -37,7 +59,10 @@ async function checkPermissions(request: NextRequest) {
       return { authorized: false, error: 'User not found or inactive' };
     }
     
-    const permissions = user.getPermissions();
+    const permissions: string[] =
+      typeof (user as any).getPermissions === 'function'
+        ? (user as any).getPermissions()
+        : ((user as any).permissions || []);
     if (!permissions.includes('team') && !permissions.includes('admin')) {
       return { authorized: false, error: 'Insufficient permissions' };
     }
@@ -139,7 +164,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { 
           error: 'Validation failed',
-          details: validation.error.errors
+          details: validation.error.issues
         },
         { status: 400 }
       );
@@ -148,7 +173,7 @@ export async function POST(request: NextRequest) {
     const { name, email, role, permissions, isActive, mustChangePassword } = validation.data;
 
     // Check if user already exists
-    const existingUser = await User.findByEmail(email);
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return NextResponse.json(
         { error: 'User with this email already exists' },
@@ -215,7 +240,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json(
         { 
           error: 'Validation failed',
-          details: validation.error.errors
+          details: validation.error.issues
         },
         { status: 400 }
       );

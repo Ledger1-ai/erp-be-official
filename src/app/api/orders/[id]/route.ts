@@ -3,7 +3,7 @@ import { connectDB } from "@/lib/db/connection";
 import { PurchaseOrder } from "@/lib/models/PurchaseOrder";
 import { Supplier } from "@/lib/models/Supplier";
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params }: any) {
   try {
     await connectDB();
     const order = await PurchaseOrder.findById(params.id)
@@ -17,7 +17,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: any) {
   try {
     await connectDB();
     const body = await request.json();

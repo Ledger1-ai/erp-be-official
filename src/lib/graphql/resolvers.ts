@@ -21,6 +21,7 @@ import { MenuIndex } from '../models/MenuIndex';
 import { MenuMapping } from '../models/MenuMapping';
 import { OrderTrackingConfig } from '../models/OrderTrackingConfig';
 import ToastAPIClient from '../services/toast-api-client';
+import RosterConfiguration from '../models/RosterConfiguration';
 
 async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, visited = new Set<string>()): Promise<number> {
   if (visited.has(toastItemGuid)) return 0;
@@ -93,16 +94,25 @@ async function explodeToInventory(
   }
 }
 
-// Date helpers to ensure inclusive end-of-day filtering when UI passes YYYY-MM-DD
+// Date helpers to ensure inclusive end-of-day filtering using restaurant timezone (Mountain by default)
+import { getDefaultTimeZone, getDayRangeForYmdInTz } from '@/lib/timezone';
 function toStartOfDay(input: string | Date): Date {
+  const tz = getDefaultTimeZone();
+  if (typeof input === 'string' && input.length === 10) {
+    return getDayRangeForYmdInTz(tz, input).start;
+  }
   const d = new Date(input as any);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  return getDayRangeForYmdInTz(tz, ymd).start;
 }
 function toEndOfDay(input: string | Date): Date {
+  const tz = getDefaultTimeZone();
+  if (typeof input === 'string' && input.length === 10) {
+    return getDayRangeForYmdInTz(tz, input).end;
+  }
   const d = new Date(input as any);
-  d.setHours(23, 59, 59, 999);
-  return d;
+  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  return getDayRangeForYmdInTz(tz, ymd).end;
 }
 
 // TypeScript types for resolver parameters
@@ -1022,6 +1032,291 @@ export const resolvers = {
         }));
       } catch (e) {
         console.error('crossPanelLinks error', e);
+        return [];
+      }
+    },
+
+    // Global search across models
+    globalSearch: async (_: unknown, { query, limit = 10 }: { query: string; limit?: number }, context: AuthContext) => {
+      try {
+        const q = String(query || '').trim();
+        const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(escape(q), 'i');
+        const isShort = q.length <= 2 && q.length > 0;
+        type Row = { id: string; kind: string; title: string; description?: string; route: string; icon?: string };
+        const inventoryRows: Row[] = [];
+        const vendorRows: Row[] = [];
+        const teamRows: Row[] = [];
+        const userRows: Row[] = [];
+        const poRows: Row[] = [];
+        const invoiceRows: Row[] = [];
+        const recipeRows: Row[] = [];
+        const shiftRows: Row[] = [];
+        const menuRows: Row[] = [];
+        const rosterRows: Row[] = [];
+        const shortcutRows: Row[] = [];
+
+        // If empty query, return fast, curated shortcuts (no DB hits)
+        if (!q) {
+          shortcutRows.push(
+            { id: 'quick-inventory', kind: 'Shortcut', title: 'Inventory', route: '/dashboard/inventory', description: 'Manage items and stock', icon: 'package' },
+            { id: 'quick-vendors', kind: 'Shortcut', title: 'Vendors', route: '/dashboard/inventory?vendors=1', description: 'Supplier directory', icon: 'truck' },
+            { id: 'quick-team', kind: 'Shortcut', title: 'Team', route: '/dashboard/team', description: 'People and roles', icon: 'users' },
+            { id: 'quick-analytics', kind: 'Shortcut', title: 'Analytics', route: '/dashboard/analytics', description: 'KPIs and trends', icon: 'bar-chart-3' },
+            { id: 'quick-menu', kind: 'Shortcut', title: 'Menu', route: '/dashboard/menu', description: 'Indexed menu items', icon: 'utensils' },
+          );
+          return shortcutRows.slice(0, limit);
+        }
+
+        // Run category queries in parallel for speed
+        await Promise.all([
+          (async () => {
+            if (context.isAuthenticated && context.hasPermission('inventory')) {
+              // Prefer text index, fallback to regex if text not available
+              let items: any[] = [];
+              try {
+                if (isShort) {
+                  const prefix = new RegExp('^' + escape(q), 'i');
+                  items = await InventoryItem.find({ name: prefix }, { name: 1, category: 1 })
+                    .limit(limit)
+                    .lean();
+                } else {
+                  items = await InventoryItem.find({ $text: { $search: q } }, { score: { $meta: 'textScore' }, name: 1, category: 1 })
+                    .sort({ score: { $meta: 'textScore' } })
+                    .limit(limit)
+                    .lean();
+                }
+              } catch {
+                const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+                items = await InventoryItem.find({ $or: [ { name: prefix }, { category: prefix } ] }, { name: 1, category: 1 })
+                  .limit(limit)
+                  .lean();
+              }
+              for (const it of items) {
+                inventoryRows.push({ id: String(it._id), kind: 'InventoryItem', title: it.name, description: it.category || it.description || '', route: `/dashboard/inventory?itemId=${String(it._id)}`, icon: 'package' });
+              }
+            }
+          })(),
+          (async () => {
+            // Users (admin/settings or team management)
+            if (context.isAuthenticated && (context.hasPermission('settings') || context.hasPermission('team'))) {
+              let usersFound: any[] = [];
+              try {
+                if (isShort) {
+                  const prefix = new RegExp('^' + escape(q), 'i');
+                  usersFound = await User.find({ $or: [ { name: prefix }, { email: prefix }, { role: prefix } ] }, { name: 1, email: 1, role: 1 })
+                    .limit(limit)
+                    .lean();
+                } else {
+                  usersFound = await User.find({ $text: { $search: q } }, { score: { $meta: 'textScore' }, name: 1, email: 1, role: 1 })
+                    .sort({ score: { $meta: 'textScore' } })
+                    .limit(limit)
+                    .lean();
+                }
+              } catch {
+                const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+                usersFound = await User.find({ $or: [ { name: prefix }, { email: prefix }, { role: prefix } ] }, { name: 1, email: 1, role: 1 })
+                  .limit(limit)
+                  .lean();
+              }
+              for (const u of usersFound) {
+                userRows.push({ id: String(u._id), kind: 'User', title: u.name, description: u.email || u.role || '', route: `/dashboard/settings`, icon: 'settings' });
+              }
+            }
+          })(),
+          (async () => {
+            if (context.isAuthenticated && context.hasPermission('inventory')) {
+              let vendors: any[] = [];
+              try {
+                if (isShort) {
+                  const prefix = new RegExp('^' + escape(q), 'i');
+                  vendors = await Supplier.find({ $or: [ { name: prefix }, { companyName: prefix } ] }, { name: 1, companyName: 1, supplierCode: 1 })
+                    .limit(limit)
+                    .lean();
+                } else {
+                  vendors = await Supplier.find({ $text: { $search: q } }, { score: { $meta: 'textScore' }, name: 1, companyName: 1, supplierCode: 1 })
+                    .sort({ score: { $meta: 'textScore' } })
+                    .limit(limit)
+                    .lean();
+                }
+              } catch {
+                const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+                vendors = await Supplier.find({ $or: [ { name: prefix }, { companyName: prefix }, { supplierCode: prefix } ] }, { name: 1, companyName: 1, supplierCode: 1 })
+                  .limit(limit)
+                  .lean();
+              }
+              for (const v of vendors) {
+                vendorRows.push({ id: String(v._id), kind: 'Vendor', title: v.name || v.companyName, description: v.supplierCode || '', route: `/dashboard/inventory?vendorId=${String(v._id)}`, icon: 'truck' });
+              }
+            }
+          })(),
+          (async () => {
+            if (context.isAuthenticated && context.hasPermission('team')) {
+              let people: any[] = [];
+              try {
+                if (isShort) {
+                  const prefix = new RegExp('^' + escape(q), 'i');
+                  people = await TeamMember.find({ $or: [ { name: prefix }, { email: prefix } ] }, { name: 1, email: 1, role: 1, department: 1 })
+                    .limit(limit)
+                    .lean();
+                } else {
+                  people = await TeamMember.find({ $text: { $search: q } }, { score: { $meta: 'textScore' }, name: 1, email: 1, role: 1, department: 1 })
+                    .sort({ score: { $meta: 'textScore' } })
+                    .limit(limit)
+                    .lean();
+                }
+              } catch {
+                const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+                people = await TeamMember.find({ $or: [ { name: prefix }, { email: prefix }, { department: prefix }, { role: prefix } ] }, { name: 1, email: 1, role: 1, department: 1 })
+                  .limit(limit)
+                  .lean();
+              }
+              for (const p of people) {
+                teamRows.push({ id: String(p._id), kind: 'TeamMember', title: p.name, description: p.role || p.department || '', route: `/dashboard/team?memberId=${String(p._id)}`, icon: 'users' });
+              }
+            }
+          })(),
+          (async () => {
+            if (context.isAuthenticated && context.hasPermission('inventory')) {
+              const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+              const pos = await PurchaseOrder.find({ $or: [ { poNumber: prefix }, { supplierName: prefix } ] }, { poNumber: 1, supplierName: 1 })
+                .limit(limit)
+                .lean();
+              for (const o of pos) {
+                poRows.push({ id: String(o._id), kind: 'PurchaseOrder', title: (o as any).poNumber, description: (o as any).supplierName || '', route: `/dashboard/inventory?poId=${String(o._id)}`, icon: 'file-text' });
+              }
+            }
+          })(),
+          (async () => {
+            if (context.isAuthenticated && context.hasPermission('invoicing')) {
+              const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+              const inv = await Invoice.find({ $or: [ { invoiceNumber: prefix }, { clientName: prefix }, { description: regex } ] }, { invoiceNumber: 1, clientName: 1 })
+                .limit(limit)
+                .lean();
+              for (const i of inv) {
+                invoiceRows.push({ id: String(i._id), kind: 'Invoice', title: i.invoiceNumber || i.clientName, description: i.clientName || '', route: `/dashboard/invoicing?invoiceId=${String(i._id)}`, icon: 'dollar-sign' });
+              }
+            }
+          })(),
+          (async () => {
+            // Recipes (menu/inventory intersection)
+            if (context.isAuthenticated && (context.hasPermission('menu') || context.hasPermission('inventory'))) {
+              let recipesFound: any[] = [];
+              try {
+                if (isShort) {
+                  const prefix = new RegExp('^' + escape(q), 'i');
+                  recipesFound = await Recipe.find({ $or: [ { name: prefix }, { category: prefix }, { tags: prefix } ] }, { name: 1, category: 1, isPopular: 1 })
+                    .limit(limit)
+                    .lean();
+                } else {
+                  recipesFound = await Recipe.find({ $text: { $search: q } }, { score: { $meta: 'textScore' }, name: 1, category: 1, isPopular: 1 })
+                    .sort({ score: { $meta: 'textScore' } })
+                    .limit(limit)
+                    .lean();
+                }
+              } catch {
+                const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+                recipesFound = await Recipe.find({ $or: [ { name: prefix }, { category: prefix }, { tags: prefix } ] }, { name: 1, category: 1, isPopular: 1 })
+                  .limit(limit)
+                  .lean();
+              }
+              for (const r of recipesFound) {
+                recipeRows.push({ id: String(r._id), kind: 'Recipe', title: r.name, description: r.category || '', route: `/dashboard/menu`, icon: 'utensils' });
+              }
+            }
+          })(),
+          (async () => {
+            // Shifts (scheduling)
+            if (context.isAuthenticated && context.hasPermission('scheduling')) {
+              const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+              const shiftsFound = await Shift.find({ $or: [ { role: prefix }, { status: prefix } ] }, { role: 1, date: 1, status: 1 })
+                .limit(limit)
+                .lean();
+              for (const s of shiftsFound) {
+                const dateStr = s.date ? new Date(s.date as any).toLocaleDateString('en-US') : '';
+                shiftRows.push({ id: String(s._id), kind: 'Shift', title: s.role, description: `${dateStr} · ${s.status}`, route: `/dashboard/scheduling`, icon: 'calendar' });
+              }
+            }
+          })(),
+        ]);
+
+        // Menu Items (indexed Toast menus)
+        {
+          const idx: any = await MenuIndex.findOne({}).lean();
+          if (idx && idx.menus) {
+            const matched: Array<{ guid: string; name: string }> = [];
+            const visitMenu = (node: any) => {
+              if (!node) return;
+              if (Array.isArray(node.menuGroups)) node.menuGroups.forEach(visitMenu);
+              if (Array.isArray(node.menuItems)) {
+                for (const mi of node.menuItems) {
+                  if (regex.test(String(mi.name || ''))) matched.push({ guid: String(mi.guid), name: mi.name });
+                }
+              }
+            };
+            for (const m of (idx as any).menus || []) visitMenu(m);
+            for (const mi of matched.slice(0, limit)) {
+              menuRows.push({
+                id: mi.guid,
+                kind: 'MenuItem',
+                title: mi.name,
+                description: 'Toast Menu',
+                route: `/dashboard/menu?itemGuid=${encodeURIComponent(mi.guid)}`,
+                icon: 'utensils',
+              });
+            }
+          }
+        }
+
+        // Rosters (by name/description)
+        if (context.isAuthenticated && context.hasPermission('roster')) {
+          const prefix = new RegExp((isShort ? '^' : '') + escape(q), 'i');
+          const rosters = await RosterConfiguration.find({ $or: [ { name: prefix }, { description: prefix } ] }, { name: 1, isActive: 1 })
+            .limit(limit)
+            .lean();
+          for (const r of rosters) {
+            rosterRows.push({ id: String(r._id), kind: 'Roster', title: r.name, description: (r as any).isActive ? 'Active' : '', route: `/dashboard/roster`, icon: 'users' });
+          }
+        }
+
+        // Basic Analytics shortcuts
+        if (/analytics|revenue|waste|inventory/i.test(q)) {
+          shortcutRows.push({ id: 'analytics', kind: 'Shortcut', title: 'Analytics Dashboard', description: 'Open analytics', route: '/dashboard/analytics', icon: 'bar-chart-3' });
+        }
+
+        // Round-robin merge so one type doesn't crowd the rest
+        const buckets: Row[][] = [
+          inventoryRows,
+          vendorRows,
+          teamRows,
+          userRows,
+          poRows,
+          invoiceRows,
+          recipeRows,
+          shiftRows,
+          menuRows,
+          rosterRows,
+          shortcutRows,
+        ]
+          .filter(arr => Array.isArray(arr) && arr.length > 0);
+        const merged: Row[] = [];
+        while (merged.length < limit && buckets.some(b => b.length > 0)) {
+          for (const b of buckets) {
+            if (merged.length >= limit) break;
+            const next = b.shift();
+            if (next) merged.push(next);
+          }
+        }
+
+        // De-duplicate by kind+id and return
+        const dedup = new Map<string, Row>();
+        for (const r of merged) {
+          const key = `${r.kind}::${r.id}`;
+          if (!dedup.has(key)) dedup.set(key, r);
+        }
+        return Array.from(dedup.values());
+      } catch (e) {
+        console.error('globalSearch error', e);
         return [];
       }
     },

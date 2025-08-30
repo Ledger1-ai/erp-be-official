@@ -810,6 +810,20 @@ export const GET_CROSS_PANEL_LINKS = gql`
   }
 `;
 
+// Global Search
+export const GLOBAL_SEARCH = gql`
+  query GlobalSearch($query: String!, $limit: Int) {
+    globalSearch(query: $query, limit: $limit) {
+      id
+      kind
+      title
+      description
+      route
+      icon
+    }
+  }
+`;
+
 // Custom hooks
 export const useTeamMembers = () => useQuery(GET_TEAM_MEMBERS);
 export const useTeamMember = (id: string) => useQuery(GET_TEAM_MEMBER, { variables: { id } });
@@ -965,6 +979,15 @@ export const useCrossPanelLinks = (itemIds?: string[]) => useQuery(GET_CROSS_PAN
   nextFetchPolicy: 'cache-first',
   notifyOnNetworkStatusChange: true,
 });
+
+export const useGlobalSearch = (query: string, limit: number = 10, options?: { skip?: boolean }) =>
+  useQuery(GLOBAL_SEARCH, {
+    variables: { query, limit },
+    skip: options?.skip ?? (!query || query.length < 2),
+    fetchPolicy: 'cache-and-network',
+    nextFetchPolicy: 'cache-first',
+    notifyOnNetworkStatusChange: true,
+  });
 
 // Order hooks
 export const usePurchaseOrders = (vendorId?: string, status?: string) => useQuery(GET_PURCHASE_ORDERS, { variables: { vendorId, status } });

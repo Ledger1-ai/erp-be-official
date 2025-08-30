@@ -1,8 +1,12 @@
 import mongoose from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://skynetpod:Vishnu%40123@varuniengram.global.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000' || 'mongodb://localhost:27017/varuni-backoffice';
-console.log(MONGODB_URI); 
-if (!MONGODB_URI) {
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'varuni-backoffice';
+const MONGODB_FULL_URI = MONGODB_URI.includes('mongodb+srv://') || MONGODB_URI.includes('mongodb://')
+  ? (MONGODB_URI.includes('cosmos.azure.com') ? MONGODB_URI : `${MONGODB_URI}/${MONGODB_DB_NAME}`)
+  : `mongodb://localhost:27017/${MONGODB_DB_NAME}`;
+console.log(MONGODB_FULL_URI);
+if (!MONGODB_FULL_URI) {
   throw new Error('Please define the MONGODB_URI environment variable');
 }
 
@@ -15,7 +19,7 @@ interface Connection {
 const connection: Connection = {};
 
 // Detect if we're using Azure Cosmos DB
-const isAzureCosmosDB = MONGODB_URI.includes('cosmos.azure.com');
+const isAzureCosmosDB = MONGODB_FULL_URI.includes('cosmos.azure.com');
 
 // MongoDB/Cosmos DB connection options
 const connectionOptions = {
@@ -49,7 +53,7 @@ export async function connectDB() {
   try {
     console.log(isAzureCosmosDB ? '🌐 Connecting to Azure Cosmos DB...' : '🔌 Connecting to MongoDB...');
     
-    connection.promise = mongoose.connect(MONGODB_URI, connectionOptions);
+    connection.promise = mongoose.connect(MONGODB_FULL_URI, connectionOptions);
     
     const db = await connection.promise;
     

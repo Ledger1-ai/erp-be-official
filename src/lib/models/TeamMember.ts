@@ -132,4 +132,9 @@ const teamMemberSchema = new Schema<ITeamMember>({
 teamMemberSchema.index({ department: 1 });
 teamMemberSchema.index({ status: 1 });
 
+// Text index for global search
+try {
+  teamMemberSchema.index({ name: 'text', email: 'text', role: 'text', department: 'text' }, { name: 'team_text', weights: { name: 10, email: 8, role: 5 } });
+} catch {}
+
 export const TeamMember = mongoose.models.TeamMember || mongoose.model<ITeamMember>('TeamMember', teamMemberSchema); 

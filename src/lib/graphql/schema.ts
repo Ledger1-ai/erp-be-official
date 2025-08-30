@@ -269,6 +269,16 @@ export const typeDefs = gql`
     isPopular: Boolean!
   }
 
+  # Global search
+  type GlobalSearchResult {
+    id: ID!
+    kind: String!
+    title: String!
+    description: String
+    route: String!
+    icon: String
+  }
+
   type CrossPanelLink {
     itemId: ID!
     itemName: String!
@@ -315,6 +325,9 @@ export const typeDefs = gql`
     inventoryTurnoverSeries(period: String!, startDate: Date!, endDate: Date!): [InventoryTurnoverPoint!]!
     recipeProfitabilityReport: [RecipeProfitRow!]!
     crossPanelLinks(itemIds: [ID!]): [CrossPanelLink!]!
+
+    # Global search across panels
+    globalSearch(query: String!, limit: Int): [GlobalSearchResult!]!
 
     # Menus
     indexedMenus(restaurantGuid: String!): IndexedMenus

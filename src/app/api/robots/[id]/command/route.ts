@@ -3,7 +3,7 @@ import { bearCloudGRPC } from '@/lib/services/bear-cloud-grpc';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: any
 ) {
   try {
     console.log(`📡 API Route: Sending command to robot ${params.id} via gRPC`);

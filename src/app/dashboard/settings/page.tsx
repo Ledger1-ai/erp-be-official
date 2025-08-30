@@ -935,7 +935,7 @@ export default function SettingsPage() {
                     <select 
                       id="timezone" 
                       className="w-full h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
-                      defaultValue="UTC-5 (Eastern Time)"
+                      defaultValue="UTC-7 (Mountain Time)"
                     >
                       <option>UTC-5 (Eastern Time)</option>
                       <option>UTC-6 (Central Time)</option>

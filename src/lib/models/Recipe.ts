@@ -159,6 +159,10 @@ recipeSchema.index({ category: 1 });
 recipeSchema.index({ isActive: 1 });
 recipeSchema.index({ isPopular: 1 });
 recipeSchema.index({ actualFoodCostPercentage: 1 });
+// Text index for global search on recipes
+try {
+  recipeSchema.index({ name: 'text', description: 'text', category: 'text', tags: 'text' }, { name: 'recipe_text', weights: { name: 10, category: 5, description: 3, tags: 3 } });
+} catch {}
 
 // Pre-save middleware to calculate costs
 recipeSchema.pre('save', function(next) {
