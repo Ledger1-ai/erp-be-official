@@ -25,19 +25,26 @@ export async function GET(_req: NextRequest) {
     // Today range in restaurant timezone (7shifts accepts YYYY-MM-DD)
     const tz = getDefaultTimeZone();
     const ymd = formatYMDInTimeZone(tz, new Date());
-    const loc = (locationIds && locationIds.length ? String(locationIds[0]) : '0');
-    const shifts = await client.listShifts(loc, ymd, ymd, ctx);
-
-    // Filter to active now or upcoming today
+    const locIds = (locationIds && locationIds.length ? locationIds.map((id: number) => String(id)) : ['0']);
+    let shifts: any[] = [];
+    try {
+      const lists = await Promise.all(locIds.map((id) => client.listShifts(id, ymd, ymd, ctx).catch(() => [])));
+      shifts = ([] as any[]).concat(...lists);
+    } catch {}
+    if (!Array.isArray(shifts) || shifts.length === 0) {
+      // Fallback: query without location filter to include all locations the token can access
+      try { shifts = await client.listShifts('0', ymd, ymd, ctx); } catch {}
+    }
     const now = Date.now();
-    const active = shifts.filter(s => {
-      const st = new Date(s.start).getTime();
-      const en = new Date(s.end).getTime();
-      return en >= now; // show ongoing or later today
-    });
 
     // Build user lookup for names
-    const users = await client.listUsers(loc, ctx);
+    const anyLoc = (locIds[0] || '0');
+    let users: Array<{ id: number; first_name: string; last_name: string }> = [];
+    try {
+      users = await client.listUsers(anyLoc, ctx) as any;
+    } catch {
+      try { users = await client.listUsers('0', ctx) as any; } catch {}
+    }
     const idToUser = new Map<number, { first_name: string; last_name: string }>();
     for (const u of users) idToUser.set(Number(u.id), { first_name: u.first_name, last_name: u.last_name });
 
@@ -55,11 +62,14 @@ export async function GET(_req: NextRequest) {
     const deptById = new Map<number, { id: number; name: string }>();
     for (const d of departments) deptById.set(Number(d.id), d);
 
-    const items = active.map(s => {
+    let items = shifts.map(s => {
       const u = idToUser.get(Number(s.user_id));
       const name = u ? `${u.first_name} ${u.last_name}` : `User ${s.user_id}`;
       const role = s.role_id ? roleById.get(Number(s.role_id)) : undefined;
       const dept = (s.department_id ? deptById.get(Number(s.department_id)) : (role?.department_id ? deptById.get(Number(role.department_id)) : undefined));
+      const st = new Date(s.start).getTime();
+      const en = new Date(s.end).getTime();
+      const isActive = (s as any).open === true || (st && en && now >= st && now <= en);
       return {
         userId: s.user_id,
         name,
@@ -68,8 +78,23 @@ export async function GET(_req: NextRequest) {
         range: formatLocalRange(s.start, s.end),
         role: role?.name || undefined,
         department: dept?.name || 'Other',
+        isActive,
       };
     }).sort((a, b) => a.start.localeCompare(b.start));
+
+    // If no shifts were found, fall back to listing active employees as scheduled (dimmed)
+    if (!items.length && users && users.length) {
+      items = users.map((u) => ({
+        userId: (u as any).id,
+        name: `${(u as any).first_name} ${(u as any).last_name}`.trim(),
+        start: '',
+        end: '',
+        range: '—',
+        role: undefined,
+        department: 'Other',
+        isActive: false,
+      }));
+    }
 
     // Group by department for clients that want domains
     const grouped: Record<string, typeof items> = {} as any;

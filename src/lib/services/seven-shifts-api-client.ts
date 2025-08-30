@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getDefaultTimeZone, getDayRangeForYmdInTz } from '@/lib/timezone';
 
 const SEVEN_SHIFTS_API_URL = 'https://api.7shifts.com/v2';
 
@@ -374,41 +375,18 @@ class SevenShiftsApiClient {
     };
     
     // Date filtering: use start[gte] and end[lte] (ISO8601)
-    if (start) {
-      // If date only (YYYY-MM-DD), assume Mountain Time and convert to UTC
-      if (start.length === 10) {
-        const tz = process.env.TOAST_TIMEZONE || 'America/Denver';
-        const [y, m, d] = start.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, (m as number) - 1, d));
-        // Midnight in MT for that date -> compute offset via Intl
-        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-        const parts = dtf.formatToParts(dt);
-        const map: Record<string, string> = {};
-        for (const p of parts) map[p.type] = p.value;
-        const utcMs = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), 0, 0, 0);
-        const offsetMs = utcMs - dt.getTime();
-        const startUtc = new Date(dt.getTime() - offsetMs).toISOString();
-        params['start[gte]'] = startUtc;
-      } else {
-        params['start[gte]'] = start;
-      }
+    const tz = process.env.TOAST_TIMEZONE || getDefaultTimeZone();
+    if (start && start.length === 10) {
+      const { start: dayStart } = getDayRangeForYmdInTz(tz, start);
+      params['start[gte]'] = dayStart.toISOString();
+    } else if (start) {
+      params['start[gte]'] = start;
     }
-    if (end) {
-      if (end.length === 10) {
-        const tz = process.env.TOAST_TIMEZONE || 'America/Denver';
-        const [y, m, d] = end.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, (m as number) - 1, d));
-        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-        const parts = dtf.formatToParts(dt);
-        const map: Record<string, string> = {};
-        for (const p of parts) map[p.type] = p.value;
-        const utcMs = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), 23, 59, 59);
-        const offsetMs = utcMs - dt.getTime();
-        const endUtc = new Date(dt.getTime() - offsetMs).toISOString();
-        params['end[lte]'] = endUtc;
-      } else {
-        params['end[lte]'] = end;
-      }
+    if (end && end.length === 10) {
+      const { end: dayEnd } = getDayRangeForYmdInTz(tz, end);
+      params['end[lte]'] = dayEnd.toISOString();
+    } else if (end) {
+      params['end[lte]'] = end;
     }
     
     // Location filtering (singular per API docs)

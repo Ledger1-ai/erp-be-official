@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { usePermissions } from "@/lib/hooks/use-permissions";
 import { ConditionalRender } from "@/components/ui/permission-denied";
@@ -164,7 +164,8 @@ export default function DashboardPage() {
   const [ordersToday, setOrdersToday] = useState<{ revenue: number; ordersCompleted: number; avgOrderValue: number; avgTurnoverMinutes?: number } | null>(null);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [weeklySeries, setWeeklySeries] = useState<Array<{ date: string; sales: number; orders: number; avgTurnoverMinutes?: number }>>([]);
-  const [staffSchedule, setStaffSchedule] = useState<Array<{ name: string; role: string; shift: string; status: string }>>([]);
+  const [staffSchedule, setStaffSchedule] = useState<Array<{ name: string; role: string; shift: string; status: string; department?: string; start?: string; end?: string; isActive?: boolean }>>([]);
+  const [scheduleTab, setScheduleTab] = useState<string>('all');
   const [activeShiftsCount, setActiveShiftsCount] = useState(0);
   const [activeShiftsLoading, setActiveShiftsLoading] = useState(false);
   
@@ -271,14 +272,23 @@ export default function DashboardPage() {
           } else if (Array.isArray(json.data)) {
             list = json.data;
           }
-          const mapped = list.map((s: any) => ({
-            name: s.name,
-            role: s.role || 'Shift',
-            shift: s.range || '—',
-            status: 'active',
-            department: s.department || 'Other',
-          }));
-          setActiveShiftsCount(mapped.length);
+          const mapped = list.map((s: any) => {
+            const startMs = s.start ? Date.parse(String(s.start)) : NaN;
+            const endMs = s.end ? Date.parse(String(s.end)) : NaN;
+            const now = Date.now();
+            const isActive = Boolean(s.isActive ?? (Number.isFinite(startMs) && Number.isFinite(endMs) && now >= startMs && now <= endMs));
+            return {
+              name: s.name,
+              role: s.role || 'Shift',
+              shift: s.range || '—',
+              status: isActive ? 'active' : 'scheduled',
+              department: s.department || 'Other',
+              start: s.start,
+              end: s.end,
+              isActive,
+            };
+          });
+          setActiveShiftsCount(mapped.filter((m: any) => m.isActive).length);
           setStaffSchedule(mapped);
           return;
         }
@@ -296,6 +306,36 @@ export default function DashboardPage() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Recompute active/inactive status every minute without refetching
+  useEffect(() => {
+    const id = setInterval(() => {
+      setStaffSchedule(prev => {
+        const now = Date.now();
+        const updated = prev.map(s => {
+          const st = s.start ? Date.parse(String(s.start)) : NaN;
+          const en = s.end ? Date.parse(String(s.end)) : NaN;
+          const isActive = Number.isFinite(st) && Number.isFinite(en) ? (now >= (st as number) && now <= (en as number)) : s.isActive;
+          return { ...s, isActive, status: isActive ? 'active' : 'scheduled' };
+        });
+        setActiveShiftsCount(updated.filter(u => u.isActive).length);
+        return updated;
+      });
+    }, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Derived groups and departments for schedule tabs
+  const scheduleGroups = useMemo(() => {
+    const groups: Record<string, Array<{ name: string; role: string; shift: string; status: string; department?: string; start?: string; end?: string; isActive?: boolean }>> = {};
+    for (const s of staffSchedule as any[]) {
+      const dept = (s.department || 'Other') as string;
+      if (!groups[dept]) groups[dept] = [];
+      groups[dept].push(s);
+    }
+    return groups;
+  }, [staffSchedule]);
+  const departments = useMemo(() => Object.keys(scheduleGroups).sort(), [scheduleGroups]);
 
   return (
     <DashboardLayout>
@@ -543,54 +583,143 @@ export default function DashboardPage() {
                 <CardDescription>Current and upcoming shifts, grouped by department</CardDescription>
               </CardHeader>
               <CardContent className="flex-1">
-                <div className="h-full overflow-y-auto pr-1 space-y-4">
-                  {(() => {
-                    const groups: Record<string, Array<{ name: string; role: string; shift: string; status: string }>> = {};
-                    for (const s of staffSchedule as any[]) {
-                      const dept = (s.department || 'Other') as string;
-                      if (!groups[dept]) groups[dept] = [];
-                      groups[dept].push(s);
-                    }
-                    const entries = Object.entries(groups);
-                    if (entries.length === 0) return <p className="text-sm text-muted-foreground">No active shifts</p>;
-                    return entries.map(([dept, members]) => (
-                      <div key={dept}>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">{dept}</div>
-                        <div className="space-y-3">
-                          {members.map((staff, index) => (
-                            <div key={`${dept}-${index}`} className="flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border">
-                              <div className="flex items-center space-x-3">
-                                <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
-                                  {staff.name.split(" ").map((n: string) => n[0]).join("")}
-                                </div>
-                                <div>
-                                  <p className="font-semibold text-foreground text-sm">{staff.name}</p>
-                                  <p className="text-xs text-muted-foreground">{staff.role}</p>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-xs font-semibold text-foreground">{staff.shift}</p>
-                                <div className="flex items-center justify-end mt-1">
-                                  {staff.status === "active" ? (
-                                    <div className="flex items-center text-green-600 dark:text-green-400">
-                                      <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full mr-2"></div>
-                                      <span className="text-[10px]">Active</span>
+                <Tabs value={scheduleTab} onValueChange={setScheduleTab}>
+                  <TabsList className="grid w-full" style={{ gridTemplateColumns: `repeat(${2 + departments.length}, minmax(0, 1fr))` }}>
+                    <TabsTrigger value="all">All</TabsTrigger>
+                    {departments.map((d) => (
+                      <TabsTrigger key={d} value={`dept:${d}`}>{d}</TabsTrigger>
+                    ))}
+                    <TabsTrigger value="gantt">Calendar</TabsTrigger>
+                  </TabsList>
+
+                  {/* All Departments */}
+                  <TabsContent value="all" className="mt-4">
+                    <div className="max-h-[700px] overflow-y-auto pr-1 space-y-6">
+                      {departments.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No shifts found for today.</p>
+                      ) : (
+                        departments.map((dept) => {
+                          const members = scheduleGroups[dept] || [];
+                          return (
+                            <div key={dept}>
+                              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">{dept}</div>
+                              <div className="space-y-3">
+                                {members.map((staff, index) => (
+                                  <div key={`${dept}-${index}`} className={`flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border ${staff.status === 'active' ? '' : 'opacity-60'}`}>
+                                    <div className="flex items-center space-x-3">
+                                      <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
+                                        {staff.name.split(" ").map((n: string) => n[0]).join("")}
+                                      </div>
+                                      <div>
+                                        <p className="font-semibold text-foreground text-sm">{staff.name}</p>
+                                        <p className="text-xs text-muted-foreground">{staff.role}</p>
+                                      </div>
                                     </div>
-                                  ) : (
-                                    <div className="flex items-center text-muted-foreground">
-                                      <Clock className="w-3 h-3 mr-1" />
-                                      <span className="text-[10px]">Scheduled</span>
+                                    <div className="text-right">
+                                      <p className="text-xs font-semibold text-foreground">{staff.shift}</p>
+                                      <div className="flex items-center justify-end mt-1">
+                                        {staff.status === "active" ? (
+                                          <div className="flex items-center text-green-600 dark:text-green-400">
+                                            <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full mr-2"></div>
+                                            <span className="text-[10px]">Active</span>
+                                          </div>
+                                        ) : (
+                                          <div className="flex items-center text-muted-foreground">
+                                            <Clock className="w-3 h-3 mr-1" />
+                                            <span className="text-[10px]">Scheduled</span>
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
-                                  )}
-                                </div>
+                                  </div>
+                                ))}
                               </div>
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </TabsContent>
+
+                  {/* Per-Department */}
+                  {departments.map((dept) => (
+                    <TabsContent key={dept} value={`dept:${dept}`} className="mt-4">
+                      <div className="max-h-[700px] overflow-y-auto pr-1 space-y-3">
+                        {(scheduleGroups[dept] || []).map((staff, index) => (
+                          <div key={`${dept}-${index}`} className={`flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border ${staff.status === 'active' ? '' : 'opacity-60'}`}>
+                            <div className="flex items-center space-x-3">
+                              <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
+                                {staff.name.split(" ").map((n: string) => n[0]).join("")}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-foreground text-sm">{staff.name}</p>
+                                <p className="text-xs text-muted-foreground">{staff.role}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs font-semibold text-foreground">{staff.shift}</p>
+                              <div className="flex items-center justify-end mt-1">
+                                {staff.status === "active" ? (
+                                  <div className="flex items-center text-green-600 dark:text-green-400">
+                                    <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full mr-2"></div>
+                                    <span className="text-[10px]">Active</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center text-muted-foreground">
+                                    <Clock className="w-3 h-3 mr-1" />
+                                    <span className="text-[10px]">Scheduled</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {((scheduleGroups[dept] || []).length === 0) && (
+                          <p className="text-sm text-muted-foreground">No shifts in this department today.</p>
+                        )}
                       </div>
-                    ));
-                  })()}
-                </div>
+                    </TabsContent>
+                  ))}
+
+                  {/* Calendar / Gantt */}
+                  <TabsContent value="gantt" className="mt-4">
+                    <div className="max-h-[700px] overflow-y-auto pr-1">
+                      {(() => {
+                        const items = (staffSchedule as any[]).filter(s => s.start && s.end);
+                        if (items.length === 0) return <p className="text-sm text-muted-foreground">No timed shifts available for calendar view.</p>;
+                        const minStart = Math.min(...items.map(s => new Date(s.start).getTime()));
+                        const maxEnd = Math.max(...items.map(s => new Date(s.end).getTime()));
+                        const rangeMs = Math.max(1, maxEnd - minStart);
+                        return (
+                          <div className="space-y-2">
+                            <div className="text-xs text-muted-foreground">
+                              {new Date(minStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(maxEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            <div className="space-y-2">
+                              {items.map((s, index) => {
+                                const st = new Date(s.start).getTime();
+                                const en = new Date(s.end).getTime();
+                                const left = ((st - minStart) / rangeMs) * 100;
+                                const width = Math.max(1, ((en - st) / rangeMs) * 100);
+                                return (
+                                  <div key={index} className="flex items-center space-x-2 py-1">
+                                    <div className="w-40 shrink-0">
+                                      <p className="text-sm text-foreground leading-tight">{s.name}</p>
+                                      <p className="text-[11px] text-muted-foreground leading-tight">{s.role || 'Shift'}</p>
+                                    </div>
+                                    <div className="relative h-6 w-full bg-muted rounded">
+                                      <div className={`absolute top-0 h-6 rounded ${s.isActive ? 'bg-green-500' : 'bg-slate-400'}`} style={{ left: `${left}%`, width: `${width}%` }} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </TabsContent>
+                </Tabs>
               </CardContent>
             </Card>
           </div>
