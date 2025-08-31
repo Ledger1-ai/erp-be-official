@@ -25,7 +25,6 @@ const userSchema = new mongoose.Schema({
   role: {
     type: String,
     required: true,
-    enum: ['Super Admin', 'Manager', 'Shift Supervisor', 'Staff'],
     default: 'Staff'
   },
   avatar: {
@@ -64,6 +63,7 @@ const userSchema = new mongoose.Schema({
       'roster', 
       'menu',
       'robotic-fleets',
+      'hostpro',
       'admin'
     ]
   }],
@@ -199,6 +199,7 @@ userSchema.methods.getPermissions = function(): string[] {
       'roster', 
       'menu',
       'robotic-fleets',
+      'hostpro',
       'admin'
     ],
     'Manager': [
@@ -212,14 +213,16 @@ userSchema.methods.getPermissions = function(): string[] {
       'analytics:detailed',
       'roster',
       'menu',
-      'robotic-fleets'
+      'robotic-fleets',
+      'hostpro'
     ],
     'Shift Supervisor': [
       'dashboard',
       'scheduling',
       'inventory', // Basic inventory view for shift needs
       'team', // Basic team info but no detailed performance
-      'roster'
+      'roster',
+      'hostpro'
     ],
     'Staff': [
       'dashboard' // Very limited access

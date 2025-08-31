@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useGlobalSearch } from "@/lib/hooks/use-graphql";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Menu,
   Home,
@@ -84,7 +85,7 @@ const sidebarItems = [
     title: "HostPro",
     href: "/dashboard/hostpro",
     icon: MapPin,
-    permission: "scheduling" as const,
+    permission: "hostpro" as const,
   },
   {
     title: "Robotic Fleets",
@@ -116,6 +117,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const pathname = usePathname();
+  const [deniedOpen, setDeniedOpen] = useState(false);
 
   // Debounce search queries for UX & performance
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -157,6 +159,71 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       router.push("/login");
     }
   }, [router]);
+
+  // Permission guard with redirect to first allowed route
+  useEffect(() => {
+    if (!user || permissions.loading) return;
+    // Map pathname to required permission
+    const requiresAccess = (path: string): boolean => {
+      const p = path || "";
+      if (p.startsWith("/dashboard/settings")) {
+        return permissions.canAccessSettings();
+      }
+      const map: Array<{ test: (x: string) => boolean; perm: Parameters<typeof permissions.hasPermission>[0] }> = [
+        { test: (x) => x === "/dashboard" || x === "/dashboard/", perm: "dashboard" },
+        { test: (x) => x.startsWith("/dashboard/hostpro"), perm: "hostpro" },
+        { test: (x) => x.startsWith("/dashboard/inventory"), perm: "inventory" },
+        { test: (x) => x.startsWith("/dashboard/menu"), perm: "menu" },
+        { test: (x) => x.startsWith("/dashboard/team"), perm: "team" },
+        { test: (x) => x.startsWith("/dashboard/robotic-fleets"), perm: "robotic-fleets" },
+        { test: (x) => x.startsWith("/dashboard/analytics"), perm: "analytics" },
+        { test: (x) => x.startsWith("/dashboard/scheduling"), perm: "scheduling" },
+        { test: (x) => x.startsWith("/dashboard/roster"), perm: "roster" },
+      ];
+      for (const m of map) {
+        if (m.test(p)) return permissions.hasPermission(m.perm);
+      }
+      // default allow for unknown routes under dashboard
+      return true;
+    };
+
+    if (!requiresAccess(pathname || "")) {
+      // Compute first allowed landing route
+      const order: Array<{ perm: Parameters<typeof permissions.hasPermission>[0]; route: string }> = [
+        { perm: "dashboard", route: "/dashboard" },
+        { perm: "hostpro", route: "/dashboard/hostpro" },
+        { perm: "inventory", route: "/dashboard/inventory" },
+        { perm: "menu", route: "/dashboard/menu" },
+        { perm: "team", route: "/dashboard/team" },
+        { perm: "robotic-fleets", route: "/dashboard/robotic-fleets" },
+        { perm: "analytics", route: "/dashboard/analytics" },
+        { perm: "scheduling", route: "/dashboard/scheduling" },
+        { perm: "roster", route: "/dashboard/roster" },
+      ];
+      let landing = "/dashboard";
+      for (const i of order) {
+        if (permissions.hasPermission(i.perm)) { landing = i.route; break; }
+      }
+      if (!permissions.canAccessSettings() && landing === "/dashboard" && !permissions.hasPermission("dashboard")) {
+        // Fallback to settings if that's the only allowed section
+        landing = "/dashboard/settings";
+      } else if (permissions.canAccessSettings() && !permissions.hasPermission("dashboard") && landing === "/dashboard") {
+        landing = "/dashboard/settings";
+      }
+      try { sessionStorage.setItem("permissionDenied", "1"); } catch {}
+      router.replace(landing);
+    }
+  }, [pathname, user, permissions, permissions.loading, router]);
+
+  // Show permission denied modal if flagged by guard
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("permissionDenied") === "1") {
+        sessionStorage.removeItem("permissionDenied");
+        setDeniedOpen(true);
+      }
+    } catch {}
+  }, [pathname]);
 
   const handleLogout = () => {
     localStorage.removeItem("user");
@@ -228,6 +295,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   return (
             <div className="min-h-screen bg-background">
+      <Dialog open={deniedOpen} onOpenChange={setDeniedOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Access Restricted</DialogTitle>
+            <DialogDescription>
+              You don't have permission to view that page. We've taken you to a page you can access.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
       {/* Desktop Sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[18rem] lg:flex-col">
         <div className="flex flex-col flex-grow bg-background border-r border-border/90 shadow-sm">

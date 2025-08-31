@@ -12,6 +12,7 @@ import * as z from "zod";
 import { Loader2, Eye, EyeOff, Brain, AlertCircle } from "lucide-react";
 import Image from "next/image";
 import FirstLoginPasswordChange from "@/components/auth/FirstLoginPasswordChange";
+import { ROLE_PERMISSIONS } from "@/lib/hooks/use-permissions";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -69,6 +70,27 @@ export default function LoginPage() {
     },
   });
 
+  const computeLandingRoute = (user: User): string => {
+    const rolePerms = (ROLE_PERMISSIONS as any)[user.role] as string[] | undefined;
+    const effective = new Set([...(user.permissions || []), ...((rolePerms || []))]);
+    const order: Array<{ perm: string; route: string }> = [
+      { perm: "dashboard", route: "/dashboard" },
+      { perm: "hostpro", route: "/dashboard/hostpro" },
+      { perm: "inventory", route: "/dashboard/inventory" },
+      { perm: "menu", route: "/dashboard/menu" },
+      { perm: "team", route: "/dashboard/team" },
+      { perm: "robotic-fleets", route: "/dashboard/robotic-fleets" },
+      { perm: "analytics", route: "/dashboard/analytics" },
+      { perm: "scheduling", route: "/dashboard/scheduling" },
+      { perm: "roster", route: "/dashboard/roster" },
+      { perm: "settings", route: "/dashboard/settings" },
+    ];
+    for (const item of order) {
+      if (effective.has(item.perm)) return item.route;
+    }
+    return "/dashboard";
+  };
+
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
     setErrorMessage("");
@@ -92,8 +114,9 @@ export default function LoginPage() {
         sessionStorage.setItem('accessToken', result.accessToken);
         localStorage.setItem('user', JSON.stringify(result.user));
         
-        // Force a window location change instead of router.push for more reliable redirect
-        window.location.href = "/dashboard";
+        // Redirect to first allowed route based on permissions
+        const landing = computeLandingRoute(result.user as any);
+        window.location.href = landing;
       } else if (result.requiresPasswordChange && result.tempToken) {
         // Handle first login or forced password change
         setPasswordChangeData({
@@ -129,8 +152,9 @@ export default function LoginPage() {
     sessionStorage.setItem('accessToken', accessToken);
     localStorage.setItem('user', JSON.stringify(user));
     
-    // Redirect to dashboard
-    window.location.href = "/dashboard";
+    // Redirect to first allowed route based on permissions
+    const landing = computeLandingRoute(user);
+    window.location.href = landing;
   };
 
   const formatRetryTime = (seconds: number) => {

@@ -19,6 +19,7 @@ export type Permission =
   | 'roster'
   | 'menu'
   | 'robotic-fleets'
+  | 'hostpro' // Access HostPro module
   | 'admin';
 
 export type Role = 'Super Admin' | 'Manager' | 'Shift Supervisor' | 'Staff';
@@ -32,7 +33,7 @@ export interface User {
 }
 
 // Define comprehensive role-based permissions
-const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
+export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   'Super Admin': [
     'dashboard',
     'scheduling', 
@@ -49,6 +50,7 @@ const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'roster',
     'menu',
     'robotic-fleets',
+    'hostpro',
     'admin'
   ],
   'Manager': [
@@ -62,14 +64,16 @@ const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'analytics:detailed',
     'roster',
     'menu',
-    'robotic-fleets'
+    'robotic-fleets',
+    'hostpro'
   ],
   'Shift Supervisor': [
     'dashboard',
     'scheduling',
     'inventory', // Basic inventory view for shift needs
     'team', // Basic team info but no detailed performance
-    'roster'
+    'roster',
+    'hostpro'
   ],
   'Staff': [
     'dashboard' // Very limited access

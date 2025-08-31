@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { useToastIntegration } from "@/lib/hooks/use-toast-integration";
-import { usePermissions } from "@/lib/hooks/use-permissions";
+import { usePermissions, ROLE_PERMISSIONS } from "@/lib/hooks/use-permissions";
 import { PermissionTab } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,41 +30,25 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-// Sample data
-const userRoles = [
-  {
-    id: 1,
-    name: "Super Admin",
+// Role metadata for display
+const ROLE_META: Record<string, { description: string; color: string }> = {
+  "Super Admin": {
     description: "Full system access with all permissions",
-    permissions: ["dashboard", "scheduling", "inventory", "team", "analytics", "settings"],
-    userCount: 1,
     color: "bg-red-500",
   },
-  {
-    id: 2,
-    name: "Manager",
+  "Manager": {
     description: "Management access to most features",
-    permissions: ["dashboard", "scheduling", "inventory", "team", "analytics"],
-    userCount: 3,
     color: "bg-blue-500",
   },
-  {
-    id: 3,
-    name: "Shift Supervisor",
+  "Shift Supervisor": {
     description: "Access to scheduling and team management",
-    permissions: ["dashboard", "scheduling", "team"],
-    userCount: 5,
     color: "bg-green-500",
   },
-  {
-    id: 4,
-    name: "Staff",
+  "Staff": {
     description: "Basic dashboard access",
-    permissions: ["dashboard"],
-    userCount: 12,
     color: "bg-yellow-500",
   },
-];
+};
 
 const systemUsers = [
   {
@@ -123,21 +107,241 @@ const permissionsList = [
   { id: "roster", name: "Roster Management", description: "Create and manage staff rosters" },
   { id: "menu", name: "Menu Management", description: "Manage menu items and mappings" },
   { id: "robotic-fleets", name: "Robotic Fleets", description: "Manage robotic fleet operations" },
+  { id: "hostpro", name: "HostPro", description: "Access the HostPro module" },
   { id: "admin", name: "Super Admin", description: "Full system administration access" },
 ];
+
+const ROLE_COLORS = ['bg-red-500','bg-blue-500','bg-green-500','bg-yellow-500','bg-purple-500','bg-pink-500','bg-orange-500','bg-teal-500','bg-slate-500'];
+
+type RoleItem = {
+  id?: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  color: string;
+  isSystem: boolean;
+};
+
+function CreateRoleForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [permSet, setPermSet] = useState<Set<string>>(new Set());
+  const [color, setColor] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleToggle = (id: string, checked: boolean) => {
+    const next = new Set(permSet);
+    if (checked) next.add(id); else next.delete(id);
+    setPermSet(next);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setSubmitting(true);
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const res = await fetch('/api/roles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ name: name.trim(), description, permissions: Array.from(permSet), ...(color ? { color } : {}) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to create role');
+      toast.success('Role created');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create role');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="grid gap-4 py-2">
+      <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+        <Label className="sm:text-right">Role Name</Label>
+        <Input value={name} onChange={(e) => setName(e.target.value)} className="sm:col-span-3" placeholder="e.g. Assistant Manager" required />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+        <Label className="sm:text-right">Description</Label>
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} className="sm:col-span-3" placeholder="Short summary" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-4">
+        <Label className="sm:text-right mt-2">Color</Label>
+        <div className="sm:col-span-3 flex flex-wrap gap-2">
+          {ROLE_COLORS.map((c) => (
+            <button type="button" key={c} onClick={() => setColor(c)} className={`w-7 h-7 rounded-full border ${c} ${color === c ? 'ring-2 ring-offset-2 ring-orange-500' : ''}`} aria-label={`Choose ${c}`} />
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-4">
+        <Label className="sm:text-right mt-2">Permissions</Label>
+        <div className="sm:col-span-3 space-y-2">
+          {permissionsList.map((permission) => (
+            <div key={permission.id} className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id={`create-role-perm-${permission.id}`}
+                checked={permSet.has(permission.id)}
+                onChange={(e) => handleToggle(permission.id, e.target.checked)}
+                className="rounded"
+              />
+              <label htmlFor={`create-role-perm-${permission.id}`} className="text-sm">
+                <span className="font-medium text-foreground">{permission.name}</span>
+                <span className="text-muted-foreground ml-2">{permission.description}</span>
+              </label>
+            </div>
+          ))}
+        </div>
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+        <Button type="submit" disabled={submitting} className="bg-orange-600 hover:bg-orange-700 text-white">{submitting ? 'Creating...' : 'Create Role'}</Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function EditRoleDialog({ role, open, onOpenChange, onSaved }: { role: RoleItem; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
+  const isSuperAdmin = role.name === 'Super Admin';
+  const [name] = useState(role.name);
+  const [description, setDescription] = useState(role.description || '');
+  const [permSet, setPermSet] = useState<Set<string>>(new Set(role.permissions || []));
+  const [color, setColor] = useState<string>(role.color || '');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setDescription(role.description || '');
+    setPermSet(new Set(role.permissions || []));
+    setColor(role.color || '');
+  }, [role, open]);
+
+  const handleToggle = (id: string, checked: boolean) => {
+    const next = new Set(permSet);
+    if (checked) next.add(id); else next.delete(id);
+    setPermSet(next);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSuperAdmin || role.isSystem && !role.id) { onOpenChange(false); return; }
+    setSubmitting(true);
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const res = await fetch('/api/roles', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ id: role.id, name, description, permissions: Array.from(permSet), ...(color ? { color } : {}) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update role');
+      toast.success('Role updated');
+      onSaved();
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update role');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{isSuperAdmin ? 'View Role' : (role.id ? 'Edit Role' : 'View Role')}</DialogTitle>
+          <DialogDescription>{isSuperAdmin ? 'Super Admin is not editable.' : (role.id ? 'Update role details and permissions.' : 'System role is view-only.')}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSave} className="grid gap-4 py-2">
+          <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+            <Label className="sm:text-right">Role</Label>
+            <Input value={name} disabled className="sm:col-span-3" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+            <Label className="sm:text-right">Description</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} className="sm:col-span-3" disabled={isSuperAdmin || (!role.id)} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+            <Label className="sm:text-right">Color</Label>
+            <div className="sm:col-span-3 flex flex-wrap gap-2">
+              {ROLE_COLORS.map((c) => (
+                <button type="button" key={c} onClick={() => setColor(c)} disabled={isSuperAdmin || (!role.id)} className={`w-7 h-7 rounded-full border ${c} ${color === c ? 'ring-2 ring-offset-2 ring-orange-500' : ''}`} aria-label={`Choose ${c}`} />
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-4">
+            <Label className="sm:text-right mt-2">Permissions</Label>
+            <div className="sm:col-span-3 space-y-2">
+              {permissionsList.map((permission) => (
+                <div key={permission.id} className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id={`edit-role-perm-${permission.id}`}
+                    checked={permSet.has(permission.id)}
+                    onChange={(e) => handleToggle(permission.id, e.target.checked)}
+                    className="rounded"
+                    disabled={isSuperAdmin || (!role.id)}
+                  />
+                  <label htmlFor={`edit-role-perm-${permission.id}`} className="text-sm">
+                    <span className="font-medium text-foreground">{permission.name}</span>
+                    <span className="text-muted-foreground ml-2">{permission.description}</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+            {role.id && !isSuperAdmin && (
+              <Button type="submit" disabled={submitting} className="bg-orange-600 hover:bg-orange-700 text-white">{submitting ? 'Saving...' : 'Save Changes'}</Button>
+            )}
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditRoleDialogTrigger({ role, onSaved }: { role: RoleItem; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <Edit className="h-4 w-4" />
+      </Button>
+      <EditRoleDialog role={role} open={open} onOpenChange={setOpen} onSaved={onSaved} />
+    </>
+  );
+}
 
 export default function SettingsPage() {
   const permissions = usePermissions();
   const [selectedTab, setSelectedTab] = useState("permissions");
   const [isCreateRoleOpen, setIsCreateRoleOpen] = useState(false);
   const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  const [roleCounts, setRoleCounts] = useState<Record<string, number>>({});
+  const [customRoles, setCustomRoles] = useState<RoleItem[]>([]);
+  const availableRoles = useMemo(() => Object.keys(ROLE_PERMISSIONS), []);
+  const permissionNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of permissionsList) map[p.id] = p.name;
+    return map;
+  }, []);
   
   // Permission checks for different settings sections
   const canManageUsers = permissions.hasPermission('settings:users');
   const canAccessSystemSettings = permissions.hasPermission('settings:system');
   
   // Users state & handlers aligned with User model and /api/team
-  type PermissionId = 'dashboard' | 'scheduling' | 'inventory' | 'inventory:financial' | 'team' | 'team:performance' | 'team:management' | 'analytics' | 'analytics:detailed' | 'settings' | 'settings:users' | 'settings:system' | 'roster' | 'menu' | 'robotic-fleets' | 'admin';
+  type PermissionId = 'dashboard' | 'scheduling' | 'inventory' | 'inventory:financial' | 'team' | 'team:performance' | 'team:management' | 'analytics' | 'analytics:detailed' | 'settings' | 'settings:users' | 'settings:system' | 'roster' | 'menu' | 'robotic-fleets' | 'hostpro' | 'admin';
   interface ManagedUser {
     _id: string;
     name: string;
@@ -193,9 +397,40 @@ export default function SettingsPage() {
     }
   }
 
+  async function fetchTeamSummary() {
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const response = await fetch('/api/team/summary', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!response.ok) throw new Error('Failed to load team summary');
+      const data = await response.json();
+      setRoleCounts(data?.data?.countsByRole || {});
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function fetchCustomRoles() {
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+      const res = await fetch('/api/roles', { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = (data?.data?.roles || []).map((r: any) => ({ id: r._id, name: r.name, description: r.description || '', permissions: r.permissions || [], color: r.color || 'bg-slate-500', isSystem: !!r.isSystem })) as RoleItem[];
+      setCustomRoles(list);
+    } catch {}
+  }
+
   useEffect(() => {
     if (selectedTab === 'users') {
       fetchUsers();
+    }
+    if (selectedTab === 'permissions') {
+      fetchTeamSummary();
+      fetchCustomRoles();
     }
   }, [selectedTab]);
 
@@ -354,8 +589,9 @@ export default function SettingsPage() {
           <TabsContent value="permissions" className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                                                    <h2 className="text-xl font-semibold text-foreground">Role Management</h2>
-                  <p className="text-muted-foreground text-sm">Define roles and their permissions</p>
+                
+                <h2 className="text-xl font-semibold text-foreground">Roles & Permissions</h2>
+                <p className="text-muted-foreground text-sm">Define roles and their permissions</p>
               </div>
               <Dialog open={isCreateRoleOpen} onOpenChange={setIsCreateRoleOpen}>
                 <DialogTrigger asChild>
@@ -369,40 +605,50 @@ export default function SettingsPage() {
                     <DialogTitle>Create New Role</DialogTitle>
                     <DialogDescription>Define a new role with specific permissions</DialogDescription>
                   </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="role-name" className="text-right">Role Name</Label>
-                      <Input id="role-name" placeholder="Enter role name" className="col-span-3" />
-                    </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="role-description" className="text-right">Description</Label>
-                      <Input id="role-description" placeholder="Describe the role" className="col-span-3" />
-                    </div>
-                    <div className="grid grid-cols-4 items-start gap-4">
-                      <Label className="text-right mt-2">Permissions</Label>
-                      <div className="col-span-3 space-y-2">
-                        {permissionsList.map((permission) => (
-                          <div key={permission.id} className="flex items-center space-x-2">
-                            <input type="checkbox" id={permission.id} className="rounded" />
-                            <label htmlFor={permission.id} className="text-sm">
-                              <span className="font-medium text-foreground">{permission.name}</span>
-                              <span className="text-muted-foreground ml-2">{permission.description}</span>
-                            </label>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsCreateRoleOpen(false)}>Cancel</Button>
-                    <Button className="bg-orange-600 hover:bg-orange-700 text-white">Create Role</Button>
-                  </DialogFooter>
+                  <CreateRoleForm onClose={() => setIsCreateRoleOpen(false)} onSuccess={() => fetchCustomRoles()} />
                 </DialogContent>
               </Dialog>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {userRoles.map((role) => (
+              {Object.keys(ROLE_PERMISSIONS).map((roleName) => (
+                <Card key={`sys-${roleName}`}>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className={`w-4 h-4 rounded-full ${(ROLE_META as any)[roleName]?.color || 'bg-slate-400'}`}></div>
+                        <div>
+                          <CardTitle className="text-lg">{roleName}</CardTitle>
+                          <CardDescription>{(ROLE_META as any)[roleName]?.description || ''}</CardDescription>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <EditRoleDialogTrigger role={{ name: roleName, description: (ROLE_META as any)[roleName]?.description || '', permissions: (ROLE_PERMISSIONS as any)[roleName], color: (ROLE_META as any)[roleName]?.color || 'bg-slate-400', isSystem: true }} onSaved={() => fetchCustomRoles()} />
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">Users with this role:</span>
+                        <span className="font-medium text-foreground">{roleCounts[roleName] || 0}</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground mb-2">Permissions:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {(ROLE_PERMISSIONS as any)[roleName].map((perm: string) => (
+                            <span key={perm} className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs rounded">
+                              {permissionNameMap[perm] || perm}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+
+              {customRoles.map((role) => (
                 <Card key={role.id}>
                   <CardHeader>
                     <div className="flex items-center justify-between">
@@ -414,11 +660,20 @@ export default function SettingsPage() {
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <Button variant="outline" size="sm">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        {role.userCount === 0 && (
-                          <Button variant="outline" size="sm">
+                        <EditRoleDialogTrigger role={role} onSaved={() => fetchCustomRoles()} />
+                        {(roleCounts[role.name] || 0) === 0 && (
+                          <Button variant="outline" size="sm" onClick={async () => {
+                            try {
+                              const token = typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
+                              const res = await fetch(`/api/roles?id=${role.id}`, { method: 'DELETE', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+                              const data = await res.json().catch(() => ({}));
+                              if (!res.ok) throw new Error(data?.error || 'Failed to delete role');
+                              toast.success('Role deleted');
+                              fetchCustomRoles();
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : 'Failed to delete role');
+                            }
+                          }}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         )}
@@ -428,15 +683,15 @@ export default function SettingsPage() {
                   <CardContent>
                     <div className="space-y-3">
                       <div className="flex items-center justify-between text-sm">
-                                                <span className="text-muted-foreground">Users with this role:</span>
-                        <span className="font-medium text-foreground">{role.userCount}</span>
+                        <span className="text-muted-foreground">Users with this role:</span>
+                        <span className="font-medium text-foreground">{roleCounts[role.name] || 0}</span>
                       </div>
                       <div>
                         <p className="text-sm font-medium text-foreground mb-2">Permissions:</p>
                         <div className="flex flex-wrap gap-1">
-                          {role.permissions.map((permission) => (
-                            <span key={permission} className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs rounded">
-                              {permission}
+                          {role.permissions.map((perm) => (
+                            <span key={perm} className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs rounded">
+                              {permissionNameMap[perm] || perm}
                             </span>
                           ))}
                         </div>
@@ -469,32 +724,35 @@ export default function SettingsPage() {
                     <DialogDescription>Create a new user account</DialogDescription>
                   </DialogHeader>
                   <form onSubmit={handleCreateUser} className="grid gap-4 py-4">
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="user-name" className="text-right">Name</Label>
-                      <Input id="user-name" placeholder="Full name" className="col-span-3" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required />
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label htmlFor="user-name" className="sm:text-right">Name</Label>
+                      <Input id="user-name" placeholder="Full name" className="sm:col-span-3" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required />
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="user-email" className="text-right">Email</Label>
-                      <Input id="user-email" type="email" placeholder="email@example.com" className="col-span-3" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required />
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label htmlFor="user-email" className="sm:text-right">Email</Label>
+                      <Input id="user-email" type="email" placeholder="email@example.com" className="sm:col-span-3" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required />
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="user-role" className="text-right">Role</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label htmlFor="user-role" className="sm:text-right">Role</Label>
                       <select 
                         id="user-role" 
-                        className="col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                        className="sm:col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
                         value={newUser.role}
                         onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
                         required
                       >
                         <option value="">Select role...</option>
-                        {userRoles.map((role) => (
-                          <option key={role.id} value={role.name}>{role.name}</option>
+                        {Object.keys(ROLE_PERMISSIONS).map((role) => (
+                          <option key={`sys-${role}`} value={role}>{role}</option>
+                        ))}
+                        {customRoles.map((r) => (
+                          <option key={`custom-${r.id}`} value={r.name}>{r.name}</option>
                         ))}
                       </select>
                     </div>
-                    <div className="grid grid-cols-4 items-start gap-4">
-                      <Label className="text-right mt-2">Permissions</Label>
-                      <div className="col-span-3 space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-4">
+                      <Label className="sm:text-right mt-2">Permissions</Label>
+                      <div className="sm:col-span-3 space-y-2">
                         {permissionsList.map((permission) => (
                           <div key={permission.id} className="flex items-center space-x-2">
                             <input 
@@ -516,9 +774,9 @@ export default function SettingsPage() {
                         ))}
                       </div>
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Require password change</Label>
-                      <div className="col-span-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Require password change</Label>
+                      <div className="sm:col-span-3">
                         <label className="inline-flex items-center space-x-2">
                           <input type="checkbox" checked={newUser.mustChangePassword} onChange={(e) => setNewUser({ ...newUser, mustChangePassword: e.target.checked })} />
                           <span className="text-sm text-muted-foreground">User must change password on first login</span>
@@ -609,29 +867,32 @@ export default function SettingsPage() {
                 </DialogHeader>
                 {selectedUser && (
                   <form onSubmit={handleUpdateUser} className="grid gap-4 py-2">
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Name</Label>
-                      <Input className="col-span-3" value={selectedUser.name} onChange={(e) => setSelectedUser({ ...selectedUser, name: e.target.value })} required />
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Name</Label>
+                      <Input className="sm:col-span-3" value={selectedUser.name} onChange={(e) => setSelectedUser({ ...selectedUser, name: e.target.value })} required />
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Email</Label>
-                      <Input className="col-span-3" type="email" value={selectedUser.email} onChange={(e) => setSelectedUser({ ...selectedUser, email: e.target.value })} required />
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Email</Label>
+                      <Input className="sm:col-span-3" type="email" value={selectedUser.email} onChange={(e) => setSelectedUser({ ...selectedUser, email: e.target.value })} required />
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Role</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Role</Label>
                       <select 
-                        className="col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                        className="sm:col-span-3 h-10 px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
                         value={selectedUser.role}
                         onChange={(e) => setSelectedUser({ ...selectedUser, role: e.target.value })}
                       >
-                        {userRoles.map((role) => (
-                          <option key={role.id} value={role.name}>{role.name}</option>
+                        {Object.keys(ROLE_PERMISSIONS).map((role) => (
+                          <option key={`sys-${role}`} value={role}>{role}</option>
+                        ))}
+                        {customRoles.map((r) => (
+                          <option key={`custom-${r.id}`} value={r.name}>{r.name}</option>
                         ))}
                       </select>
                     </div>
-                    <div className="grid grid-cols-4 items-start gap-4">
-                      <Label className="text-right mt-2">Permissions</Label>
-                      <div className="col-span-3 space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-4">
+                      <Label className="sm:text-right mt-2">Permissions</Label>
+                      <div className="sm:col-span-3 space-y-2">
                         {permissionsList.map((permission) => (
                           <div key={permission.id} className="flex items-center space-x-2">
                             <input
@@ -653,18 +914,18 @@ export default function SettingsPage() {
                         ))}
                       </div>
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Active</Label>
-                      <div className="col-span-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Active</Label>
+                      <div className="sm:col-span-3">
                         <label className="inline-flex items-center space-x-2">
                           <input type="checkbox" checked={selectedUser.isActive} onChange={(e) => setSelectedUser({ ...selectedUser, isActive: e.target.checked })} />
                           <span className="text-sm text-muted-foreground">User can sign in</span>
                         </label>
                       </div>
                     </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label className="text-right">Require password change</Label>
-                      <div className="col-span-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-4">
+                      <Label className="sm:text-right">Require password change</Label>
+                      <div className="sm:col-span-3">
                         <label className="inline-flex items-center space-x-2">
                           <input type="checkbox" checked={selectedUser.mustChangePassword || false} onChange={(e) => setSelectedUser({ ...selectedUser, mustChangePassword: e.target.checked })} />
                           <span className="text-sm text-muted-foreground">User must change password on next login</span>
@@ -687,9 +948,9 @@ export default function SettingsPage() {
                   <DialogTitle>Temporary Password</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
-                  <p className="text-sm text-gray-600">Share this temporary password securely. The user will be required to change it on first login.</p>
-                  <div className="flex items-center space-x-2 p-3 bg-gray-100 rounded-lg">
-                    <code className="flex-1 text-sm font-mono">{temporaryPassword}</code>
+                  <p className="text-sm text-muted-foreground">Share this temporary password securely. The user will be required to change it on first login.</p>
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <code className="flex-1 text-sm font-mono text-slate-900 dark:text-slate-100 break-all">{temporaryPassword}</code>
                     <Button size="sm" variant="outline" onClick={() => copyToClipboard(temporaryPassword)}>
                       <Copy className="h-4 w-4" />
                     </Button>

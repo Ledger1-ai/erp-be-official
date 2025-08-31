@@ -8,7 +8,7 @@ import { z } from 'zod';
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
   email: z.string().email('Invalid email address'),
-  role: z.enum(['Super Admin', 'Manager', 'Shift Supervisor', 'Staff']),
+  role: z.string().min(1, 'Role is required'),
   permissions: z
     .array(
       z.enum([
@@ -28,6 +28,7 @@ const createUserSchema = z.object({
         'roster',
         'menu',
         'robotic-fleets',
+        'hostpro',
         'admin',
       ])
     )
