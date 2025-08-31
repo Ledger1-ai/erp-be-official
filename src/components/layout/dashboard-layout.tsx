@@ -279,11 +279,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <div className="p-4 border-t">
         <Button
           variant="outline"
-          className="w-full justify-start border-primary/20 text-primary hover:bg-primary/10"
-          onClick={() => setIsVaruniOpen(!isVaruniOpen)}
+          className="w-full justify-between border-primary/20 text-primary/70 hover:bg-transparent cursor-not-allowed opacity-75"
+          disabled
         >
-          <Brain className="mr-3 h-4 w-4" />
-          Chat with Varuni
+          <span className="flex items-center">
+            <Brain className="mr-3 h-4 w-4" />
+            Chat with Varuni
+          </span>
+          <Badge variant="secondary">Coming soon</Badge>
         </Button>
       </div>
     </div>
