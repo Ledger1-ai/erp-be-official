@@ -4,7 +4,7 @@ import ToastCompleteAPI from '@/lib/services/toast-complete-api';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const restaurantGuid = searchParams.get('restaurantGuid');
+    const restaurantGuid = searchParams.get('restaurantGuid') || process.env.TOAST_RESTAURANT_ID || '';
     const startDate = searchParams.get('startDate') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const endDate = searchParams.get('endDate') || new Date().toISOString();
 

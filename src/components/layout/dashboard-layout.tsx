@@ -26,6 +26,7 @@ import {
   Bell,
   Search,
   Bot,
+  MapPin,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -80,6 +81,12 @@ const sidebarItems = [
     permission: "team" as const,
   },
   {
+    title: "HostPro",
+    href: "/dashboard/hostpro",
+    icon: MapPin,
+    permission: "scheduling" as const,
+  },
+  {
     title: "Robotic Fleets",
     href: "/dashboard/robotic-fleets",
     icon: Bot, 
@@ -128,9 +135,19 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const effectiveResults = shouldFetch ? (searchData?.globalSearch || []) : [];
   
   // Filter sidebar items based on user permissions (but always show disabled items)
-  const visibleSidebarItems = sidebarItems.filter(item => 
-    item.disabled || (item.permission && permissions.hasPermission(item.permission))
-  );
+  const visibleSidebarItems = sidebarItems
+    .filter(item => item.disabled || (item.permission && permissions.hasPermission(item.permission)))
+    .sort((a, b) => {
+      // Always keep Settings last
+      if (a.title === 'Settings') return 1;
+      if (b.title === 'Settings') return -1;
+      // Active (non-disabled) first
+      const aActive = !a.disabled;
+      const bActive = !b.disabled;
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      // Otherwise keep original order
+      return 0;
+    });
 
   useEffect(() => {
     const userData = localStorage.getItem("user");
