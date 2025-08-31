@@ -18,6 +18,7 @@ import {
 } from './auth-guards';
 import mongoose from 'mongoose';
 import { MenuIndex } from '../models/MenuIndex';
+import { MenuVisibility } from '../models/MenuVisibility';
 import { MenuMapping } from '../models/MenuMapping';
 import { OrderTrackingConfig } from '../models/OrderTrackingConfig';
 import ToastAPIClient from '../services/toast-api-client';
@@ -1325,6 +1326,16 @@ export const resolvers = {
     indexedMenus: async (_: unknown, { restaurantGuid }: { restaurantGuid: string }) => {
       return MenuIndex.findOne({ restaurantGuid }).lean();
     },
+    menuVisibility: async (_: unknown, { restaurantGuid }: { restaurantGuid: string }) => {
+      const raw = await MenuVisibility.findOne({ restaurantGuid }).lean();
+      if (!raw) return { restaurantGuid, hiddenMenus: [], hiddenGroups: [], updatedAt: null } as any;
+      const doc: any = raw as any;
+      const rGuid = (doc as any)['restaurantGuid'];
+      const hiddenMenus = (doc as any)['hiddenMenus'] || [];
+      const hiddenGroups = (doc as any)['hiddenGroups'] || [];
+      const updatedAt = (doc as any)['updatedAt'] || null;
+      return { restaurantGuid: rGuid, hiddenMenus, hiddenGroups, updatedAt } as any;
+    },
     menuMappings: async (_: unknown, { restaurantGuid, toastItemGuid }: { restaurantGuid: string; toastItemGuid?: string }) => {
       const q: any = { restaurantGuid };
       if (toastItemGuid) q.toastItemGuid = toastItemGuid;
@@ -2175,6 +2186,18 @@ export const resolvers = {
       };
       await MenuIndex.findOneAndUpdate({ restaurantGuid }, payload, { upsert: true, new: true });
       return true;
+    }),
+    setMenuVisibility: withPermission('inventory', async (_: unknown, { restaurantGuid, hiddenMenus, hiddenGroups }: { restaurantGuid: string; hiddenMenus?: string[]; hiddenGroups?: string[] }, context: AuthContext) => {
+      const update: any = { restaurantGuid };
+      if (hiddenMenus) update.hiddenMenus = Array.from(new Set(hiddenMenus));
+      if (hiddenGroups) update.hiddenGroups = Array.from(new Set(hiddenGroups));
+      update.updatedBy = context.user?.userId;
+      const doc = await MenuVisibility.findOneAndUpdate(
+        { restaurantGuid },
+        update,
+        { upsert: true, new: true }
+      );
+      return { restaurantGuid: doc.restaurantGuid, hiddenMenus: doc.hiddenMenus || [], hiddenGroups: doc.hiddenGroups || [], updatedAt: doc.updatedAt } as any;
     }),
     upsertMenuMapping: withPermission('inventory', async (_: unknown, { input }: any) => {
       const { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps } = input || {};

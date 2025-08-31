@@ -6,10 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import FloorMap from './FloorMap';
 import AssignSplitPane from './AssignSplitPane';
-import FloorDesigner from './FloorDesigner';
+import FloorDesigner, { Tool as DesignerTool } from './FloorDesigner';
 import { getPreset } from '@/lib/host/presets';
 import { FloorPreset } from '@/lib/host/types';
-import { Play, Pause, RotateCcw } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, BoxSelect, LassoSelect, Ruler, Move, Eraser, Type } from 'lucide-react';
 
 export default function HostProPanel() {
   const [presets, setPresets] = useState<FloorPreset[]>([]);
@@ -23,6 +23,7 @@ export default function HostProPanel() {
   const [layouts, setLayouts] = useState<Array<{ slug: string; updatedAt?: string }>>([]);
   const [layoutSlug, setLayoutSlug] = useState<string>('');
   const [layoutData, setLayoutData] = useState<any | null>(null);
+  const [designerTool, setDesignerTool] = useState<DesignerTool>('pointer');
 
   // Load presets and active servers
   useEffect(() => {
@@ -219,11 +220,29 @@ export default function HostProPanel() {
         {/* Tab 2: Domains & Map */}
         <TabsContent value="domains" className="space-y-4">
           <Card className="bg-card">
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between pb-2">
               <CardTitle>Domains & Map</CardTitle>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant={designerTool==='pointer'?'default':'outline'} onClick={() => setDesignerTool('pointer')}><MousePointer2 className="h-3 w-3 mr-1" />Select</Button>
+                    <Button size="sm" variant={designerTool==='rect'?'default':'outline'} onClick={() => setDesignerTool('rect')}><BoxSelect className="h-3 w-3 mr-1" />Box</Button>
+                    <Button size="sm" variant={designerTool==='lasso'?'default':'outline'} onClick={() => setDesignerTool('lasso')}><LassoSelect className="h-3 w-3 mr-1" />Lasso</Button>
+                  </div>
+                  <div className="flex items-center gap-1 pl-2 border-l">
+                    <Button size="sm" variant={designerTool==='wallDraw'?'default':'outline'} onClick={() => setDesignerTool('wallDraw')}><Ruler className="h-3 w-3 mr-1" />Draw</Button>
+                    <Button size="sm" variant={designerTool==='wallEdit'?'default':'outline'} onClick={() => setDesignerTool('wallEdit')}><Move className="h-3 w-3 mr-1" />Edit</Button>
+                    <Button size="sm" variant={designerTool==='wallErase'?'default':'outline'} onClick={() => setDesignerTool('wallErase')}><Eraser className="h-3 w-3 mr-1" />Erase</Button>
+                  </div>
+                  <div className="flex items-center gap-1 pl-2 border-l">
+                    <Button size="sm" variant={designerTool==='textAdd'?'default':'outline'} onClick={() => setDesignerTool('textAdd')}><Type className="h-3 w-3 mr-1" />Add Text</Button>
+                    <Button size="sm" variant={designerTool==='textMove'?'default':'outline'} onClick={() => setDesignerTool('textMove')}><Move className="h-3 w-3 mr-1" />Move</Button>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent>
-              <FloorDesigner preset={getPreset('3-plus-2-bar') || { slug:'', name:'', tables:[], domains:[] }} showRegionColors={true} />
+            <CardContent className="pt-0">
+              <FloorDesigner preset={getPreset('3-plus-2-bar') || { slug:'', name:'', tables:[], domains:[] }} showRegionColors={true} hideToolSections={true} tool={designerTool} onToolChange={setDesignerTool} />
             </CardContent>
           </Card>
         </TabsContent>

@@ -10,7 +10,7 @@ import { RefreshCw, CheckCircle, AlertCircle, Eraser, Save, Plus, Trash, Ruler, 
 import dynamic from 'next/dynamic';
 import { useTheme } from 'next-themes';
 
-type Tool =
+export type Tool =
   | 'pointer' | 'rect' | 'lasso' // selection and domain tools
   | 'wallDraw' | 'wallEdit' | 'wallErase' // wall tools
   | 'textAdd' | 'textMove'; // text tools
@@ -24,12 +24,21 @@ interface Region {
 
 const defaultColors = ['#22c55e','#3b82f6','#eab308','#f97316','#ef4444','#8b5cf6','#14b8a6','#a3e635'];
 
-export default function FloorDesigner({ preset, showRegionColors = false }: { preset: FloorPreset; showRegionColors?: boolean }) {
+export default function FloorDesigner({ preset, showRegionColors = false, hideToolSections = false, tool: controlledTool, onToolChange }: { preset: FloorPreset; showRegionColors?: boolean; hideToolSections?: boolean; tool?: Tool; onToolChange?: (t: Tool) => void }) {
   const { resolvedTheme } = (typeof window !== 'undefined' ? useTheme() : ({ resolvedTheme: 'light' } as any));
   const isDarkTheme = resolvedTheme === 'dark';
   const [regions, setRegions] = useState<Region[]>([{ id: 'r1', name: 'Region 1', color: defaultColors[0], tableIds: [] }]);
   const [activeRegionId, setActiveRegionId] = useState('r1');
-  const [tool, setTool] = useState<Tool>('pointer');
+  const [internalTool, setInternalTool] = useState<Tool>('pointer');
+  const tool: Tool = (controlledTool ?? internalTool);
+  function setToolState(next: Tool | ((prev: Tool) => Tool)) {
+    if (typeof next === 'function') {
+      const computed = (next as any)(tool);
+      if (onToolChange) onToolChange(computed); else setInternalTool(computed);
+    } else {
+      if (onToolChange) onToolChange(next); else setInternalTool(next);
+    }
+  }
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ x: number; y: number } | null>(null);
   const [lasso, setLasso] = useState<Array<{ x: number; y: number }>>([]);
@@ -86,7 +95,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
     const r: Region = { id: `r${idx + 1}`, name: `Region ${idx + 1}`, color: defaultColors[idx % defaultColors.length], tableIds: [] };
     setRegions([...regions, r]);
     setActiveRegionId(r.id);
-    setTool('pointer');
+    setToolState('pointer');
   }
   function removeRegion() {
     if (regions.length <= 1) return;
@@ -94,12 +103,12 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
     const rest = regions.slice(0, -1);
     // Unassign its tables (no overlap rule)
     setRegions(rest);
-    if (activeRegionId === last.id) { setActiveRegionId(rest[rest.length - 1].id); setTool('pointer'); }
+    if (activeRegionId === last.id) { setActiveRegionId(rest[rest.length - 1].id); setToolState('pointer'); }
   }
 
   function activateRegion(id: string) {
     setActiveRegionId(id);
-    setTool('pointer');
+    setToolState('pointer');
   }
 
   function assignTables(regionId: string, tableIds: string[]) {
@@ -277,7 +286,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
     if (isShift) {
       const group = contiguousTables(t, tables);
       assignTables(activeRegionId, group.map(x => x.id));
-      setTool('pointer');
+      setToolState('pointer');
       return;
     }
     if (isCtrl) {
@@ -285,13 +294,13 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
       // also toggle visual selection without affecting domains when dragging
       setSelectedIds(prev => { const n = new Set(prev); if (n.has(t.id)) n.delete(t.id); else n.add(t.id); return n; });
       setSelectedTableId(t.id);
-      setTool('pointer');
+      setToolState('pointer');
       return;
     }
     assignTables(activeRegionId, [t.id]);
     setSelectedTableId(t.id);
     setSelectedIds(new Set([t.id]));
-    setTool('pointer');
+    setToolState('pointer');
   }
 
   const regionByTable = useMemo(() => {
@@ -411,9 +420,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
   }
 
   // Toggle helper: clicking the active tool again returns to pointer
-  function toggleTool(next: Tool) {
-    setTool(prev => (prev === next ? 'pointer' : next));
-  }
+  function toggleTool(next: Tool) { setToolState(prev => (prev === next ? 'pointer' : next)); }
 
   // Clear transient states when switching tools
   useEffect(() => {
@@ -429,7 +436,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
       if (e.key === 'Escape') {
         setWallStart(null); setWallHover(null); setDragWallEnd(null);
         setMarqueeStart(null); setMarqueeEnd(null); setDragStart(null); setDragEnd(null); setLasso([]);
-        setTool('pointer');
+        setToolState('pointer');
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLabelIdx !== null) {
           setLabels(prev => prev.filter((_, idx) => idx !== selectedLabelIdx));
@@ -484,7 +491,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
             } catch {}
           }} />
           </div>
-          <DomainPresetControls regions={regions} onApply={(preset) => { setRegions(preset.regions as any); }} />
+          <DomainPresetControls regions={regions} onApply={(preset) => { setRegions(preset.regions as any); setActiveRegionId(((preset.regions || [])[0]?.id as any) || ''); }} />
           <div className="text-xs text-muted-foreground mt-2">Drag, resize, and assign domains. Save persists to DB.</div>
         </div>
 
@@ -496,7 +503,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
             <Button size="sm" variant="ghost" onClick={resetAllDomains} title="Clear all">Clear</Button>
           </div>
         </div>
-        <div className="space-y-2">
+        <div className="space-y-2 overflow-auto" style={{ maxHeight: 200 }}>
           {regions.map(r => (
             <div
               key={r.id}
@@ -513,6 +520,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
             </div>
           ))}
         </div>
+        {!hideToolSections && (
         <div className="mt-4">
           <div className="font-semibold mb-2">Domains / Selection</div>
           <div className="grid gap-2 mb-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
@@ -536,6 +544,7 @@ export default function FloorDesigner({ preset, showRegionColors = false }: { pr
             <div>Ctrl/Cmd: toggle table</div>
           </div>
         </div>
+        )}
       </Card>
 
       {/* Canvas */}
@@ -816,10 +825,17 @@ function DomainPresetControls({ regions, onApply }: { regions: any[]; onApply: (
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Preset name" className="w-full rounded-md border bg-background px-2 py-1 text-xs" />
       <Button className="w-full" size="sm" variant="outline" onClick={save} disabled={loading}>Save Domains</Button>
       <select className="w-full rounded-md border bg-background px-2 py-1 text-xs" onChange={(e) => {
-        const sel = list.find(x => x._id === e.target.value);
+        const v = e.target.value;
+        if (v === '__new__') {
+          setName('');
+          onApply({ name: '', regions: [] });
+          return;
+        }
+        const sel = list.find(x => x._id === v);
         if (sel) onApply(sel as any);
       }}>
         <option value="">Load preset…</option>
+        <option value="__new__">+ New preset…</option>
         {list.map(x => <option key={x._id} value={x._id}>{x.name}</option>)}
       </select>
     </div>

@@ -70,12 +70,15 @@ export default function RootLayout({
           "antialiased"
         )}
       >
+        <div className="app-accent-bg" aria-hidden="true" />
         {/* Removed glass overlay to prevent header blurring */}
         <ThemeProvider>
-          <ApolloWrapper>
-            {children}
-          </ApolloWrapper>
-          <Toaster position="top-right" />
+          <div className="relative z-10">
+            <ApolloWrapper>
+              {children}
+            </ApolloWrapper>
+            <Toaster position="top-right" />
+          </div>
         </ThemeProvider>
       </body>
     </html>

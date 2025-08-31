@@ -581,6 +581,17 @@ export const GET_INDEXED_MENUS = gql`
   }
 `;
 
+export const GET_MENU_VISIBILITY = gql`
+  query MenuVisibility($restaurantGuid: String!) {
+    menuVisibility(restaurantGuid: $restaurantGuid) {
+      restaurantGuid
+      hiddenMenus
+      hiddenGroups
+      updatedAt
+    }
+  }
+`;
+
 export const GET_MENU_MAPPINGS = gql`
   query MenuMappings($restaurantGuid: String!, $toastItemGuid: String) {
     menuMappings(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid) {
@@ -644,6 +655,17 @@ export const UPDATE_MENU_ITEM_STOCK = gql`
       status
       quantity
       versionId
+    }
+  }
+`;
+
+export const SET_MENU_VISIBILITY = gql`
+  mutation SetMenuVisibility($restaurantGuid: String!, $hiddenMenus: [String!], $hiddenGroups: [String!]) {
+    setMenuVisibility(restaurantGuid: $restaurantGuid, hiddenMenus: $hiddenMenus, hiddenGroups: $hiddenGroups) {
+      restaurantGuid
+      hiddenMenus
+      hiddenGroups
+      updatedAt
     }
   }
 `;
@@ -907,6 +929,7 @@ export const useRevenueAnalytics = (startDate: string, endDate: string) =>
 // Menu hooks
 export const useIndexMenus = () => useMutation(INDEX_MENUS);
 export const useIndexedMenus = (restaurantGuid: string) => useQuery(GET_INDEXED_MENUS, { variables: { restaurantGuid }, skip: !restaurantGuid });
+export const useMenuVisibility = (restaurantGuid: string) => useQuery(GET_MENU_VISIBILITY, { variables: { restaurantGuid }, skip: !restaurantGuid });
 export const useMenuMappings = (restaurantGuid: string, toastItemGuid?: string) => useQuery(GET_MENU_MAPPINGS, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid });
 export const useUpsertMenuMapping = () => useMutation(UPSERT_MENU_MAPPING);
 export const useMenuItemCost = (restaurantGuid: string, toastItemGuid: string) => useQuery(GET_MENU_ITEM_COST, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid || !toastItemGuid });
@@ -915,6 +938,7 @@ export const useMenuItemCapacity = (restaurantGuid: string, toastItemGuid: strin
 export const useMenuItemStock = (restaurantGuid: string, guids?: string[], multiLocationIds?: string[]) =>
   useQuery(GET_MENU_ITEM_STOCK, { variables: { restaurantGuid, guids, multiLocationIds }, skip: !restaurantGuid || (!guids && !multiLocationIds) });
 export const useUpdateMenuItemStock = () => useMutation(UPDATE_MENU_ITEM_STOCK);
+export const useSetMenuVisibility = () => useMutation(SET_MENU_VISIBILITY);
 export const useOrderTrackingStatus = (restaurantGuid: string) => useQuery(GET_ORDER_TRACKING, { variables: { restaurantGuid }, skip: !restaurantGuid });
 export const useSetOrderTracking = () => useMutation(SET_ORDER_TRACKING);
 export const useRunOrderTracking = () => useMutation(RUN_ORDER_TRACKING);

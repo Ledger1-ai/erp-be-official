@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Link as LinkIcon, RefreshCw, EyeOff, Eye, AlertTriangle } from "lucide-react";
-import { useIndexedMenus, useIndexMenus, useOrderTrackingStatus, useSetOrderTracking, useInventoryItems, useMenuMappings, useUpsertMenuMapping, useMenuItemCapacity, useMenuItemStock, useUpdateMenuItemStock } from "@/lib/hooks/use-graphql";
+import { Loader2, Link as LinkIcon, RefreshCw, EyeOff, Eye, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { useIndexedMenus, useIndexMenus, useOrderTrackingStatus, useSetOrderTracking, useInventoryItems, useMenuMappings, useUpsertMenuMapping, useMenuItemCapacity, useMenuItemStock, useUpdateMenuItemStock, useMenuVisibility, useSetMenuVisibility } from "@/lib/hooks/use-graphql";
 import { apolloClient } from "@/lib/apollo-client";
 import { GET_MENU_MAPPINGS } from "@/lib/hooks/use-graphql";
 //
@@ -48,6 +48,9 @@ export default function MenuPage() {
   const [hiddenMenus, setHiddenMenus] = useState<Set<string>>(new Set());
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
   const [activeModifierOptionGuid, setActiveModifierOptionGuid] = useState<string | null>(null);
+  const [showHiddenContainer, setShowHiddenContainer] = useState(false);
+  const { data: visibilityData, refetch: refetchVisibility } = useMenuVisibility(selectedRestaurant || "");
+  const [setMenuVisibility] = useSetMenuVisibility();
 
   // Strip GraphQL __typename recursively from objects/arrays before sending as input
   const stripTypenameDeep = <T,>(data: T): T => {
@@ -66,6 +69,29 @@ export default function MenuPage() {
     const saved = localStorage.getItem('toast-selected-restaurant');
     if (saved) setSelectedRestaurant(saved);
   }, []);
+
+  // Sync hidden sets with server
+  useEffect(() => {
+    const vm = visibilityData?.menuVisibility;
+    if (vm) {
+      setHiddenMenus(new Set(vm.hiddenMenus || []));
+      setHiddenGroups(new Set(vm.hiddenGroups || []));
+    } else {
+      setHiddenMenus(new Set());
+      setHiddenGroups(new Set());
+    }
+  }, [visibilityData?.menuVisibility?.restaurantGuid]);
+
+  useEffect(() => {
+    const run = async () => {
+      if (!selectedRestaurant) return;
+      try {
+        await setMenuVisibility({ variables: { restaurantGuid: selectedRestaurant, hiddenMenus: Array.from(hiddenMenus), hiddenGroups: Array.from(hiddenGroups) } });
+        try { await refetchVisibility(); } catch {}
+      } catch {}
+    };
+    run();
+  }, [hiddenMenus, hiddenGroups, selectedRestaurant]);
 
   const { data: menusData, loading: menusLoading, refetch: refetchMenus } = useIndexedMenus(selectedRestaurant || "");
   const [indexMenusMutation] = useIndexMenus();
@@ -125,6 +151,12 @@ export default function MenuPage() {
     for (const o of arr) if (o.guid) map.set(String(o.guid), o);
     return map;
   }, [menusData]);
+
+  // Visible menus (excluding hidden)
+  const visibleMenus = useMemo(() => {
+    const menusArr = menusData?.indexedMenus?.menus || [];
+    return menusArr.filter((m: any) => !hiddenMenus.has(m.guid));
+  }, [menusData, hiddenMenus]);
 
   useEffect(() => {
     if (!selectedRestaurant) return;
@@ -301,21 +333,28 @@ export default function MenuPage() {
             </CardHeader>
             <CardContent>
               <div className="max-h-[520px] overflow-auto space-y-1">
-                {(menusData?.indexedMenus?.menus || []).map((m: any, idx: number) => (
-                  <div key={(m.guid || m.name) + '::' + idx} className="flex items-center gap-2">
-                    <Button variant={(selectedMenuGuid || (menusData?.indexedMenus?.menus?.[0]?.guid)) === m.guid ? 'secondary' : 'ghost'} className="flex-1 justify-start" onClick={() => { setSelectedMenuGuid(m.guid); setSelectedGroupGuid(null); setSelectedItem(null); }}>
-                      {m.name}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => {
-                      if (!selectedRestaurant) return;
-                      const qs = new URLSearchParams({ restaurantGuid: selectedRestaurant, menuGuid: m.guid }).toString();
-                      window.open(`/api/menu-mappings/export?${qs}`, '_blank');
-                    }}>Export</Button>
-                    <Button size="icon" variant="ghost" onClick={() => setHiddenMenus(prev => { const n = new Set(prev); if (n.has(m.guid)) n.delete(m.guid); else n.add(m.guid); return n; })}>
-                      {hiddenMenus.has(m.guid) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                ))}
+                {visibleMenus.map((m: any, idx: number) => {
+                  const fallbackGuid = visibleMenus?.[0]?.guid;
+                  const isSelected = (selectedMenuGuid || fallbackGuid) === m.guid;
+                  return (
+                    <div key={(m.guid || m.name) + '::' + idx} className="flex items-center gap-2">
+                      <Button variant={isSelected ? 'secondary' : 'ghost'} className="flex-1 justify-start" onClick={() => { setSelectedMenuGuid(m.guid); setSelectedGroupGuid(null); setSelectedItem(null); }}>
+                        {m.name}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => {
+                        if (!selectedRestaurant) return;
+                        const qs = new URLSearchParams({ restaurantGuid: selectedRestaurant, menuGuid: m.guid }).toString();
+                        window.open(`/api/menu-mappings/export?${qs}`, '_blank');
+                      }}>Export</Button>
+                      <Button size="icon" variant="ghost" onClick={() => setHiddenMenus(prev => { const n = new Set(prev); if (n.has(m.guid)) n.delete(m.guid); else n.add(m.guid); return n; })}>
+                        {hiddenMenus.has(m.guid) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  );
+                })}
+                {visibleMenus.length === 0 && (
+                  <div className="text-sm text-muted-foreground">No visible menus. Use the panel below to unhide.</div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -329,7 +368,7 @@ export default function MenuPage() {
             <CardContent>
               <div className="max-h-[520px] overflow-auto space-y-1">
                 {(() => {
-                  const menusArr = menusData?.indexedMenus?.menus || [];
+                  const menusArr = visibleMenus;
                   const selectedMenu = selectedMenuGuid ? menusArr.find((mm: any) => mm.guid === selectedMenuGuid) : menusArr[0];
                   const groups = selectedMenu?.menuGroups || [];
                   const renderGroup = (g: any, idx: number, depth = 0) => (
@@ -349,10 +388,11 @@ export default function MenuPage() {
                   );
                   const rows: any[] = [];
                   const walk = (group: any, depth = 0) => {
+                    if (hiddenGroups.has(group.guid)) return; // skip hidden categories from list
                     rows.push(renderGroup(group, depth, depth));
                     for (const sub of (group.menuGroups || [])) walk(sub, depth + 1);
                   };
-                  if (groups.length > 0) { for (const g of groups) walk(g, 0); return rows; }
+                  if (groups.length > 0) { for (const g of groups) walk(g, 0); return rows.length ? rows : <div className="text-sm text-muted-foreground">All categories are hidden. Use the panel below to unhide.</div>; }
                   return <div className="text-sm text-muted-foreground">No categories</div>;
                 })()}
               </div>
@@ -653,6 +693,91 @@ export default function MenuPage() {
                 </div>
               )}
             </CardContent>
+          </Card>
+          {/* Hidden items accordion */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Hidden Menus & Categories</CardTitle>
+              <CardDescription>Review and unhide menus or categories you have hidden</CardDescription>
+              <CardAction>
+                <Button variant="ghost" onClick={() => setShowHiddenContainer(v => !v)}>
+                  {showHiddenContainer ? <ChevronDown className="mr-2 h-4 w-4" /> : <ChevronRight className="mr-2 h-4 w-4" />}
+                  {showHiddenContainer ? 'Collapse' : 'Expand'}
+                </Button>
+              </CardAction>
+            </CardHeader>
+            {showHiddenContainer && (
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Hidden Menus Pane */}
+                  <div className="border rounded-md p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-medium text-foreground">Hidden Menus</div>
+                      {(() => {
+                        const hiddenMenuList = (menusData?.indexedMenus?.menus || []).filter((m: any) => hiddenMenus.has(m.guid));
+                        return hiddenMenuList.length > 0 ? (
+                          <Button size="sm" variant="outline" onClick={() => setHiddenMenus(new Set())}>Unhide All</Button>
+                        ) : null;
+                      })()}
+                    </div>
+                    <div className="max-h-[300px] overflow-auto space-y-1">
+                      {(() => {
+                        const list = (menusData?.indexedMenus?.menus || []).filter((m: any) => hiddenMenus.has(m.guid));
+                        if (list.length === 0) return <div className="text-sm text-muted-foreground">No hidden menus</div>;
+                        return list.map((m: any) => (
+                          <div key={m.guid} className="w-full flex items-center justify-between gap-2">
+                            <Button variant="ghost" className="flex-1 justify-start">
+                              {m.name}
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setHiddenMenus(prev => { const n = new Set(prev); n.delete(m.guid); return n; })}>
+                              <Eye className="mr-2 h-4 w-4" /> Unhide
+                            </Button>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Hidden Categories Pane */}
+                  <div className="border rounded-md p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-medium text-foreground">Hidden Categories</div>
+                      {(() => {
+                        const hasAny = hiddenGroups.size > 0;
+                        return hasAny ? (
+                          <Button size="sm" variant="outline" onClick={() => setHiddenGroups(new Set())}>Unhide All</Button>
+                        ) : null;
+                      })()}
+                    </div>
+                    <div className="max-h-[300px] overflow-auto space-y-1">
+                      {(() => {
+                        const menusArr = menusData?.indexedMenus?.menus || [];
+                        const rows: { guid: string; name: string; menuName: string; path: string[] }[] = [];
+                        const visit = (g: any, menuName: string, path: string[]) => {
+                          if (hiddenGroups.has(g.guid)) rows.push({ guid: g.guid, name: g.name, menuName, path: [...path, g.name] });
+                          for (const sub of (g.menuGroups || [])) visit(sub, menuName, [...path, g.name]);
+                        };
+                        for (const m of menusArr) {
+                          for (const g of (m.menuGroups || [])) visit(g, m.name, []);
+                        }
+                        if (rows.length === 0) return <div className="text-sm text-muted-foreground">No hidden categories</div>;
+                        return rows.map((row) => (
+                          <div key={row.guid} className="w-full flex items-center justify-between gap-2">
+                            <Button variant="ghost" className="flex-1 justify-start text-left">
+                              <span className="block text-sm text-foreground">{row.name}</span>
+                              <span className="block text-xs text-muted-foreground">Menu: {row.menuName} · Path: {row.path.join(' / ')}</span>
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setHiddenGroups(prev => { const n = new Set(prev); n.delete(row.guid); return n; })}>
+                              <Eye className="mr-2 h-4 w-4" /> Unhide
+                            </Button>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            )}
           </Card>
         </div>
       </div>

@@ -294,7 +294,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   }
 
   return (
-            <div className="min-h-screen bg-background">
+            <div className="min-h-screen bg-transparent">
       <Dialog open={deniedOpen} onOpenChange={setDeniedOpen}>
         <DialogContent>
           <DialogHeader>
@@ -307,7 +307,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       </Dialog>
       {/* Desktop Sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[18rem] lg:flex-col">
-        <div className="flex flex-col flex-grow bg-background border-r border-border/90 shadow-sm">
+        <div className="flex flex-col flex-grow glass-pane border-r border-border/50 shadow-lg">
           <SidebarContent />
         </div>
       </div>
@@ -319,13 +319,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <Menu className="h-6 w-6" />
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="p-0 w-72">
+        <SheetContent side="left" className="p-0 w-72 glass-pane border-r">
           <SidebarContent />
         </SheetContent>
       </Sheet>
 
       {/* Main Content */}
-      <div className="lg:pl-[18rem] pt-16 min-h-screen bg-background">
+      <div className="lg:pl-[18rem] pt-16 min-h-screen bg-transparent">
         {/* Header */}
         <header className="fixed top-0 right-0 left-0 lg:left-[18rem] z-30 h-16 border-b border-border backdrop-blur supports-[backdrop-filter]:bg-background/60 bg-background/80">
           <div className="px-4 sm:px-6 lg:px-8 h-full">
@@ -425,7 +425,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 bg-background min-h-screen p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 bg-transparent min-h-screen p-4 sm:p-6 lg:p-8">
           {children}
         </main>
       </div>

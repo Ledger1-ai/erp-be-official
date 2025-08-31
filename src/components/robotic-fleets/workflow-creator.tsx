@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,8 @@ import {
   Eye,
   EyeOff
 } from "lucide-react";
+import FloorMap from "@/components/hostpro/FloorMap";
+import { getPreset } from "@/lib/host/presets";
 
 // Robot colors for visualization
 const robotColors = [
@@ -37,23 +39,7 @@ const robotColors = [
 
 const robotNames = ["Bear Alpha", "Bear Beta", "Bear Gamma", "Bear Delta", "Bear Echo"];
 
-// Facility map dimensions and zones (same as map view)
-const facilityMap = {
-  width: 800,
-  height: 600,
-  zones: [
-    { id: "zone-a", name: "Zone A", x: 50, y: 50, width: 200, height: 150, color: "#e3f2fd" },
-    { id: "zone-b", name: "Zone B", x: 300, y: 50, width: 200, height: 150, color: "#f3e5f5" },
-    { id: "zone-c", name: "Zone C", x: 550, y: 50, width: 200, height: 150, color: "#e8f5e8" },
-    { id: "charging", name: "Charging Station", x: 50, y: 250, width: 100, height: 100, color: "#fff3e0" },
-    { id: "maintenance", name: "Maintenance Bay", x: 200, y: 250, width: 150, height: 100, color: "#ffebee" },
-    { id: "storage", name: "Storage", x: 400, y: 250, width: 200, height: 150, color: "#f5f5f5" },
-  ],
-  obstacles: [
-    { x: 650, y: 250, width: 80, height: 80 },
-    { x: 370, y: 220, width: 60, height: 60 },
-  ]
-};
+// Reuse HostPro floor layout for workflow map
 
 interface Keyframe {
   id: string;
@@ -88,7 +74,10 @@ export default function WorkflowCreator() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [showTrajectories, setShowTrajectories] = useState(true);
   const [zoomLevel] = useState(0.8);
-  const mapRef = useRef<HTMLDivElement>(null);
+  const [layoutData, setLayoutData] = useState<any | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const mapRef = useRef<SVGSVGElement | null>(null);
 
   const totalDuration = keyframes.length > 0 ? 
     Math.max(...keyframes.map(kf => kf.time + Math.max(...kf.robots.map(r => r.duration)))) : 0;
@@ -154,11 +143,12 @@ export default function WorkflowCreator() {
   };
 
   const getRobotTrajectory = (robotId: number) => {
-    const points = keyframes.map(kf => {
-      const robot = kf.robots.find(r => r.id === robotId);
-      return robot ? { x: robot.x, y: robot.y, time: kf.time } : null;
-    }).filter(Boolean);
-    
+    const points = keyframes
+      .map((kf) => {
+        const robot = kf.robots.find((r) => r.id === robotId);
+        return robot ? { x: robot.x, y: robot.y, time: kf.time } : null;
+      })
+      .filter((p): p is { x: number; y: number; time: number } => Boolean(p));
     return points;
   };
 
@@ -180,6 +170,40 @@ export default function WorkflowCreator() {
   };
 
   const currentKeyframe = keyframes[currentFrame];
+
+  // Load latest HostPro layout for consistent map
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/hostpro/scan-layout'); const j = await r.json(); if (j?.success) setLayoutData(j.data || null); } catch {}
+    })();
+  }, []);
+
+  // Observe container width to auto-fit map and avoid cropping
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      if (entries[0]) setContainerWidth(entries[0].contentRect.width);
+    });
+    ro.observe(el);
+    setContainerWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const basePreset = getPreset('3-plus-2-bar') || { slug: '', name: '', tables: [], domains: [] } as any;
+  const preset = {
+    ...basePreset,
+    width: layoutData?.width || basePreset.width || 1200,
+    height: layoutData?.height || basePreset.height || 760,
+    tables: Array.isArray(layoutData?.tables) && layoutData!.tables.length
+      ? basePreset.tables.map((t: any) => {
+          const s = (layoutData!.tables as any[]).find((x: any) => String(x.id) === String(t.id));
+          return s ? { ...t, x: s.x, y: s.y, w: s.w, h: s.h, type: s.type || t.type } : t;
+        })
+      : basePreset.tables,
+  } as any;
+  const w = (preset as any).width || 1200;
+  const h = (preset as any).height || 760;
 
   return (
     <div className="space-y-6">
@@ -310,7 +334,7 @@ export default function WorkflowCreator() {
                     </Button>
                   </div>
                 ))}
-                <Button size="sm" variant="dashed" onClick={addKeyframe}>
+                <Button size="sm" variant="outline" onClick={addKeyframe}>
                   <Plus className="h-4 w-4" />
                 </Button>
               </div>
@@ -367,61 +391,24 @@ export default function WorkflowCreator() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="border rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900">
-                <svg
-                  ref={mapRef}
-                  width={facilityMap.width * zoomLevel}
-                  height={facilityMap.height * zoomLevel}
-                  className="block cursor-crosshair"
-                  viewBox={`0 0 ${facilityMap.width} ${facilityMap.height}`}
-                  onClick={handleMapClick}
-                >
-                  {/* Background grid */}
-                  <defs>
-                    <pattern id="workflow-grid" width="50" height="50" patternUnits="userSpaceOnUse">
-                      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#e5e7eb" strokeWidth="1"/>
-                    </pattern>
-                  </defs>
-                  <rect width="100%" height="100%" fill="url(#workflow-grid)" />
-
-                  {/* Facility zones */}
-                  {facilityMap.zones.map((zone) => (
-                    <g key={zone.id}>
-                      <rect
-                        x={zone.x}
-                        y={zone.y}
-                        width={zone.width}
-                        height={zone.height}
-                        fill={zone.color}
-                        stroke="#94a3b8"
-                        strokeWidth="2"
-                        rx="8"
-                      />
-                      <text
-                        x={zone.x + zone.width / 2}
-                        y={zone.y + 20}
-                        textAnchor="middle"
-                        className="text-xs font-semibold fill-gray-700 pointer-events-none"
-                      >
-                        {zone.name}
-                      </text>
-                    </g>
-                  ))}
-
-                  {/* Obstacles */}
-                  {facilityMap.obstacles.map((obstacle, index) => (
-                    <rect
-                      key={index}
-                      x={obstacle.x}
-                      y={obstacle.y}
-                      width={obstacle.width}
-                      height={obstacle.height}
-                      fill="#64748b"
-                      stroke="#475569"
-                      strokeWidth="2"
-                      rx="4"
-                    />
-                  ))}
+              <div ref={containerRef} className="border rounded-lg bg-gray-50 dark:bg-gray-900">
+                {(() => {
+                  const scale = Math.max(0.1, Math.min(3, (containerWidth || w) / w));
+                  return (
+                    <div className="relative" style={{ height: h * scale }}>
+                      <div className="absolute inset-0 flex justify-center">
+                        <div style={{ width: w * scale, height: h * scale, position: 'relative' }}>
+                          <div style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
+                            <FloorMap preset={preset as any} showDomains={false} walls={layoutData?.walls} labels={layoutData?.labels} />
+                            <svg
+                              ref={mapRef}
+                              width={w}
+                              height={h}
+                              className="block cursor-crosshair"
+                              viewBox={`0 0 ${w} ${h}`}
+                              onClick={handleMapClick}
+                              style={{ position: 'absolute', inset: 0 }}
+                            >
 
                   {/* Robot trajectories */}
                   {showTrajectories && robotNames.map((_, robotId) => {
@@ -440,7 +427,7 @@ export default function WorkflowCreator() {
                         />
                         {trajectory.map((point, index) => (
                           <circle
-                            key={index}
+                            key={`traj-${robotId}-${index}`}
                             cx={point.x}
                             cy={point.y}
                             r="2"
@@ -478,7 +465,13 @@ export default function WorkflowCreator() {
                       </text>
                     </g>
                   ))}
-                </svg>
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               
               <div className="mt-2 text-sm text-muted-foreground">

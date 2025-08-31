@@ -336,6 +336,7 @@ export const typeDefs = gql`
     menuItemCapacity(restaurantGuid: String!, toastItemGuid: String!, quantity: Float): MenuItemCapacityResult!
     menuItemStock(restaurantGuid: String!, guids: [String!], multiLocationIds: [String!]): [MenuItemStock!]!
     orderTrackingStatus(restaurantGuid: String!): OrderTracking
+    menuVisibility(restaurantGuid: String!): MenuVisibility
 
     # Orders
     purchaseOrders(vendorId: ID, status: String): [PurchaseOrder!]!
@@ -402,6 +403,7 @@ export const typeDefs = gql`
     setOrderTracking(restaurantGuid: String!, enabled: Boolean!): OrderTracking!
     runOrderTracking(restaurantGuid: String!, businessDate: String): Boolean!
     updateMenuItemStock(restaurantGuid: String!, updates: [MenuItemStockUpdateInput!]!): [MenuItemStock!]!
+    setMenuVisibility(restaurantGuid: String!, hiddenMenus: [String!], hiddenGroups: [String!]): MenuVisibility!
   }
 
   type MenuItemCapacityResult {
@@ -706,6 +708,14 @@ export const typeDefs = gql`
     name: String
     price: Float
     pricingStrategy: String
+  }
+
+  # Menu visibility persistence
+  type MenuVisibility {
+    restaurantGuid: String!
+    hiddenMenus: [String!]!
+    hiddenGroups: [String!]!
+    updatedAt: Date
   }
 
   type MenuMappingComponent {

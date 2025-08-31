@@ -7008,7 +7008,7 @@ export default function InventoryPage() {
                         <SelectContent>
                           {WASTE_REASONS.map((reason) => (
                             <SelectItem key={reason} value={reason}>
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getWasteTagClass(reason)}`} />
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getWasteTagClass(reason)}`}>{reason}</span>
                             </SelectItem>
                           ))}
                         </SelectContent>

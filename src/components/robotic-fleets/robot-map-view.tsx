@@ -18,6 +18,12 @@ import {
   Loader2
 } from "lucide-react";
 import { toast } from "sonner";
+import FloorMap from "@/components/hostpro/FloorMap";
+import { getPreset } from "@/lib/host/presets";
+import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 interface RobotStatus {
   id: string;
@@ -34,24 +40,6 @@ interface RobotStatus {
   location?: string; // Current location description
 }
 
-// Mock facility layout and robot positions
-const facilityMap = {
-  width: 800,
-  height: 600,
-  zones: [
-    { id: "zone-a", name: "Zone A", x: 50, y: 50, width: 200, height: 150, color: "#e3f2fd" },
-    { id: "zone-b", name: "Zone B", x: 300, y: 50, width: 200, height: 150, color: "#f3e5f5" },
-    { id: "zone-c", name: "Zone C", x: 550, y: 50, width: 200, height: 150, color: "#e8f5e8" },
-    { id: "charging", name: "Charging Station", x: 50, y: 250, width: 100, height: 100, color: "#fff3e0" },
-    { id: "maintenance", name: "Maintenance Bay", x: 200, y: 250, width: 150, height: 100, color: "#ffebee" },
-    { id: "storage", name: "Storage", x: 400, y: 250, width: 200, height: 150, color: "#f5f5f5" },
-  ],
-  obstacles: [
-    { x: 650, y: 250, width: 80, height: 80 },
-    { x: 370, y: 220, width: 60, height: 60 },
-  ]
-};
-
 // Initial empty state - robots will be loaded from API
 const initialRobots: RobotStatus[] = [];
 
@@ -64,10 +52,32 @@ export default function RobotMapView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
   const mapRef = useRef<HTMLDivElement>(null);
+  const [layoutData, setLayoutData] = useState<any | null>(null);
+  const [calibration, setCalibration] = useState<any | null>(null);
+  const [editBounds, setEditBounds] = useState(false);
+  const [bounds, setBounds] = useState<Array<{ x: number; y: number }>>([]);
+  const [dragVertexIdx, setDragVertexIdx] = useState<number | null>(null);
+  const [showGrid, setShowGrid] = useState(true);
 
   // Load robots on component mount
   useEffect(() => {
     loadRobots();
+    // Load the latest saved HostPro layout for consistent map
+    (async () => {
+      try {
+        const res = await fetch('/api/hostpro/scan-layout');
+        const js = await res.json();
+        if (js?.success) setLayoutData(js.data || null);
+      } catch {}
+      try {
+        const r = await fetch('/api/robotic-fleets/calibration');
+        const j = await r.json();
+        if (j?.success) {
+          setCalibration(j.data || null);
+          if (Array.isArray(j?.data?.bounds)) setBounds(j.data.bounds as any);
+        }
+      } catch {}
+    })();
     
     // Set up periodic refresh every 5 seconds for real-time tracking
     const interval = setInterval(loadRobots, 5000);
@@ -126,12 +136,37 @@ export default function RobotMapView() {
     setSelectedRobot(selectedRobot === robotId ? null : robotId);
   };
 
+  const applyTransform = (x: number, y: number) => {
+    const t = calibration?.transform || {};
+    const flipX = t.flipX ? -1 : 1;
+    const flipY = t.flipY ? -1 : 1;
+    const rad = ((t.rotation || 0) * Math.PI) / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const sx = (t.scaleX ?? 1) * flipX; const sy = (t.scaleY ?? 1) * flipY;
+    const px = x * sx; const py = y * sy;
+    const rx = px * cos - py * sin; const ry = px * sin + py * cos;
+    return { x: rx + (t.translateX || 0), y: ry + (t.translateY || 0) };
+  };
+
+  // Map for charging robots row positioning
+  const chargingRobots = robots.filter(r => r.status === 'charging');
+  const chargingIndex: Record<string, number> = {};
+  chargingRobots.forEach((r, i) => { chargingIndex[String(r.id)] = i; });
+
   const getRobotIcon = (robot: RobotStatus) => {
     const size = 24;
     const color = getStatusColor(robot.status);
     
-    const robotX = robot.position.x;
-    const robotY = robot.position.y;
+    let { x: robotX, y: robotY } = applyTransform(robot.position.x, robot.position.y);
+
+    // Charging row: bottom-right aligned
+    if (robot.status === 'charging') {
+      const idx = chargingIndex[String(robot.id)] || 0;
+      const margin = 24;
+      const spacing = size + 12;
+      robotX = (w - margin) - idx * spacing;
+      robotY = (h - margin);
+    }
     const robotHeading = robot.heading || 0;
 
     return (
@@ -170,6 +205,22 @@ export default function RobotMapView() {
     );
   };
 
+  // Build preset from HostPro for unified map appearance
+  const basePreset = getPreset('3-plus-2-bar') || { slug: '', name: '', tables: [], domains: [] } as any;
+  const preset = {
+    ...basePreset,
+    width: layoutData?.width || basePreset.width || 1200,
+    height: layoutData?.height || basePreset.height || 760,
+    tables: Array.isArray(layoutData?.tables) && layoutData!.tables.length
+      ? basePreset.tables.map((t: any) => {
+          const s = (layoutData!.tables as any[]).find((x: any) => String(x.id) === String(t.id));
+          return s ? { ...t, x: s.x, y: s.y, w: s.w, h: s.h, type: s.type || t.type } : t;
+        })
+      : basePreset.tables,
+  } as any;
+  const w = (preset as any).width || 1200;
+  const h = (preset as any).height || 760;
+
   return (
     <div className="space-y-6">
       {/* Map Controls */}
@@ -177,8 +228,8 @@ export default function RobotMapView() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>Facility Map & Robot Positions</CardTitle>
-              <CardDescription>Real-time view of all robots in your facility</CardDescription>
+              <CardTitle>Fleet & Map</CardTitle>
+              <CardDescription>Live positions over the HostPro floor map</CardDescription>
             </div>
             <div className="flex space-x-2">
               <Button variant="outline" size="sm" onClick={handleZoomOut}>
@@ -215,128 +266,133 @@ export default function RobotMapView() {
         </CardHeader>
         <CardContent>
           <div className="border rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900">
-            <div 
-              ref={mapRef}
-              className="relative"
-              style={{ 
-                transform: `scale(${zoomLevel}) translate(${panOffset.x}px, ${panOffset.y}px)`,
-                transformOrigin: 'top left'
-              }}
-            >
-              <svg
-                width={facilityMap.width}
-                height={facilityMap.height}
-                className="block"
-                viewBox={`0 0 ${facilityMap.width} ${facilityMap.height}`}
+            <div className="relative" style={{ height: h }}>
+              <div
+                ref={mapRef}
+                className="absolute inset-0"
+                style={{ transform: `scale(${zoomLevel}) translate(${panOffset.x}px, ${panOffset.y}px)`, transformOrigin: 'top left' }}
               >
-                {/* Background grid */}
-                <defs>
-                  <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
-                    <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#e5e7eb" strokeWidth="1"/>
-                  </pattern>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#grid)" />
-
-                {/* Facility zones */}
-                {facilityMap.zones.map((zone) => (
-                  <g key={zone.id}>
-                    <rect
-                      x={zone.x}
-                      y={zone.y}
-                      width={zone.width}
-                      height={zone.height}
-                      fill={zone.color}
-                      stroke="#94a3b8"
-                      strokeWidth="2"
-                      rx="8"
-                    />
-                    <text
-                      x={zone.x + zone.width / 2}
-                      y={zone.y + 20}
-                      textAnchor="middle"
-                      className="text-sm font-semibold fill-gray-700"
-                    >
-                      {zone.name}
-                    </text>
-                  </g>
-                ))}
-
-                {/* Obstacles */}
-                {facilityMap.obstacles.map((obstacle, index) => (
-                  <rect
-                    key={index}
-                    x={obstacle.x}
-                    y={obstacle.y}
-                    width={obstacle.width}
-                    height={obstacle.height}
-                    fill="#64748b"
-                    stroke="#475569"
-                    strokeWidth="2"
-                    rx="4"
-                  />
-                ))}
-
-                {/* Robot paths - TODO: Implement path tracking from Bear Cloud API */}
-                {showPaths && robots.map((robot) => {
-                  // For now, create a simple path visualization
-                  const currentPos = robot.position;
-                  const pathPoints = [
-                    currentPos,
-                    { x: currentPos.x + 50, y: currentPos.y },
-                    { x: currentPos.x + 100, y: currentPos.y + 25 },
-                  ];
-                  
-                  return (
-                    <g key={`path-${robot.id}`}>
-                      <polyline
-                        points={pathPoints.map(p => `${p.x},${p.y}`).join(' ')}
-                        fill="none"
-                        stroke={getStatusColor(robot.status)}
-                        strokeWidth="2"
-                        strokeDasharray="5,5"
-                        opacity="0.6"
-                      />
-                      {/* Path waypoints */}
-                      {pathPoints.map((point, index) => (
-                        <circle
-                          key={index}
-                          cx={point.x}
-                          cy={point.y}
-                          r="3"
-                          fill={getStatusColor(robot.status)}
-                          opacity="0.8"
-                        />
+                <FloorMap preset={preset} showDomains={false} walls={layoutData?.walls} labels={layoutData?.labels} />
+                <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} style={{ position: 'absolute', inset: 0, zIndex: 10 }}
+                  onMouseMove={(e) => {
+                    if (dragVertexIdx === null || !editBounds) return;
+                    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+                    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+                    setBounds(prev => prev.map((p, i) => i===dragVertexIdx ? { x, y } : p));
+                  }}
+                  onMouseUp={() => setDragVertexIdx(null)}
+                >
+                  {/* Calibration grid overlay */}
+                  {showGrid && (calibration?.grid?.enabled ?? true) && (() => {
+                    const size = calibration?.grid?.size || 40;
+                    const originX = calibration?.grid?.originX || 0;
+                    const originY = calibration?.grid?.originY || 0;
+                    const lines: React.ReactNode[] = [];
+                    for (let x = originX; x <= w; x += size) lines.push(<line key={`gx-${x}`} x1={x} y1={0} x2={x} y2={h} stroke="rgba(148,163,184,0.35)" strokeWidth={1} />);
+                    for (let y = originY; y <= h; y += size) lines.push(<line key={`gy-${y}`} x1={0} y1={y} x2={w} y2={y} stroke="rgba(148,163,184,0.35)" strokeWidth={1} />);
+                    return <g>{lines}</g>;
+                  })()}
+                  {/* Robot paths */}
+                  {showPaths && robots.map((robot) => {
+                    // Example path using current position; apply calibration transform
+                    const currentPos = robot.position;
+                    const pathPointsRaw = [
+                      currentPos,
+                      { x: currentPos.x + 50, y: currentPos.y },
+                      { x: currentPos.x + 100, y: currentPos.y + 25 },
+                    ];
+                    const pathPoints = pathPointsRaw.map(p => applyTransform(p.x, p.y));
+                    return (
+                      <g key={`path-${robot.id}`}>
+                        <polyline points={pathPoints.map(p=>`${p.x},${p.y}`).join(' ')} fill="none" stroke={getStatusColor(robot.status)} strokeWidth={3} strokeDasharray="6,4" opacity="0.85" />
+                        {pathPoints.map((p, i) => (<circle key={`pt-${robot.id}-${i}`} cx={p.x} cy={p.y} r="3" fill={getStatusColor(robot.status)} opacity="0.8" />))}
+                      </g>
+                    );
+                  })}
+                  {/* Robots */}
+                  {robots.map((robot) => (
+                    <g key={`robot-${robot.id}`}>{getRobotIcon(robot)}</g>
+                  ))}
+                  {/* Editable bounds polygon */}
+                  {bounds.length > 1 && (
+                    <g>
+                      <polygon points={bounds.map(p=>`${p.x},${p.y}`).join(' ')} fill="rgba(59,130,246,0.12)" stroke="#3b82f6" strokeDasharray="6 4" strokeWidth={2} />
+                      {bounds.map((p, idx) => (
+                        <circle key={`bv-${idx}`} cx={p.x} cy={p.y} r={editBounds ? 6 : 4} fill={editBounds ? '#0ea5e9' : '#94a3b8'} stroke="#0c4a6e"
+                          onMouseDown={(e) => { if (!editBounds) return; e.stopPropagation(); setDragVertexIdx(idx); }} />
                       ))}
                     </g>
-                  );
-                })}
-
-                {/* Robots */}
-                {robots.map((robot) => getRobotIcon(robot))}
-
-                {/* Selection highlight */}
-                {selectedRobot && robots.find(r => r.id === selectedRobot) && (
-                  <circle
-                    cx={robots.find(r => r.id === selectedRobot)!.position.x}
-                    cy={robots.find(r => r.id === selectedRobot)!.position.y}
-                    r="20"
-                    fill="none"
-                    stroke="#f59e0b"
-                    strokeWidth="3"
-                    strokeDasharray="8,4"
-                    className="animate-pulse"
-                  />
-                )}
-              </svg>
+                  )}
+                  {editBounds && (
+                    <rect x={0} y={0} width={w} height={h} fill="transparent" onClick={(e) => {
+                      const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+                      const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+                      setBounds(prev => [...prev, { x, y }]);
+                    }} />
+                  )}
+                  {/* Selection highlight */}
+                  {selectedRobot && robots.find(r => r.id === selectedRobot) && (
+                    <circle cx={robots.find(r => r.id === selectedRobot)!.position.x} cy={robots.find(r => r.id === selectedRobot)!.position.y} r="20" fill="none" stroke="#f59e0b" strokeWidth="3" strokeDasharray="8,4" className="animate-pulse" />
+                  )}
+                </svg>
+              </div>
             </div>
           </div>
 
           {/* Map Info */}
           <div className="mt-4 flex justify-between items-center text-sm text-muted-foreground">
-            <span>Zoom: {Math.round(zoomLevel * 100)}% | Click on robots to select them</span>
+            <span>Zoom: {Math.round(zoomLevel * 100)}% | Click robots to select</span>
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
               <span>{isConnected ? 'Live Tracking' : 'Disconnected'}</span>
+            </div>
+          </div>
+          {/* Calibration quick controls */}
+          <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <div className="mb-1">Scale X</div>
+              <Slider min={0.1} max={3} step={0.01} value={[calibration?.transform?.scaleX || 1]} onValueChange={(v) => setCalibration((c: any) => ({ ...(c || { transform: {} }), transform: { ...(c?.transform || {}), scaleX: v[0] } }))} />
+              <Input className="mt-1 h-7" type="number" step={0.01} value={calibration?.transform?.scaleX || 1} onChange={(e)=> setCalibration((c:any)=>({...(c||{transform:{}}), transform:{...(c?.transform||{}), scaleX: Number(e.target.value)}}))} />
+            </div>
+            <div>
+              <div className="mb-1">Scale Y</div>
+              <Slider min={0.1} max={3} step={0.01} value={[calibration?.transform?.scaleY || 1]} onValueChange={(v) => setCalibration((c: any) => ({ ...(c || { transform: {} }), transform: { ...(c?.transform || {}), scaleY: v[0] } }))} />
+              <Input className="mt-1 h-7" type="number" step={0.01} value={calibration?.transform?.scaleY || 1} onChange={(e)=> setCalibration((c:any)=>({...(c||{transform:{}}), transform:{...(c?.transform||{}), scaleY: Number(e.target.value)}}))} />
+            </div>
+            <div>
+              <div className="mb-1">Rotation</div>
+              <Slider min={-180} max={180} step={1} value={[calibration?.transform?.rotation || 0]} onValueChange={(v) => setCalibration((c: any) => ({ ...(c || { transform: {} }), transform: { ...(c?.transform || {}), rotation: v[0] } }))} />
+              <Input className="mt-1 h-7" type="number" step={1} value={calibration?.transform?.rotation || 0} onChange={(e)=> setCalibration((c:any)=>({...(c||{transform:{}}), transform:{...(c?.transform||{}), rotation: Number(e.target.value)}}))} />
+            </div>
+            <div>
+              <div className="mb-1">Translate X</div>
+              <Slider min={-w} max={w} step={1} value={[calibration?.transform?.translateX || 0]} onValueChange={(v) => setCalibration((c: any) => ({ ...(c || { transform: {} }), transform: { ...(c?.transform || {}), translateX: v[0] } }))} />
+              <Input className="mt-1 h-7" type="number" step={1} value={calibration?.transform?.translateX || 0} onChange={(e)=> setCalibration((c:any)=>({...(c||{transform:{}}), transform:{...(c?.transform||{}), translateX: Number(e.target.value)}}))} />
+            </div>
+            <div>
+              <div className="mb-1">Translate Y</div>
+              <Slider min={-h} max={h} step={1} value={[calibration?.transform?.translateY || 0]} onValueChange={(v) => setCalibration((c: any) => ({ ...(c || { transform: {} }), transform: { ...(c?.transform || {}), translateY: v[0] } }))} />
+              <Input className="mt-1 h-7" type="number" step={1} value={calibration?.transform?.translateY || 0} onChange={(e)=> setCalibration((c:any)=>({...(c||{transform:{}}), transform:{...(c?.transform||{}), translateY: Number(e.target.value)}}))} />
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox id="flipx" checked={!!calibration?.transform?.flipX} onCheckedChange={(v:any)=> setCalibration((c:any)=> ({...(c||{transform:{}}), transform:{...(c?.transform||{}), flipX: Boolean(v)}}))} />
+              <Label htmlFor="flipx">Flip X</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox id="flipy" checked={!!calibration?.transform?.flipY} onCheckedChange={(v:any)=> setCalibration((c:any)=> ({...(c||{transform:{}}), transform:{...(c?.transform||{}), flipY: Boolean(v)}}))} />
+              <Label htmlFor="flipy">Flip Y</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox id="grid" checked={showGrid} onCheckedChange={(v:any)=> setShowGrid(Boolean(v))} />
+              <Label htmlFor="grid">Show Grid</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox id="bounds" checked={editBounds} onCheckedChange={(v:any)=> setEditBounds(Boolean(v))} />
+              <Label htmlFor="bounds">Edit Bounds</Label>
+            </div>
+            <div className="flex items-end gap-2">
+              <Button size="sm" variant="outline" onClick={() => setCalibration((c: any) => ({ ...(c || {}), transform: { scaleX: 1, scaleY: 1, rotation: 0, translateX: 0, translateY: 0 } }))}>Reset</Button>
+              <Button size="sm" onClick={async () => { const payload = { slug: 'default', ...(calibration || {}), transform: { scaleX: calibration?.transform?.scaleX || 1, scaleY: calibration?.transform?.scaleY || 1, rotation: calibration?.transform?.rotation || 0, translateX: calibration?.transform?.translateX || 0, translateY: calibration?.transform?.translateY || 0, flipX: calibration?.transform?.flipX || false, flipY: calibration?.transform?.flipY || false }, grid: calibration?.grid || { enabled: true, size: 40, originX: 0, originY: 0 }, bounds }; const r = await fetch('/api/robotic-fleets/calibration', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const j = await r.json(); if (j?.success) { setCalibration(j.data); setBounds(j.data?.bounds || []); toast.success('Calibration saved'); } else { toast.error('Failed to save'); } }}>Save Calibration</Button>
             </div>
           </div>
         </CardContent>
