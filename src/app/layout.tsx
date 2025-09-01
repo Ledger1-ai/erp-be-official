@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { ApolloWrapper } from "@/components/providers/apollo-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { initToastScheduler } from "@/lib/services/toast-scheduler";
+import { initVaruniScheduler } from "@/lib/services/varuni-scheduler";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -54,6 +55,7 @@ export default function RootLayout({
   if (typeof window === 'undefined') {
     // Server-side
     initToastScheduler();
+    initVaruniScheduler();
   }
   return (
     <html lang="en" suppressHydrationWarning>

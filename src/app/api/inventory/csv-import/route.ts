@@ -24,36 +24,87 @@ export async function POST(request: NextRequest) {
     }
 
     // Parse Sysco CSV format
-    const parsedItems = [];
-    const errors = [];
+    const parsedItems: any[] = [];
+    const errors: any[] = [];
+    let documentLooksLikePurchaseHistory = false;
     
     console.log(`📊 Processing ${lines.length} lines from CSV`);
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      
-      // Skip header lines or empty lines
-      if (!line || line.startsWith('H') || line.includes('SUPC') || !line.startsWith('P,')) {
-        continue;
-      }
+
+      if (!line) continue;
 
       try {
         const columns = parseCSVLine(line);
-        
-        // Expected columns based on the provided structure:
-        // [Type, SUPC, CaseQty, SplitQty, Cust#, PackSize, Brand, Description, Mfr#, PerLb, Case$, Each$, ...]
-        if (columns.length < 12) {
-          errors.push({ line: i + 1, error: 'Insufficient columns', data: line });
+        const recordType = (columns[0] || '').replace(/^"|"$/g, '').trim().toUpperCase();
+
+        // Skip non-product lines and header rows
+        if (!recordType || recordType === 'H' || recordType === 'F' || recordType !== 'P') {
           continue;
         }
 
-        const [
-          type, supc, caseQty, splitQty, custNum, packSize, 
-          brand, description, mfrNum, perLb, casePrice, eachPrice, ...rest
-        ] = columns;
+        // Detect format by column count and presence of known headers
+        // Format A: Standard purchase order export (e.g., Jul 31 2025 02_41 PM.csv)
+        //   [Type, SUPC, CaseQty, SplitQty, Cust#, Pack/Size, Brand, Description, Mfr#, PerLb, Case$, Each$]
+        // Format B: Product history export (e.g., Shop_Purchase History_...csv)
+        //   [Type, SUPC, CaseQty, SplitQty, Code, Item Status, Replaced Item, Pack, Size, Unit, Brand, Mfr #, Desc, Cat, Case $, Split $, Per Lb, Market, Splittable, Splits, Min Split, Net Wt, Lead Time, Stock, Substitute, Agr, ...]
 
-        // Skip if no SUPC or description
-        if (!supc || !description || supc === 'SUPC' || !description.trim()) {
+        const isHistoryFormat = columns.length >= 20; // heuristic
+        if (isHistoryFormat) documentLooksLikePurchaseHistory = true;
+
+        let supc = '';
+        let packSizeLike = '';
+        let brand = '';
+        let description = '';
+        let mfrNum = '';
+        let perLb = '';
+        let casePrice = '';
+        let eachPrice = '';
+        let caseQty = '';
+        let splitQty = '';
+        let syscoCategoryText = '';
+
+        if (isHistoryFormat) {
+          // Product history mapping
+          supc = (columns[1] || '').trim();
+          caseQty = (columns[2] || '').trim();
+          splitQty = (columns[3] || '').trim();
+          // Pack is numeric count per case
+          const pack = (columns[7] || '').trim();
+          const size = (columns[8] || '').trim();
+          const unit = (columns[9] || '').trim();
+          packSizeLike = pack || '';
+          brand = (columns[10] || '').trim();
+          mfrNum = (columns[11] || '').trim();
+          description = (columns[12] || '').trim();
+          syscoCategoryText = (columns[13] || '').trim();
+          casePrice = (columns[14] || '').trim();
+          eachPrice = (columns[15] || '').trim(); // Split $ behaves like each price
+          perLb = (columns[16] || '').trim();
+
+          // Augment description with size if helpful and not already present
+          const sizeDescriptor = [size, unit].filter(Boolean).join(' ');
+          if (sizeDescriptor && description && !description.toLowerCase().includes(sizeDescriptor.toLowerCase())) {
+            description = `${description}`; // keep clean name; size shown in UI via rawData if needed
+          }
+        } else {
+          // Standard purchase order mapping
+          supc = (columns[1] || '').trim();
+          caseQty = (columns[2] || '').trim();
+          splitQty = (columns[3] || '').trim();
+          packSizeLike = (columns[5] || '').trim();
+          brand = (columns[6] || '').trim();
+          description = (columns[7] || '').trim();
+          mfrNum = (columns[8] || '').trim();
+          perLb = (columns[9] || '').trim();
+          casePrice = (columns[10] || '').trim();
+          eachPrice = (columns[11] || '').trim();
+          syscoCategoryText = recordType; // fallback
+        }
+
+        // Validate essential fields
+        if (!supc || !description) {
           console.log(`⚠️ Skipping line ${i + 1}: missing SUPC (${supc}) or description (${description})`);
           continue;
         }
@@ -63,46 +114,55 @@ export async function POST(request: NextRequest) {
           description?.trim().replace(/^"|"$/g, '') || '', 
           brand?.trim().replace(/^"|"$/g, '') || ''
         );
-        
-        console.log(`✅ Parsing item ${parsedItems.length + 1}: ${cleanDescription} (Brand: ${brand?.trim() || 'None'})`);
-        
+
+        console.log(`✅ Parsing item ${parsedItems.length + 1}: ${cleanDescription} (Brand: ${brand || 'None'})`);
+
         // Smart price parsing
-        const caseSize = parseCasePackSize(packSize);
+        const caseSize = parseCasePackSize(packSizeLike);
         const casePriceNum = parsePrice(casePrice);
         const eachPriceNum = parsePrice(eachPrice);
-        
+
+        // Compute quantities from case/split
+        const caseQtyNum = Number(parseFloat((caseQty || '0').toString().replace(/[^0-9.\-]/g, '')) || 0);
+        const splitQtyNum = Number(parseFloat((splitQty || '0').toString().replace(/[^0-9.\-]/g, '')) || 0);
+        const computedUnits = (Number.isFinite(caseQtyNum) ? caseQtyNum : 0) * (Number.isFinite(caseSize) ? caseSize : 1) + (Number.isFinite(splitQtyNum) ? splitQtyNum : 0);
+
         // Determine best pricing strategy
         let finalCostPerUnit = 0;
         let finalPricePerCase = casePriceNum;
-        
+
         if (eachPriceNum > 0) {
-          // Use each price if available
           finalCostPerUnit = eachPriceNum;
-          finalPricePerCase = casePriceNum > 0 ? casePriceNum : (eachPriceNum * caseSize);
+          finalPricePerCase = casePriceNum > 0 ? casePriceNum : (eachPriceNum * (caseSize || 1));
         } else if (casePriceNum > 0 && caseSize > 0) {
-          // Calculate per-unit from case price
           finalCostPerUnit = casePriceNum / caseSize;
           finalPricePerCase = casePriceNum;
         }
-        
+
         console.log(`💰 Pricing for ${cleanDescription}: Case=$${casePriceNum} (${casePrice}) Each=$${eachPriceNum} (${eachPrice}) → Final: $${finalCostPerUnit}/each`);
-        
-        const parsedItem = {
-          syscoSUPC: supc.trim(),
-          name: cleanDescription, // Just the ingredient/item name from description
-          description: cleanDescription, // Same as name for now
-          brand: brand?.trim() || '',
-          syscoCategory: type?.trim() || '',
-          casePackSize: caseSize,
-          pricePerCase: finalPricePerCase,
-          costPerUnit: finalCostPerUnit,
-          vendorCode: mfrNum?.trim() || '',
+
+        const parsedItem: any = {
+          syscoSUPC: supc,
+          name: cleanDescription,
+          description: cleanDescription,
+          brand: brand || '',
+          syscoCategory: syscoCategoryText || recordType,
+          casePackSize: caseSize || 1,
+          pricePerCase: finalPricePerCase || 0,
+          costPerUnit: finalCostPerUnit || 0,
+          vendorCode: mfrNum || '',
           supplier: 'Sysco',
-          unit: 'each', // Default unit
-          category: mapSyscoCategory(type?.trim() || '', `${brand?.trim() || ''} ${description?.trim() || ''}`.trim(), description?.trim()),
-          // Additional fields for review
-          rawData: {
-            type, supc, caseQty, splitQty, custNum, packSize,
+          unit: 'each',
+          category: mapSyscoCategory(syscoCategoryText || recordType, `${brand || ''} ${description || ''}`.trim(), description || ''),
+          caseQty: caseQtyNum,
+          splitQty: splitQtyNum,
+          computedUnits,
+          rawData: isHistoryFormat ? {
+            type: recordType, supc, caseQty, splitQty,
+            pack: packSizeLike, brand, description, mfrNum, perLb,
+            casePrice, splitPrice: eachPrice
+          } : {
+            type: recordType, supc, caseQty, splitQty, custNum: '', packSize: packSizeLike,
             brand, description, mfrNum, perLb, casePrice, eachPrice
           },
           importStatus: 'pending'
@@ -122,12 +182,33 @@ export async function POST(request: NextRequest) {
       // Check for duplicates with existing inventory
       const duplicateChecks = await Promise.all(
         parsedItems.map(async (item) => {
-          const existing = await InventoryItem.findOne({
+          const existing: any = await InventoryItem.findOne({
             $or: [
               { syscoSKU: item.syscoSUPC },
               { name: { $regex: new RegExp(item.name, 'i') } }
             ]
-          });
+          }).lean();
+
+          // Determine enrichment fields (existing missing/blank/zero but CSV has value)
+          const enrichmentFields: string[] = [];
+          if (existing) {
+            const candidates: Array<[string, any, any]> = [
+              ['syscoSKU', existing.syscoSKU, item.syscoSUPC],
+              ['vendorSKU', existing.vendorSKU, item.syscoSUPC],
+              ['casePackSize', Number(existing.casePackSize || 0), Number(item.casePackSize || 0)],
+              ['vendorCode', existing.vendorCode, item.vendorCode],
+              ['syscoCategory', existing.syscoCategory, item.syscoCategory],
+              ['pricePerCase', Number(existing.pricePerCase || 0), Number(item.pricePerCase || 0)],
+              ['costPerUnit', Number(existing.costPerUnit || 0), Number(item.costPerUnit || 0)],
+              ['brand', existing.brand, item.brand],
+              ['description', existing.description, item.description],
+            ];
+            for (const [field, oldVal, newVal] of candidates) {
+              const hasOld = typeof oldVal === 'number' ? oldVal > 0 : !!(oldVal && String(oldVal).trim());
+              const hasNew = typeof newVal === 'number' ? newVal > 0 : !!(newVal && String(newVal).trim());
+              if (!hasOld && hasNew) enrichmentFields.push(field);
+            }
+          }
           
           return {
             ...item,
@@ -137,7 +218,9 @@ export async function POST(request: NextRequest) {
               syscoSKU: existing.syscoSKU,
               currentStock: existing.currentStock
             } : null,
-            isDuplicate: !!existing
+            isDuplicate: !!existing,
+            canEnrich: existing ? enrichmentFields.length > 0 : false,
+            enrichmentFields,
           };
         })
       );
@@ -145,11 +228,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         totalParsed: parsedItems.length,
+        isHistoryFormat: documentLooksLikePurchaseHistory,
         items: duplicateChecks,
         errors,
         summary: {
-          duplicates: duplicateChecks.filter(item => item.isDuplicate).length,
-          new: duplicateChecks.filter(item => !item.isDuplicate).length,
+          duplicates: duplicateChecks.filter((item: any) => item.isDuplicate).length,
+          new: duplicateChecks.filter((item: any) => !item.isDuplicate).length,
           errors: errors.length
         }
       });
@@ -158,10 +242,56 @@ export async function POST(request: NextRequest) {
     if (action === 'import') {
       // Get selected items to import
       const selectedIndices = JSON.parse(formData.get('selectedItems') as string || '[]');
+      const duplicateResolutions = JSON.parse((formData.get('duplicateResolutions') as string) || '{}');
+      const enrichmentResolutions = JSON.parse((formData.get('enrichmentResolutions') as string) || '{}');
       const itemsToImport = selectedIndices.map((index: number) => parsedItems[index]);
       
-      const imported = [];
-      const importErrors = [];
+      const imported: any[] = [];
+      const importErrors: any[] = [];
+
+      // First, process duplicates replacement requests regardless of selection
+      try {
+        for (const dup of parsedItems) {
+          const supc = String(dup?.syscoSUPC || '').trim();
+          const wantsReplace = !!duplicateResolutions[supc];
+          const wantsEnrich = !!enrichmentResolutions[supc];
+          if (!wantsReplace) continue;
+          const existing = await InventoryItem.findOne({
+            $or: [
+              { syscoSKU: supc },
+              { name: { $regex: new RegExp(dup.name, 'i') } }
+            ]
+          });
+          if (existing) {
+            const before = Number(existing.currentStock || 0);
+            const after = Number(dup.computedUnits || 0);
+            existing.currentStock = after;
+            existing.lastUpdated = new Date();
+            if (wantsEnrich) {
+              // Apply enrichment for missing fields
+              const applyIfMissing = (field: string, newVal: any) => {
+                const oldVal: any = (existing as any)[field];
+                const hasOld = typeof oldVal === 'number' ? oldVal > 0 : !!(oldVal && String(oldVal).trim());
+                const hasNew = typeof newVal === 'number' ? newVal > 0 : !!(newVal && String(newVal).trim());
+                if (!hasOld && hasNew) (existing as any)[field] = newVal;
+              };
+              applyIfMissing('syscoSKU', dup.syscoSUPC);
+              applyIfMissing('vendorSKU', dup.syscoSUPC);
+              applyIfMissing('casePackSize', Number(dup.casePackSize || 0));
+              applyIfMissing('vendorCode', dup.vendorCode);
+              applyIfMissing('syscoCategory', dup.syscoCategory);
+              applyIfMissing('pricePerCase', Number(dup.pricePerCase || 0));
+              applyIfMissing('costPerUnit', Number(dup.costPerUnit || 0));
+              applyIfMissing('brand', dup.brand);
+              applyIfMissing('description', dup.description);
+            }
+            await existing.save();
+            imported.push({ id: existing._id, name: existing.name, syscoSKU: existing.syscoSKU, replacedCount: true, before, after });
+          }
+        }
+      } catch (e: any) {
+        importErrors.push({ item: 'duplicates', error: e?.message || 'Failed to apply duplicate replacements' });
+      }
 
       for (const item of itemsToImport) {
         try {
@@ -174,6 +304,7 @@ export async function POST(request: NextRequest) {
           });
 
           if (existing) {
+            // If the duplicate wasn't opted-in for replacement above, skip creating
             importErrors.push({
               item: item.name,
               error: 'Item already exists',
@@ -196,7 +327,7 @@ export async function POST(request: NextRequest) {
             vendorCode: item.vendorCode,
             supplier: item.supplier,
             unit: item.unit,
-            currentStock: 0, // Default to 0, user can update later
+            currentStock: 0, // Keep 0 for new items to avoid unintended inventory jumps
             minThreshold: 10, // Default threshold
             maxCapacity: 100, // Default capacity
             preferredVendor: 'Sysco',

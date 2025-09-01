@@ -128,7 +128,7 @@ export const typeDefs = gql`
     reorderQuantity: Float
     syscoSKU: String
     vendorSKU: String
-    casePackSize: String
+    casePackSize: Float
     vendorCode: String
     syscoCategory: String
     leadTimeDays: Int
@@ -347,6 +347,9 @@ export const typeDefs = gql`
     rosterConfiguration(name: String!): RosterConfiguration
     activeRosterConfiguration: RosterConfiguration
     rosterCandidates(includeToastOnly: Boolean, onlySevenShiftsActive: Boolean): [RosterCandidate!]!
+
+    # AI Insights
+    aiInsights(module: String, forDate: Date, status: String): [AIInsight!]!
   }
 
   type Mutation {
@@ -629,6 +632,13 @@ export const typeDefs = gql`
     averageDailyUsage: Float
     restockPeriod: String
     restockDays: Int
+    syscoSKU: String
+    vendorSKU: String
+    casePackSize: Float
+    vendorCode: String
+    syscoCategory: String
+    pricePerCase: Float
+    brand: String
   }
 
   input CreateInvoiceInput {
@@ -1075,6 +1085,30 @@ export const typeDefs = gql`
     inventoryUpdated: InventoryItem!
     newInvoice: Invoice!
     teamMemberUpdated: TeamMember!
+  }
+
+  # AI Insights types
+  scalar JSON
+
+  type AIInsight {
+    id: ID!
+    module: String!
+    title: String!
+    description: String!
+    action: String!
+    urgency: String!
+    impact: String
+    data: JSON
+    status: String!
+    createdAt: Date!
+    forDate: Date
+    createdBy: String
+  }
+
+  extend type Mutation {
+    # AI Insights mutations
+    generateInsights(module: String!, forDate: Date): Boolean!
+    dismissInsight(id: ID!): Boolean!
   }
 `;
 

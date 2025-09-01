@@ -7,8 +7,8 @@ WORKDIR /app
 
 # ---------- Dependencies layer ----------
 FROM base AS deps
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci --legacy-peer-deps
 
 # ---------- Build layer ----------
 FROM base AS builder
@@ -24,8 +24,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 
 # Install only production deps for smaller runtime image
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci --omit=dev --legacy-peer-deps
 
 # Copy build output and required runtime assets
 COPY --from=builder /app/.next ./.next

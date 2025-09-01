@@ -23,6 +23,9 @@ import { MenuMapping } from '../models/MenuMapping';
 import { OrderTrackingConfig } from '../models/OrderTrackingConfig';
 import ToastAPIClient from '../services/toast-api-client';
 import RosterConfiguration from '../models/RosterConfiguration';
+import AIInsight from '../models/AIInsight';
+import { VaruniAgent, createGraphQLTool } from '../services/varuni-agent';
+import { GraphQLScalarType, Kind } from 'graphql';
 
 async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, visited = new Set<string>()): Promise<number> {
   if (visited.has(toastItemGuid)) return 0;
@@ -182,7 +185,27 @@ async function reverseReceivingForOrder(orderId: string, createdByHint?: string)
   }
 }
 
+const JSONScalar = new GraphQLScalarType({
+  name: 'JSON',
+  description: 'Arbitrary JSON value',
+  serialize(value: any) { return value; },
+  parseValue(value: any) { return value; },
+  parseLiteral(ast: any) {
+    switch (ast.kind) {
+      case Kind.STRING: return ast.value;
+      case Kind.INT: return parseInt(ast.value, 10);
+      case Kind.FLOAT: return parseFloat(ast.value);
+      case Kind.BOOLEAN: return ast.value === true;
+      case Kind.NULL: return null;
+      case Kind.OBJECT: return null; // Not supported in literals here
+      case Kind.LIST: return null;
+      default: return null;
+    }
+  }
+});
+
 export const resolvers = {
+  JSON: JSONScalar,
   Query: {
     // User queries
     me: withAuth(async (_: unknown, __: unknown, context: AuthContext) => {
@@ -1492,6 +1515,14 @@ export const resolvers = {
         console.error('rosterCandidates resolver error:', e);
         return [];
       }
+    },
+    // AI Insights
+    aiInsights: async (_: unknown, args: { module?: string; forDate?: Date; status?: string }) => {
+      const filter: any = {};
+      if (args.module) filter.module = args.module;
+      if (args.status) filter.status = args.status;
+      if (args.forDate) filter.forDate = args.forDate;
+      return await AIInsight.find(filter).sort({ createdAt: -1 });
     }
   },
   
@@ -2299,6 +2330,73 @@ export const resolvers = {
       const client = new (require('../services/toast-api-client').default)();
       const rows = await client.updateMenuItemInventory(restaurantGuid, updates as any);
       return rows.map((r: any) => ({ guid: r.guid, multiLocationId: r.multiLocationId, status: r.status, quantity: r.quantity ?? null, versionId: r.versionId }));
+    }),
+    // AI Insights mutations
+    generateInsights: withAuth(async (_: unknown, args: { module: string; forDate?: Date }, context: AuthContext) => {
+      const agent = new VaruniAgent();
+      const authHeader = context.req.headers.get('authorization') || '';
+      const callGraphQL = async (query: string, variables?: Record<string, any>) => {
+        const endpoint = process.env.NEXT_PUBLIC_GRAPHQL_URL || 'http://localhost:3000/api/graphql';
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': authHeader,
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+        const json = await res.json();
+        return json.data;
+      };
+
+      // Register toolsets
+      agent.registerToolSet({
+        name: 'inventory',
+        description: 'Inventory analytics and stock tools',
+        tools: [
+          createGraphQLTool('getInventoryAnalyticsSummary', 'Fetch inventory analytics summary', `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`),
+          createGraphQLTool('getLowStockItems', 'Fetch low stock items', `query{ lowStockItems{ id name currentStock minThreshold unit costPerUnit status } }`),
+        ],
+      });
+
+      const today = new Date();
+      const nextDay = args.forDate ? new Date(args.forDate) : new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      const result = await agent.chat(
+        `Generate 3-5 actionable ${args.module} insights for ${nextDay.toISOString().slice(0,10)} with fields: title, description, action, urgency (low|medium|critical), impact. Respond with JSON array only, no prose.`,
+        {
+          graphqlEndpoint: process.env.NEXT_PUBLIC_GRAPHQL_URL || '/api/graphql',
+          callGraphQL,
+          userId: context.user?.userId,
+        },
+        args.module
+      );
+
+      let parsed: any[] = [];
+      try { parsed = JSON.parse(result.text || '[]'); } catch {}
+      if (!Array.isArray(parsed)) parsed = [];
+
+      const docs = parsed.slice(0, 6).map((p) => ({
+        module: args.module as any,
+        title: String(p.title || 'Insight'),
+        description: String(p.description || ''),
+        action: String(p.action || ''),
+        urgency: (p.urgency || 'medium') as any,
+        impact: p.impact ? String(p.impact) : undefined,
+        data: p,
+        status: 'active',
+        forDate: nextDay,
+        createdBy: 'varuni',
+      }));
+
+      if (docs.length) {
+        await AIInsight.insertMany(docs);
+      }
+      return true;
+    }),
+    dismissInsight: withAuth(async (_: unknown, args: { id: string }) => {
+      await AIInsight.findByIdAndUpdate(args.id, { status: 'dismissed' });
+      return true;
     }),
   },
 

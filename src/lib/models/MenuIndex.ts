@@ -44,7 +44,7 @@ const menuSchema = new mongoose.Schema({
 }, { _id: false });
 
 const menuIndexSchema = new mongoose.Schema({
-  restaurantGuid: { type: String, required: true, index: true },
+  restaurantGuid: { type: String, required: true },
   lastUpdated: String,
   menus: [menuSchema],
   // Use Mixed to tolerate V2 vs V3 differences like visibility, etc.

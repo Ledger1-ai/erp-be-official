@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { usePermissions } from "@/lib/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
@@ -113,6 +113,33 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const permissions = usePermissions();
   const [user, setUser] = useState<User | null>(null);
   const [isVaruniOpen, setIsVaruniOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text?: string; html?: string }>>([]);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  const sendMessage = async () => {
+    const input = chatInputRef.current;
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    setChatMessages(prev => [...prev, { role: 'user', text }]);
+    input.value = '';
+    try {
+      const res = await fetch('/api/varuni/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': typeof window !== 'undefined' ? `Bearer ${sessionStorage.getItem('accessToken') || ''}` : ''
+        },
+        body: JSON.stringify({ message: text })
+      });
+      const json = await res.json();
+      setChatMessages(prev => [...prev, { role: 'assistant', html: json.html, text: json.text }]);
+    } catch (err) {
+      console.error('Varuni chat error', err);
+      setChatMessages(prev => [...prev, { role: 'assistant', text: `Error: ${err instanceof Error ? err.message : 'Unable to reach Varuni'}` }]);
+    }
+  };
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
@@ -130,6 +157,26 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }, 250); // Shorter debounce for snappier results
     return () => clearTimeout(id);
   }, [searchQuery]);
+
+  useEffect(() => {
+    const handler = () => setIsVaruniOpen(true);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('open-varuni', handler as any);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('open-varuni', handler as any);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Auto-scroll to bottom on new messages
+    const el = chatLogRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [chatMessages]);
   const minSearchChars = 2;
   const shouldFetch = debouncedQuery.length >= minSearchChars;
   const { data: searchData, loading: searchLoading, networkStatus } = useGlobalSearch(shouldFetch ? debouncedQuery : "", 8, { skip: !shouldFetch });
@@ -279,14 +326,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <div className="p-4 border-t">
         <Button
           variant="outline"
-          className="w-full justify-between border-primary/20 text-primary/70 hover:bg-transparent cursor-not-allowed opacity-75"
-          disabled
+          className="w-full justify-start border-primary/20 text-primary"
+          onClick={() => setIsVaruniOpen(true)}
         >
-          <span className="flex items-center">
-            <Brain className="mr-3 h-4 w-4" />
-            Chat with Varuni
-          </span>
-          <Badge variant="secondary">Coming soon</Badge>
+          <Brain className="mr-3 h-4 w-4" />
+          Chat with Varuni
         </Button>
       </div>
     </div>
@@ -435,7 +479,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {/* Varuni AI Chat Overlay */}
       {isVaruniOpen && (
-        <div className="fixed bottom-4 right-4 w-80 h-96 bg-card rounded-lg shadow-xl border border-border z-50">
+        <div className="fixed bottom-4 right-4 w-80 h-96 bg-card rounded-lg shadow-xl border border-border z-50 flex flex-col">
           <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center">
               <Brain className="h-5 w-5 text-primary mr-2" />
@@ -445,35 +489,62 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               ×
             </Button>
           </div>
-          <div className="p-4 h-80 overflow-y-auto">
+          <div className="p-4 flex-1 overflow-y-auto">
             <div className="bg-primary/10 rounded-lg p-3 mb-3">
               <p className="text-sm text-primary">
-                Hi! I&apos;m Varuni, your AI assistant. How can I help you manage your restaurant today?
+                Hi! I&apos;m Varuni, your AI assistant. Ask me anything, or choose a suggestion below.
               </p>
             </div>
-            <div className="space-y-3">
-              <Button variant="outline" size="sm" className="w-full text-left justify-start">
+            <div className="space-y-2 mb-3">
+              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                if (input) { input.value = "Show me today's analytics"; input.focus(); }
+              }}>
                 📊 Show me today&apos;s analytics
               </Button>
-              <Button variant="outline" size="sm" className="w-full text-left justify-start">
-                👥 Help with staff scheduling
-              </Button>
-              <Button variant="outline" size="sm" className="w-full text-left justify-start">
+              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                if (input) { input.value = 'Check inventory levels and low stock'; input.focus(); }
+              }}>
                 📦 Check inventory levels
               </Button>
-              <Button variant="outline" size="sm" className="w-full text-left justify-start">
-                💰 Review recent invoices
+              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                if (input) { input.value = 'Help with staff scheduling for tomorrow'; input.focus(); }
+              }}>
+                👥 Help with staff scheduling
               </Button>
+            </div>
+            <div id="varuni-chat-log" ref={chatLogRef} className="space-y-2">
+              {chatMessages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'} max-w-[85%] rounded-2xl px-3 py-2 shadow-sm`}>
+                    {m.html ? (
+                      <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: m.html }} />
+                    ) : (
+                      <div className="text-sm whitespace-pre-wrap">{m.text}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
           <div className="p-4 border-t">
             <div className="flex space-x-2">
               <input
+                id="varuni-chat-input"
+                ref={chatInputRef}
                 type="text"
                 placeholder="Ask Varuni anything..."
                 className="flex-1 px-3 py-2 text-sm border border-input bg-background text-foreground rounded-md focus:ring-2 focus:ring-ring focus:border-ring"
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    await sendMessage();
+                  }
+                }}
               />
-              <Button size="sm" className="bg-primary hover:bg-primary/90">
+              <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={sendMessage}>
                 <MessageSquare className="h-4 w-4" />
               </Button>
             </div>

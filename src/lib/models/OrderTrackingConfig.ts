@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const orderTrackingConfigSchema = new mongoose.Schema({
-  restaurantGuid: { type: String, required: true, index: true },
+  restaurantGuid: { type: String, required: true },
   enabled: { type: Boolean, default: false },
   lastRunAt: { type: Date },
   lastBusinessDate: { type: String },

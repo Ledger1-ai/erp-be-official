@@ -14,7 +14,7 @@ const componentSchema = new mongoose.Schema({
 componentSchema.add({ overrides: [componentSchema] });
 
 const menuMappingSchema = new mongoose.Schema({
-  restaurantGuid: { type: String, required: true, index: true },
+  restaurantGuid: { type: String, required: true },
   toastItemGuid: { type: String, required: true },
   toastItemName: { type: String },
   toastItemSku: { type: String },

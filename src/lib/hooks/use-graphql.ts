@@ -1,5 +1,40 @@
 import { useQuery, useMutation } from '@apollo/client';
 import { gql } from '@apollo/client';
+// AI Insights
+export const GET_AI_INSIGHTS = gql`
+  query AIInsights($module: String, $forDate: Date, $status: String) {
+    aiInsights(module: $module, forDate: $forDate, status: $status) {
+      id
+      module
+      title
+      description
+      action
+      urgency
+      impact
+      status
+      createdAt
+      forDate
+      createdBy
+    }
+  }
+`;
+
+export const GENERATE_INSIGHTS = gql`
+  mutation GenerateInsights($module: String!, $forDate: Date) {
+    generateInsights(module: $module, forDate: $forDate)
+  }
+`;
+
+export const DISMISS_INSIGHT = gql`
+  mutation DismissInsight($id: ID!) {
+    dismissInsight(id: $id)
+  }
+`;
+
+export const useAIInsights = (module?: string, forDate?: string, status?: string) =>
+  useQuery(GET_AI_INSIGHTS, { variables: { module, forDate, status } });
+export const useGenerateInsights = () => useMutation(GENERATE_INSIGHTS);
+export const useDismissInsight = () => useMutation(DISMISS_INSIGHT, { refetchQueries: ['AIInsights'] });
 
 // Team Members
 export const GET_TEAM_MEMBERS = gql`

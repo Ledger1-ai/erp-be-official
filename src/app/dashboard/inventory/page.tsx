@@ -72,7 +72,7 @@ import {
   HelpCircle,
 } from "lucide-react";
 import React from "react";
-import { 
+import {
   useInventoryItems, 
   useLowStockItems, 
   useCreateInventoryItem, 
@@ -94,7 +94,9 @@ import {
   useResetPurchaseOrder,
   useDeletePurchaseOrder,
   useRecipeProfitability,
-  useMenuMappings
+  useMenuMappings,
+  useAIInsights,
+  useDismissInsight
 } from "@/lib/hooks/use-graphql";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -152,7 +154,6 @@ const VendorStatsCard: React.FC<{ vendorId: string }> = ({ vendorId }) => {
     </div>
   );
 };
-
 // TypeScript interfaces
 interface InventoryItem {
   dailyUsage: number;
@@ -235,6 +236,7 @@ interface CsvItem {
 
 interface CsvPreviewData {
   totalParsed: number;
+  isHistoryFormat?: boolean;
   summary: {
     new: number;
     duplicates: number;
@@ -693,7 +695,6 @@ export default function InventoryPage() {
     });
     downloadTextFile(`order-${order.poNumber || 'draft'}.csv`, csv);
   };
-
   const exportOrderXls = (order: any) => {
     const meta = [
       ['Purchase Order', order.poNumber || ''],
@@ -893,7 +894,6 @@ export default function InventoryPage() {
       });
       setVendorFormOpen(true);
     };
-
     const openEditVendor = (vendor: any) => {
       setEditingVendor(vendor);
       setVendorForm({
@@ -1368,7 +1368,10 @@ export default function InventoryPage() {
   const [csvPreviewData, setCsvPreviewData] = useState<CsvPreviewData | null>(null);
   const [csvImportLoading, setCsvImportLoading] = useState(false);
   const [selectedImportItems, setSelectedImportItems] = useState<number[]>([]);
-  const [importStep, setImportStep] = useState<'upload' | 'review' | 'complete'>('upload');
+  const [importStep, setImportStep] = useState<'upload' | 'review' | 'confirm' | 'complete'>('upload');
+  const [showPurchaseHistoryModal, setShowPurchaseHistoryModal] = useState(false);
+  const [duplicateResolutions, setDuplicateResolutions] = useState<Record<string, boolean>>({});
+  const [enrichmentResolutions, setEnrichmentResolutions] = useState<Record<string, boolean>>({});
   const [newItemForm, setNewItemForm] = useState({
     name: "",
     category: "",
@@ -1622,35 +1625,8 @@ export default function InventoryPage() {
       deliveryDays: "Mon, Wed, Fri",
     },
   ];
-  const aiSuggestions = [
-    {
-      type: "reorder",
-      title: "Immediate Reorder Required",
-      items: lowStockItems.slice(0, 2).map((item: InventoryItem) => item.name),
-      urgency: "critical",
-      description: "These items are below reorder point and may impact menu availability within 2 days.",
-      action: `Order ${lowStockItems.length} low stock items`,
-      costImpact: "$567.75",
-    },
-    {
-      type: "optimization",
-      title: "Par Level Optimization",
-      items: inventoryItems.slice(0, 1).map((item: InventoryItem) => item.name),
-      urgency: "medium", 
-      description: "Current par level may be too high based on usage patterns. Reducing could free up working capital.",
-      action: "Optimize par levels based on usage",
-      costImpact: "-$127.50 inventory cost",
-    },
-    {
-      type: "waste_prevention",
-      title: "Waste Reduction Opportunity",
-      items: inventoryItems.filter((item: InventoryItem) => item.waste && item.waste > 0).map((item: InventoryItem) => item.name),
-      urgency: "low",
-      description: "Higher than normal waste detected. Consider prep adjustments or menu promotions.",
-      action: "Daily specials featuring high-waste items",
-      costImpact: "Save ~$45/week",
-    },
-  ];
+  const { data: insightsData, refetch: refetchInsights } = useAIInsights('inventory', undefined, 'active');
+  const [dismissInsight] = useDismissInsight();
 
   // Export all reports across panels
   const handleExportAll = async (format: 'csv' | 'xlsx' | 'pdf') => {
@@ -1788,7 +1764,6 @@ export default function InventoryPage() {
       setIsLoading(false);
     }
   };
-
   // Handle editing an existing item
   const handleEditItem = async () => {
     if (!selectedItem) return;
@@ -1967,7 +1942,6 @@ export default function InventoryPage() {
     // Use minThreshold as the source of truth for Par Level, fallback to legacy fields if needed
     return Number((item.minThreshold ?? item.parLevel ?? item.maxCapacity) || 0);
   };
-
   const computeStatus = (stock: number, min: number, par?: number) => {
     const s = Number(stock || 0);
     const m = Number(min || 0);
@@ -2167,7 +2141,6 @@ export default function InventoryPage() {
     setSelectedTab('purchase-orders');
     setIsVendorOrderExportOpen(true);
   };
-
   // --- Weekly Waste Summary data (counts by reason over last 7 days) ---
   const weeklyWasteData = React.useMemo(() => {
     const start = new Date(wasteWeekRange.startISO);
@@ -2332,7 +2305,6 @@ export default function InventoryPage() {
       toast.error(e.message || 'Failed to export order history');
     }
   };
-
   const exportWasteReportCsv = () => {
     const generatedAt = new Date().toISOString();
     // Aggregate by item
@@ -2437,7 +2409,14 @@ export default function InventoryPage() {
   // CSV Import functions
   const handleCSVUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && file.type === 'text/csv') {
+    if (!file) return;
+
+    const mime = (file.type || '').toLowerCase();
+    const name = (file.name || '').toLowerCase();
+    const isCsvMime = mime === 'text/csv' || mime === 'application/csv' || mime === 'application/vnd.ms-excel' || mime === 'text/plain';
+    const isCsvExt = name.endsWith('.csv');
+
+    if (isCsvMime || isCsvExt) {
       setCsvFile(file);
     } else {
       toast.error('Please select a valid CSV file');
@@ -2463,6 +2442,9 @@ export default function InventoryPage() {
         setCsvPreviewData(data);
         setImportStep('review');
         toast.success(`Parsed ${data.totalParsed} items successfully! 📊`);
+        if (data.isHistoryFormat) {
+          setShowPurchaseHistoryModal(true);
+        }
       } else {
         toast.error(data.error || 'Failed to parse CSV');
       }
@@ -2473,7 +2455,6 @@ export default function InventoryPage() {
       setCsvImportLoading(false);
     }
   };
-
   const importSelectedItems = async () => {
     if (!csvFile || selectedImportItems.length === 0) return;
     
@@ -2483,6 +2464,12 @@ export default function InventoryPage() {
       formData.append('csvFile', csvFile);
       formData.append('action', 'import');
       formData.append('selectedItems', JSON.stringify(selectedImportItems));
+      if (duplicateResolutions && Object.keys(duplicateResolutions).length > 0) {
+        formData.append('duplicateResolutions', JSON.stringify(duplicateResolutions));
+      }
+      if (enrichmentResolutions && Object.keys(enrichmentResolutions).length > 0) {
+        formData.append('enrichmentResolutions', JSON.stringify(enrichmentResolutions));
+      }
 
       const response = await fetch('/api/inventory/csv-import', {
         method: 'POST',
@@ -2837,7 +2824,6 @@ export default function InventoryPage() {
       };
     }));
   };
-
   // Use real Azure SAM for photo mode with loading indicators
   const USE_REAL_SAM = true;
 
@@ -3214,7 +3200,6 @@ export default function InventoryPage() {
       };
     }
   };
-
   // Find the actual bounds of the mask from pixel data
   const findMaskBounds = (imageData: ImageData): {x: number, y: number, width: number, height: number} => {
     const { width, height, data } = imageData;
@@ -3386,7 +3371,6 @@ export default function InventoryPage() {
       offset: { x: 0, y: 0 },
     });
   };
-
   const printLabel = (item: InventoryItem) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -3559,7 +3543,6 @@ export default function InventoryPage() {
       setQuickParValue("");
     }
   };
-
   const handleRecordWaste = async () => {
     if (!selectedItem) return;
     const quantity = parseFloat(wasteQuantity);
@@ -3727,6 +3710,24 @@ export default function InventoryPage() {
                   )}
                   {importStep === 'review' && csvPreviewData && (
                     <div className="py-4">
+                      {/* Purchase History Warning Modal */}
+                      <Dialog open={showPurchaseHistoryModal} onOpenChange={setShowPurchaseHistoryModal}>
+                        <DialogContent className="max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>Detected Purchase History CSV</DialogTitle>
+                            <DialogDescription>
+                              This file looks like a purchase history export which may not contain reliable pricing or counts. For best results, upload the individual order CSVs instead (e.g., by date and time).
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-2 text-sm text-muted-foreground">
+                            <p>Proceeding is allowed, but prices may be incomplete or marked as MARKET.</p>
+                          </div>
+                          <DialogFooter>
+                            <Button variant="outline" onClick={() => setShowPurchaseHistoryModal(false)}>Continue</Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+
                       <div className="grid grid-cols-3 gap-4 mb-6">
                         <div className="bg-blue-50 p-4 rounded-lg">
                           <div className="flex items-center">
@@ -3756,7 +3757,7 @@ export default function InventoryPage() {
                           </div>
                         </div>
                       </div>
-                      
+
                       <div className="flex justify-between items-center mb-4">
                         <div className="flex space-x-2">
                           <Button
@@ -3778,7 +3779,7 @@ export default function InventoryPage() {
                           {selectedImportItems.length} items selected for import
                         </p>
                       </div>
-                      
+
                       <div className="max-h-96 overflow-y-auto border rounded-lg">
                         <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50 sticky top-0">
@@ -3786,7 +3787,7 @@ export default function InventoryPage() {
                               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
                                 <input 
                                   type="checkbox" 
-                                  checked={selectedImportItems.length === csvPreviewData.items.filter((item: CsvItem) => !item.isDuplicate).length}
+                                  checked={selectedImportItems.length === csvPreviewData.items.filter((item: any) => !item.isDuplicate).length}
                                   onChange={selectAllNewItems}
                                 />
                               </th>
@@ -3794,11 +3795,19 @@ export default function InventoryPage() {
                               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">SUPC</th>
                               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Each $</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Case $</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Case Qty</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Split Qty</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">CSV Units</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Existing Count</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Delta</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duplicate Action</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Enrich Missing Fields</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-200">
-                            {csvPreviewData.items.map((item: CsvItem, index: number) => (
+                            {csvPreviewData.items.map((item: any, index: number) => (
                               <tr key={index} className={item.isDuplicate ? 'bg-yellow-50' : 'bg-white'}>
                                 <td className="px-3 py-2">
                                   <input 
@@ -3824,33 +3833,93 @@ export default function InventoryPage() {
                                 <td className="px-3 py-2 text-sm text-gray-900">{item.name}</td>
                                 <td className="px-3 py-2 text-sm text-gray-600">{item.syscoSUPC}</td>
                                 <td className="px-3 py-2 text-sm text-gray-600">{item.category}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">${item.costPerUnit}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">${Number(item.costPerUnit || 0).toFixed(2)}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">${Number(item.pricePerCase || 0).toFixed(2)}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.caseQty ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.splitQty ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.computedUnits ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{item.existingItem?.currentStock ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">{typeof item.existingItem?.currentStock === 'number' && typeof item.computedUnits === 'number' ? (Number(item.computedUnits) - Number(item.existingItem.currentStock)) : ''}</td>
+                                <td className="px-3 py-2 text-sm text-gray-600">
+                                  {item.isDuplicate ? (
+                                    <div className="flex items-center gap-2">
+                                      <label className="text-xs text-gray-700">Replace current count with CSV?</label>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!duplicateResolutions[item.syscoSUPC]}
+                                        onChange={(e) => setDuplicateResolutions((m) => ({ ...m, [item.syscoSUPC]: e.target.checked }))}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-sm text-gray-600">
+                                  {item.isDuplicate && item.canEnrich ? (
+                                    <div className="flex flex-col gap-1">
+                                      <div className="text-xs text-gray-700">Missing fields to fill: {item.enrichmentFields.join(', ')}</div>
+                                      <label className="text-xs text-gray-700 flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={!!enrichmentResolutions[item.syscoSUPC]}
+                                          onChange={(e) => setEnrichmentResolutions((m) => ({ ...m, [item.syscoSUPC]: e.target.checked }))}
+                                        />
+                                        Apply enrichment for this item
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-gray-400">—</span>
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      
+
                       <div className="flex justify-between mt-6">
                         <Button variant="outline" onClick={() => setImportStep('upload')}>
                           Back
                         </Button>
                         <Button 
-                          onClick={importSelectedItems}
+                          onClick={() => setImportStep('confirm')}
                           disabled={selectedImportItems.length === 0 || csvImportLoading}
                           className="bg-orange-600 hover:bg-orange-700"
                         >
-                          {csvImportLoading ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <CheckCircle className="mr-2 h-4 w-4" />
-                          )}
-                          Import {selectedImportItems.length} Items
+                          Continue
                         </Button>
                       </div>
                     </div>
                   )}
-                  
+
+                  {importStep === 'confirm' && csvPreviewData && (
+                    <div className="py-4 space-y-4">
+                      <div className="prose max-w-none">
+                        <h3 className="text-lg font-semibold">Review & Confirm Import</h3>
+                        <ol className="list-decimal ml-5 text-sm text-gray-700 space-y-1">
+                          <li>New items will be created with Sysco identifiers, pricing, and case pack size.</li>
+                          <li>Duplicates you checked will have their current count replaced with CSV computed units.</li>
+                          <li>If you enabled enrichment for a duplicate, missing fields (e.g., casePackSize, pricePerCase, costPerUnit, brand) will be filled from the CSV.</li>
+                          <li>Counts for new items remain 0. You can adjust later via quick count or receiving.</li>
+                        </ol>
+                      </div>
+
+                      <div className="rounded border p-3 text-sm">
+                        <div><strong>Selected new items:</strong> {selectedImportItems.length}</div>
+                        <div><strong>Duplicates to replace count:</strong> {Object.values(duplicateResolutions).filter(Boolean).length}</div>
+                        <div><strong>Duplicates to enrich:</strong> {Object.values(enrichmentResolutions).filter(Boolean).length}</div>
+                      </div>
+
+                      <div className="flex justify-between">
+                        <Button variant="outline" onClick={() => setImportStep('review')}>Back</Button>
+                        <Button onClick={importSelectedItems} disabled={csvImportLoading} className="bg-orange-600 hover:bg-orange-700">
+                          {csvImportLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                          Confirm & Import
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {importStep === 'complete' && (
                     <div className="py-8 text-center">
                       <CheckCircle className="mx-auto h-12 w-12 text-green-600" />
@@ -4054,7 +4123,6 @@ export default function InventoryPage() {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
-
               {/* Order History Report Options */}
               <Dialog open={isOrderHistoryDialogOpen} onOpenChange={setIsOrderHistoryDialogOpen}>
                 <DialogContent className="max-w-lg">
@@ -4493,29 +4561,41 @@ export default function InventoryPage() {
             <CardContent className="p-6">
               <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Inventory Insights</h3>
               <div className="grid gap-4">
-                {aiSuggestions.map((suggestion, index) => (
-                  <div key={index} className="bg-card border border-border rounded-lg p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <h4 className="font-medium text-foreground">{suggestion.title}</h4>
-                          <span className={`px-2 py-1 text-xs rounded ${
-                            suggestion.urgency === "critical" ? "tag-red" :
-                            suggestion.urgency === "medium" ? "tag-yellow" : "tag-blue"
-                          }`}>
-                            {suggestion.urgency}
-                          </span>
+                {Array.isArray(insightsData?.aiInsights) && insightsData!.aiInsights.length > 0 ? (
+                  insightsData!.aiInsights.map((ins: any) => (
+                    <div key={ins.id} className="bg-card border border-border rounded-lg p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <h4 className="font-medium text-foreground">{ins.title}</h4>
+                            <span className={`px-2 py-1 text-xs rounded ${
+                              ins.urgency === "critical" ? "tag-red" :
+                              ins.urgency === "medium" ? "tag-yellow" : "tag-blue"
+                            }`}>
+                              {ins.urgency}
+                            </span>
+                          </div>
+                          <p className="text-sm text-muted-foreground mb-2">{ins.description}</p>
+                          <p className="text-sm font-medium text-foreground">💡 {ins.action}</p>
+                          {ins.impact && (<p className="text-xs text-green-600 mt-1">💰 {ins.impact}</p>)}
                         </div>
-                        <p className="text-sm text-muted-foreground mb-2">{suggestion.description}</p>
-                        <p className="text-sm font-medium text-foreground">💡 {suggestion.action}</p>
-                        <p className="text-xs text-green-600 mt-1">💰 {suggestion.costImpact}</p>
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" size="sm">
+                            Apply
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={async () => {
+                            await dismissInsight({ variables: { id: ins.id } });
+                            refetchInsights();
+                          }}>
+                            Dismiss
+                          </Button>
+                        </div>
                       </div>
-                      <Button variant="outline" size="sm">
-                        Apply
-                      </Button>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No insights yet. They will be generated nightly or via the Varuni chat.</p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -4639,7 +4719,6 @@ export default function InventoryPage() {
                   </div>
                 </CardContent>
               </Card>
-
               {/* Weekly Waste Summary */}
               <Card className="flex flex-col h-full lg:min-h-[420px]">
                 <CardHeader>
@@ -5205,7 +5284,6 @@ export default function InventoryPage() {
                       </CardContent>
                     </Card>
                   </div>
-
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -5788,7 +5866,7 @@ export default function InventoryPage() {
           )}
         </Tabs>
 
-                 {/* Dynamic Label Designer Modal */}
+                  {/* Dynamic Label Designer Modal */}
          <Dialog open={isLabelDesignerOpen} onOpenChange={setIsLabelDesignerOpen}>
            <DialogContent className="max-w-6xl">
              <DialogHeader>
@@ -5976,7 +6054,6 @@ export default function InventoryPage() {
                        </div>
                      )}
                    </div>
-
                    {/* Metadata Controls */}
                    <div className="border rounded-lg p-3 space-y-2">
                      <div className="flex items-center justify-between">
@@ -6711,7 +6788,6 @@ export default function InventoryPage() {
                         </div>
                       );
                     })}
-                    
                     {/* Real SAM Masks for Photo */}
                     {segmentationMasks.map((maskObj, index) => (
                       <div key={maskObj.id} className="absolute pointer-events-none">

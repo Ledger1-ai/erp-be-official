@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const menuVisibilitySchema = new mongoose.Schema({
-  restaurantGuid: { type: String, required: true, index: true },
+  restaurantGuid: { type: String, required: true },
   hiddenMenus: { type: [String], default: [] },
   hiddenGroups: { type: [String], default: [] },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

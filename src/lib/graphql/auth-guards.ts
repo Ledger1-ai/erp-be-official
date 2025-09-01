@@ -10,6 +10,8 @@ export interface AuthContext {
   isAuthenticated: boolean;
   hasPermission: (permission: string) => boolean;
   hasRole: (roles: string[]) => boolean;
+  // Optional request accessor for server-only resolvers
+  req?: any;
 }
 
 /**

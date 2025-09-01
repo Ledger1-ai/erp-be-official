@@ -353,7 +353,10 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
             <p className="text-muted-foreground mt-1">Welcome back! Here&apos;s what&apos;s happening at your restaurant today.</p>
           </div>
-          <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+          <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={() => {
+            const evt = new CustomEvent('open-varuni');
+            window.dispatchEvent(evt);
+          }}>
             <Brain className="mr-2 h-4 w-4" />
             Ask Varuni
           </Button>
