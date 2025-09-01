@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
 import HostSession from '@/lib/models/HostSession';
 import { getPreset } from '@/lib/host/presets';
-import { NextResponse } from 'next/server';
 
 function getDomainTables(presetSlug: string, domainIds: string[]): string[] {
   const preset = getPreset(presetSlug);
@@ -35,7 +34,7 @@ export async function POST(req: NextRequest) {
   if (!preset) return NextResponse.json({ success: false, error: 'Preset missing' }, { status: 400 });
   const rotationOrder = live.rotation?.order || [];
   let serverId: string | undefined = preferredServerId || rotationOrder[live.rotation.pointer] || (live.servers[0]?.id as any);
-  const assignment = live.assignments.find(a => a.serverId === serverId);
+  const assignment = live.assignments.find((a: { serverId: string; domainIds: string[] }) => a.serverId === serverId);
   // If next-up has insufficient capacity free, suggest others
   const tableIds = getDomainTables(preset.slug, assignment?.domainIds || []);
   const availableTables = tableIds.filter(tid => !live.tableOccupied[tid]);
