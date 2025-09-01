@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import SevenShiftsApiClient from '@/lib/services/seven-shifts-api-client';
 import { getDefaultTimeZone, formatYMDInTimeZone } from '@/lib/timezone';
+import { connectDB } from '@/lib/db/connection';
+import ToastEmployee from '@/lib/models/ToastEmployee';
 
 function formatLocalRange(startIso: string, endIso: string): string {
   try {
     const s = new Date(startIso);
     const e = new Date(endIso);
-    const fmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+    const tz = getDefaultTimeZone();
+    const fmt = new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: '2-digit', minute: '2-digit' });
     return `${fmt.format(s)} - ${fmt.format(e)}`;
   } catch {
     return '—';
@@ -64,23 +67,46 @@ export async function GET(_req: NextRequest) {
 
     let items = shifts.map(s => {
       const u = idToUser.get(Number(s.user_id));
-      const name = u ? `${u.first_name} ${u.last_name}` : `User ${s.user_id}`;
+      const name = u ? `${u.first_name} ${u.last_name}`.trim() : '';
       const role = s.role_id ? roleById.get(Number(s.role_id)) : undefined;
       const dept = (s.department_id ? deptById.get(Number(s.department_id)) : (role?.department_id ? deptById.get(Number(role.department_id)) : undefined));
       const st = new Date(s.start).getTime();
       const en = new Date(s.end).getTime();
-      const isActive = (s as any).open === true || (st && en && now >= st && now <= en);
+      const isActive = (st && en && now >= st && now <= en);
       return {
         userId: s.user_id,
-        name,
+        name: name || String(s.user_id),
         start: s.start,
         end: s.end,
         range: formatLocalRange(s.start, s.end),
         role: role?.name || undefined,
         department: dept?.name || 'Other',
         isActive,
+        startMs: st,
+        endMs: en,
       };
     }).sort((a, b) => a.start.localeCompare(b.start));
+
+    // Enrich names from ToastEmployee if missing or numeric-only
+    try {
+      await connectDB();
+      const missing = items.filter(it => !it.name || /^\d+$/.test(String(it.name))).map(it => Number(it.userId)).filter(n => Number.isFinite(n));
+      if (missing.length) {
+        const rows = await ToastEmployee.find({ sevenShiftsId: { $in: missing } }).lean();
+        const byId = new Map<number, { firstName?: string; lastName?: string }>();
+        for (const r of rows) byId.set(Number(r.sevenShiftsId), { firstName: (r as any).firstName, lastName: (r as any).lastName });
+        items = items.map(it => {
+          if (!it.name || /^\d+$/.test(String(it.name))) {
+            const m = byId.get(Number(it.userId));
+            if (m && (m.firstName || m.lastName)) {
+              const full = `${m.firstName || ''} ${m.lastName || ''}`.trim();
+              if (full) return { ...it, name: full };
+            }
+          }
+          return it;
+        });
+      }
+    } catch {}
 
     // If no shifts were found, fall back to listing active employees as scheduled (dimmed)
     if (!items.length && users && users.length) {

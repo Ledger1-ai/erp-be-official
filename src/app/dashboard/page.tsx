@@ -272,15 +272,21 @@ export default function DashboardPage() {
           } else if (Array.isArray(json.data)) {
             list = json.data;
           }
+          const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
           const mapped = list.map((s: any) => {
-            const startMs = s.start ? Date.parse(String(s.start)) : NaN;
-            const endMs = s.end ? Date.parse(String(s.end)) : NaN;
+            const startMs = Number.isFinite(Number(s.startMs)) ? Number(s.startMs) : (s.start ? Date.parse(String(s.start)) : NaN);
+            const endMs = Number.isFinite(Number(s.endMs)) ? Number(s.endMs) : (s.end ? Date.parse(String(s.end)) : NaN);
             const now = Date.now();
-            const isActive = Boolean(s.isActive ?? (Number.isFinite(startMs) && Number.isFinite(endMs) && now >= startMs && now <= endMs));
+            const isActive = Boolean(Number.isFinite(startMs) && Number.isFinite(endMs) && now >= (startMs as number) && now <= (endMs as number));
+            const localRange = (typeof s.range === 'string' && s.range.trim().length > 0)
+              ? s.range
+              : (Number.isFinite(startMs) && Number.isFinite(endMs)
+                ? `${timeFmt.format(new Date(startMs as number))} - ${timeFmt.format(new Date(endMs as number))}`
+                : '—');
             return {
               name: s.name,
               role: s.role || 'Shift',
-              shift: s.range || '—',
+              shift: localRange,
               status: isActive ? 'active' : 'scheduled',
               department: s.department || 'Other',
               start: s.start,

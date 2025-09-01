@@ -24,6 +24,10 @@ export default function HostProPanel() {
   const [layoutSlug, setLayoutSlug] = useState<string>('');
   const [layoutData, setLayoutData] = useState<any | null>(null);
   const [designerTool, setDesignerTool] = useState<DesignerTool>('pointer');
+  const [manualMode, setManualMode] = useState<boolean>(false);
+  const [manualTableId, setManualTableId] = useState<string>('');
+  const [manualServerId, setManualServerId] = useState<string>('');
+  const [manualPartySize, setManualPartySize] = useState<number>(2);
 
   // Load presets and active servers
   useEffect(() => {
@@ -141,7 +145,9 @@ export default function HostProPanel() {
     if (!preset) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/hostpro/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ presetSlug: preset.slug, servers }) });
+      // Only include eligible servers (active Servers role) in rotation/session
+      const eligibleServers = servers.filter(s => String(s.role) === 'Server' && s.isActive);
+      const res = await fetch('/api/hostpro/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ presetSlug: preset.slug, servers: eligibleServers }) });
       const json = await res.json();
       if (json?.success) setSession(json.data);
     } finally {
@@ -151,11 +157,12 @@ export default function HostProPanel() {
 
   async function updateAssignments(a: Array<{ serverId: string; domainIds: string[] }>) {
     await fetch('/api/hostpro/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assignments: a }) });
-    setSession((s: any) => ({ ...s, assignments: a }));
+    setSession((s: any) => ({ ...s, assignments: a, assignmentsLocked: true }));
   }
 
   async function autoAssign() {
-    const r = await fetch('/api/hostpro/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const eligibleServers = computeTeamMembers(servers, session).filter(s => String(s.role) === 'Server' && s.isActive);
+    const r = await fetch('/api/hostpro/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ servers: eligibleServers }) });
     const j = await r.json();
     if (j?.success) setSession((s: any) => ({ ...s, assignments: j.data }));
   }
@@ -176,6 +183,17 @@ export default function HostProPanel() {
     return { ...preset, width, height, tables };
   }, [preset, layoutData]);
   const livePreset = computeLiveDomains(basePreset);
+  const activeServersOnly = React.useMemo(() => servers.filter(s => String(s.role) === 'Server' && s.isActive), [servers]);
+
+  function inferAssignedServerIdForTable(tableId?: string): string | undefined {
+    if (!tableId) return undefined;
+    try {
+      const dom = (livePreset?.domains || []).find((d: any) => (d.tableIds || []).includes(String(tableId)));
+      if (!dom) return undefined;
+      const a = (session?.assignments || []).find((x: any) => (x.domainIds || []).includes(dom.id));
+      return a?.serverId ? String(a.serverId) : undefined;
+    } catch { return undefined; }
+  }
 
   return (
     <div className="space-y-4">
@@ -200,7 +218,7 @@ export default function HostProPanel() {
         <Tabs defaultValue="servers">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="servers">Active Servers</TabsTrigger>
-          <TabsTrigger value="domains">Domains & Map</TabsTrigger>
+          <TabsTrigger value="domains" id="domains-tab">Domains & Map</TabsTrigger>
           <TabsTrigger value="assign" id="assign-tab">Assign</TabsTrigger>
           <TabsTrigger value="live">Live</TabsTrigger>
         </TabsList>
@@ -243,6 +261,23 @@ export default function HostProPanel() {
             </CardHeader>
             <CardContent className="pt-0">
               <FloorDesigner preset={getPreset('3-plus-2-bar') || { slug:'', name:'', tables:[], domains:[] }} showRegionColors={true} hideToolSections={true} tool={designerTool} onToolChange={setDesignerTool} />
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <Button size="sm" variant="outline" onClick={() => { try { localStorage.removeItem('hostpro:regions'); } catch {} }}>Reset Regions</Button>
+                <Button size="sm" onClick={async () => {
+                  try {
+                    const raw = typeof window !== 'undefined' ? localStorage.getItem('hostpro:regions') : null;
+                    const regions = raw ? JSON.parse(raw) : [];
+                    const payload = { domains: Array.isArray(regions) ? regions.map((r: any, idx: number) => ({ id: r.id || `D${idx+1}`, name: r.name || `Region ${idx+1}`, color: r.color || '#22c55e', tableIds: r.tableIds || [] })) : [], layoutSlug };
+                    const res = await fetch('/api/hostpro/domains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    const js = await res.json();
+                    if (js?.success) {
+                      const el = document.getElementById('domains-tab');
+                      if (el) el.innerHTML = 'Domains & Map ✓';
+                      setSession((s: any) => ({ ...(s || {}), domainsLocked: true }));
+                    }
+                  } catch {}
+                }}>Submit</Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -307,14 +342,65 @@ export default function HostProPanel() {
                   if (js?.success) setLayouts((js.data || []).map((x: any) => ({ slug: x.slug, updatedAt: x.updatedAt })));
                   setLayoutSlug(name);
                 }}>New</Button>
-                <Button size="sm" variant="outline" onClick={async () => { await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: { ...session?.rotation, isLive: !session?.rotation?.isLive } }) }); setSession((s: any) => ({ ...s, rotation: { ...s.rotation, isLive: !s?.rotation?.isLive } })); }}>
+                <Button size="sm" variant="outline" onClick={async () => {
+                  const eligibleIds = servers.filter(s => String(s.role) === 'Server' && s.isActive).map(s => String(s.id));
+                  const currentOrder: string[] = Array.isArray(session?.rotation?.order) ? (session.rotation.order as any).map((x: any) => String(x)) : [];
+                  // Keep current order but drop ineligible; append any new eligible at the end
+                  const filteredOrder: string[] = currentOrder.filter(id => eligibleIds.includes(String(id)));
+                  for (const id of eligibleIds) if (!filteredOrder.includes(String(id))) filteredOrder.push(String(id));
+                  const turningOn = !Boolean(session?.rotation?.isLive);
+                  const canGoLive = filteredOrder.length > 0 && turningOn;
+                  const nextIsLive = turningOn ? (canGoLive ? true : false) : false;
+                  const nextPointer = Math.max(0, Math.min(Number(session?.rotation?.pointer || 0), Math.max(filteredOrder.length - 1, 0)));
+                  const rot = { isLive: nextIsLive, order: filteredOrder, pointer: nextPointer } as any;
+                  await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: rot }) });
+                  setSession((s: any) => ({ ...s, rotation: rot }));
+                }}>
                   {session?.rotation?.isLive ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />} {session?.rotation?.isLive ? 'Pause' : 'Play'}
+                </Button>
+                <Button size="sm" variant={manualMode ? 'default' : 'outline'} onClick={() => setManualMode((v) => !v)}>
+                  {manualMode ? 'Manual ✓' : 'Manual'}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={async () => { await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: { ...(session?.rotation || {}), pointer: 0 } }) }); setSession((s: any) => ({ ...s, rotation: { ...(s.rotation || {}), pointer: 0 } })); }}><RotateCcw className="h-4 w-4" /> Reset</Button>
               </div>
             </CardHeader>
             <CardContent>
-              {preset && (
+              {(() => {
+                const domainsLocked = Boolean(session?.domainsLocked);
+                const assignmentsLocked = Boolean(session?.assignmentsLocked);
+                const eligibleCount = servers.filter(s => String(s.role) === 'Server' && s.isActive).length;
+                if (!domainsLocked || !assignmentsLocked || eligibleCount === 0) {
+                  return (
+                    <div className="relative">
+                      <div className="absolute inset-0 z-10 backdrop-blur-md bg-black/20 rounded-xl flex">
+                        <div className="m-auto w-full max-w-xl rounded-lg border bg-background/80 p-4 text-center">
+                          <div className="text-lg font-semibold mb-1">{eligibleCount === 0 ? 'No Servers Available' : 'Finish setup to go live'}</div>
+                          <div className="text-sm text-muted-foreground">{eligibleCount === 0 ? 'There are no active Servers on the schedule.' : 'Complete both steps before starting the live rotation.'}</div>
+                          <div className="grid grid-cols-1 gap-2 mt-3 text-sm">
+                            <div className={`rounded-md border p-2 ${domainsLocked ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>{domainsLocked ? 'Domains & Map: Complete' : 'Domains & Map: Pending (open the tab and Submit)'}</div>
+                            <div className={`rounded-md border p-2 ${assignmentsLocked ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>{assignmentsLocked ? 'Assign: Complete' : 'Assign: Pending (open the tab and Submit)'}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="opacity-40 pointer-events-none">
+                        {preset && (
+                          <div className="relative">
+                            {(() => {
+                              const combined: Record<string, boolean> = { ...(session?.tableOccupied || {}) };
+                              for (const [tid, val] of Object.entries(openTables)) if (val) combined[tid] = true;
+                              return (
+                                <FloorMap preset={livePreset} occupied={combined} showDomains={true} assignments={session?.assignments || []} servers={servers} walls={layoutData?.walls} labels={layoutData?.labels} />
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              {(Boolean(session?.domainsLocked) && Boolean(session?.assignmentsLocked) && servers.some(s => String(s.role) === 'Server' && s.isActive)) && preset && (
                 <div className="relative">
                   {session?.rotation?.isLive && (
                     <div className="absolute inset-0 z-10 backdrop-blur-md bg-black/20 rounded-xl flex">
@@ -329,7 +415,11 @@ export default function HostProPanel() {
                             <ol className="text-sm space-y-1">
                               {(session?.rotation?.order || []).map((id: string, idx: number) => (
                                 <li key={`rot-${id}-${idx}`} className={`flex items-center justify-between rounded px-2 py-1 ${idx===session?.rotation?.pointer ? 'bg-primary/10 border border-primary/30' : ''}`}>
-                                  <span>{idx+1}. {servers.find(s => String(s.id) === String(id))?.name || id}</span>
+                                  <span>{idx+1}. {(
+                                    servers.find(s => String(s.id) === String(id))?.name ||
+                                    (Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === String(id))?.name : undefined) ||
+                                    id
+                                  )}</span>
                                   {idx===session?.rotation?.pointer && (<span className="text-xs text-primary">Next</span>)}
                                 </li>
                               ))}
@@ -341,27 +431,36 @@ export default function HostProPanel() {
                               const nextId = session?.rotation?.order?.[session?.rotation?.pointer || 0];
                               const a = (session?.assignments || []).find((x: any) => String(x.serverId) === String(nextId));
                               const domain = (livePreset?.domains || []).find((d: any) => (a?.domainIds || [])[0] === d.id);
-                              // Find a candidate table number quickly (smallest capacity that is free)
-                              let tableNum: string | undefined = undefined;
-                              if (domain) {
-                                for (const tid of domain.tableIds || []) {
-                                  if (!session?.tableOccupied?.[tid]) { tableNum = tid; break; }
-                                }
-                              }
+                              const availableTables = (domain?.tableIds || []).filter((tid: string) => !session?.tableOccupied?.[tid]);
+                              const suggestedTable = availableTables[0];
                               return (
                                 <div className="text-center">
                                   <div className="text-5xl font-bold leading-tight">{domain?.name || '—'}</div>
                                   <div className="text-xs text-muted-foreground">Domain</div>
-                                  <div className="mt-3 text-4xl font-semibold">{tableNum || '—'}</div>
-                                  <div className="text-xs text-muted-foreground">Suggested Table</div>
+                                  <div className="mt-3">
+                                    <select className="rounded-md border bg-background px-2 py-1 text-sm">
+                                      {availableTables.map((tid: string) => (
+                                        <option key={tid} value={tid} selected={tid===suggestedTable}>{tid}</option>
+                                      ))}
+                                    </select>
+                                    {suggestedTable && (<span className="ml-2 text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 align-middle">auto-selected</span>)}
+                                  </div>
                                   <div className="mt-3 flex items-center justify-center gap-2">
-                                    <Button size="sm" onClick={async () => {
+                                    <Button size="sm" onClick={async (e) => {
+                                      const sel = (e.currentTarget.parentElement?.previousElementSibling?.querySelector('select') as HTMLSelectElement | null);
+                                      const tableId = sel?.value || suggestedTable;
                                       const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
                                       const partySize = Math.max(1, parseInt(String(sizeStr || '2'), 10) || 2);
-                                      const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize }) });
+                                      const payload = { partySize } as any;
+                                      if (String(nextId)) payload.preferredServerId = String(nextId);
+                                      const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                                       const j = await r.json();
-                                      if (j?.data?.serverId && j?.data?.tableId) {
-                                        await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize, advancePointer: true }) });
+                                      if (j?.data?.serverId && (tableId || j?.data?.tableId)) {
+                                        await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: tableId || j.data.tableId, partySize, advancePointer: true }) });
+                                        // Create a Toast order and link it
+                                        try {
+                                          await fetch('/api/toast/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: tableId || j.data.tableId, partySize }) });
+                                        } catch {}
                                         const s = await fetch('/api/hostpro/session').then(r => r.json());
                                         if (s?.success) setSession(s.data);
                                       }
@@ -400,7 +499,22 @@ export default function HostProPanel() {
                     const combined: Record<string, boolean> = { ...(session?.tableOccupied || {}) };
                     for (const [tid, val] of Object.entries(openTables)) if (val) combined[tid] = true;
                     return (
-                      <FloorMap preset={livePreset} occupied={combined} showDomains={true} assignments={session?.assignments || []} servers={servers} walls={layoutData?.walls} labels={layoutData?.labels} />
+                      <FloorMap
+                        preset={livePreset}
+                        occupied={combined}
+                        showDomains={true}
+                        assignments={session?.assignments || []}
+                        servers={servers}
+                        walls={layoutData?.walls}
+                        labels={layoutData?.labels}
+                        manualMode={manualMode}
+                        onManualPick={(tid: string) => {
+                          if (!manualMode) return;
+                          setManualTableId(String(tid));
+                          const inferred = inferAssignedServerIdForTable(String(tid));
+                          setManualServerId(inferred || (activeServersOnly[0]?.id ? String(activeServersOnly[0].id) : ''));
+                        }}
+                      />
                     );
                   })()}
                   {/* Next up card */}
@@ -409,7 +523,11 @@ export default function HostProPanel() {
                       <div className="flex items-center gap-3">
                         <div>
                       <div className="text-xs text-muted-foreground">Next Up</div>
-                      <div className="font-semibold">{servers.find(s => String(s.id) === String(session.rotation.order[session.rotation.pointer]))?.name || '—'}</div>
+                      <div className="font-semibold">{(
+                        servers.find(s => String(s.id) === String(session.rotation.order[session.rotation.pointer]))?.name ||
+                        (Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === String(session.rotation.order[session.rotation.pointer]))?.name : undefined) ||
+                        '—'
+                      )}</div>
                         </div>
                         <Button size="sm" onClick={async () => {
                           const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
@@ -425,7 +543,11 @@ export default function HostProPanel() {
                             const nextOrder = session?.rotation?.order || [];
                             const nextIdx = ((session?.rotation?.pointer || 0) + 1) % (nextOrder.length || 1);
                             const nextServerId = nextOrder[nextIdx];
-                            const nextName = servers.find(s => String(s.id) === String(nextServerId))?.name || 'Next server';
+                            const nextName = (
+                              servers.find(s => String(s.id) === String(nextServerId))?.name ||
+                              (Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === String(nextServerId))?.name : undefined) ||
+                              'Next server'
+                            );
                             const ok = typeof window !== 'undefined' ? window.confirm(`No table available for the current next-up. Try ${nextName}?`) : true;
                             if (ok && nextServerId) {
                               const r2 = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize, preferredServerId: nextServerId }) });
@@ -473,6 +595,52 @@ export default function HostProPanel() {
                       </div>
                     </div>
                   ) : null}
+                  {/* Manual seat panel */}
+                  {manualMode && (
+                    <div className="absolute bottom-3 right-3 rounded-xl border shadow p-3 bg-card/90 backdrop-blur w-[360px]">
+                      <div className="text-sm font-medium mb-2">Manual Seat</div>
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground">Click a table on the map</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs w-20">Table</div>
+                          <input className="flex-1 rounded-md border bg-background px-2 py-1 text-sm" value={manualTableId} onChange={(e) => setManualTableId(e.target.value)} placeholder="Select from map" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs w-20">Guests</div>
+                          <input type="number" min={1} max={20} className="w-24 rounded-md border bg-background px-2 py-1 text-sm" value={manualPartySize} onChange={(e) => setManualPartySize(Math.max(1, parseInt(e.target.value || '2', 10) || 2))} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs w-20">Server</div>
+                          <select className="flex-1 rounded-md border bg-background px-2 py-1 text-sm" value={manualServerId} onChange={(e) => setManualServerId(e.target.value)}>
+                            {activeServersOnly.length === 0 ? (
+                              <option value="">No active servers</option>
+                            ) : null}
+                            {activeServersOnly.map((s) => (
+                              <option key={s.id} value={String(s.id)}>{s.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex items-center justify-end gap-2 mt-2">
+                          <Button size="sm" variant="ghost" onClick={() => { setManualMode(false); setManualTableId(''); setManualPartySize(2); setManualServerId(''); }}>Cancel</Button>
+                          <Button size="sm" disabled={!manualTableId || !manualServerId} onClick={async () => {
+                            if (!manualTableId || !manualServerId) return;
+                            const partySize = manualPartySize;
+                            // Mark seating on host session
+                            await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: manualServerId, tableId: manualTableId, partySize, advancePointer: false }) });
+                            // Create Toast order
+                            try { await fetch('/api/toast/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: manualServerId, tableId: manualTableId, partySize }) }); } catch {}
+                            // Refresh session
+                            const s = await fetch('/api/hostpro/session').then(r => r.json());
+                            if (s?.success) setSession(s.data);
+                            setManualMode(false);
+                            setManualTableId('');
+                            setManualPartySize(2);
+                            setManualServerId('');
+                          }}>Start Order</Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               {/* Legend & quick counts */}
@@ -649,14 +817,21 @@ function mergeAssignments(assignments: Array<{ serverId: string; domainIds: stri
 }
 
 function computeTeamMembers(servers: Array<any>, session: any): Array<any> {
+  const TTL_MINUTES = 30; // keep inactive assigned members visible for 30 minutes
+  const now = Date.now();
   const active = servers.filter(s => ['Server','Bartender'].includes((s.role as any) || 'Server') && s.isActive);
   const byId = new Map(active.map(s => [String(s.id), s]));
-  // Include previously assigned but now inactive staff for reassignment
+  // Include previously assigned but now inactive staff for reassignment, preserve known names
   if (Array.isArray(session?.assignments)) {
     for (const a of session.assignments) {
       const id = String(a.serverId);
       if (!byId.has(id)) {
-        byId.set(id, { id, name: 'Inactive', role: 'Server', isActive: false });
+        const fallback = Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === id) : undefined;
+        const lastActiveAt = fallback?.lastActiveAt ? new Date(fallback.lastActiveAt).getTime() : 0;
+        const withinTtl = lastActiveAt > 0 ? (now - lastActiveAt) <= TTL_MINUTES * 60 * 1000 : false;
+        if (withinTtl || ((a?.domainIds || []).length > 0)) {
+          byId.set(id, { id, name: fallback?.name || id, role: fallback?.role || 'Server', isActive: false });
+        }
       }
     }
   }

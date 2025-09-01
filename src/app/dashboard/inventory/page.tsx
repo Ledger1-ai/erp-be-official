@@ -5593,12 +5593,12 @@ export default function InventoryPage() {
               {isFilterPanelOpen && (
                 <div className="p-4 border-b">
                   <div className="flex items-center gap-4">
-                    <Select onValueChange={(value) => setFilterCategory(value)} defaultValue={filterCategory || ""}>
+                    <Select value={filterCategory ?? "all"} onValueChange={(value) => setFilterCategory(value === "all" ? null : value)}>
                       <SelectTrigger>
                         <SelectValue placeholder="Filter by category..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">All Categories</SelectItem>
+                        <SelectItem value="all">All Categories</SelectItem>
                         {uniqueCategories.map((category: string) => (
                           <SelectItem key={category} value={category}>{category}</SelectItem>
                         ))}

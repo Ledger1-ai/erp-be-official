@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
 import HostSession from '@/lib/models/HostSession';
 import { getPreset } from '@/lib/host/presets';
+import { NextResponse } from 'next/server';
 
 function getDomainTables(presetSlug: string, domainIds: string[]): string[] {
   const preset = getPreset(presetSlug);
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
   }
   // Default selection
   const picked = candidates[0];
-  return NextResponse.json({ success: true, data: { serverId, tableId: picked.tid, slack: picked.cap - partySize } });
+  return NextResponse.json({ success: true, data: { serverId, tableId: picked.tid, slack: picked.cap - partySize, suggested: true } });
 }
 
 

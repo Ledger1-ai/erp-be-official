@@ -17,6 +17,8 @@ export default function FloorMap({
   servers,
   walls,
   labels,
+  manualMode = false,
+  onManualPick,
 }: {
   preset: FloorPreset;
   occupied?: TableState;
@@ -27,6 +29,8 @@ export default function FloorMap({
   servers?: Array<{ id: string; name: string }>;
   walls?: Array<{ x1: number; y1: number; x2: number; y2: number; thickness?: number }>;
   labels?: Array<{ x: number; y: number; text: string; size?: number }>;
+  manualMode?: boolean;
+  onManualPick?: (tableId: string) => void;
 }) {
   const w = preset.width || 1200;
   const h = preset.height || 760;
@@ -139,7 +143,7 @@ export default function FloorMap({
     // Use CSS variable for instant theme switch without recompute
     const textColor = getLabelColorFromTint(tint);
     const tintAlpha = (hex?: string) => hex ? `${hex}66` : undefined; // ~40%
-    const common = { onClick: () => onPick?.(t.id) } as any;
+    const common = { onClick: () => (manualMode ? onManualPick?.(t.id) : onPick?.(t.id)) } as any;
     const orderInfo = ordersByTable[t.id];
     const domInfo = domainOfTable.get(t.id);
     const assignedName = domInfo ? assignedServerByDomain.get(domInfo.id) : undefined;

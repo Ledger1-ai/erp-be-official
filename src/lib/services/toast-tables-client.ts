@@ -77,6 +77,27 @@ export class ToastTablesClient {
     }
   }
 
+  async fetchTableByGuid(guid: string): Promise<ToastTable | null> {
+    try {
+      const url = `${this.apiHostname}/config/v2/tables/${encodeURIComponent(guid)}`;
+      const token = await this.authService.getAccessToken();
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Toast-Restaurant-External-ID': this.restaurantId,
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) return null;
+      const table = await response.json() as ToastTable;
+      return table;
+    } catch (error) {
+      console.error('Error fetching table by guid from Toast:', error);
+      return null;
+    }
+  }
+
   async fetchTableByName(tableName: string): Promise<ToastTable | null> {
     try {
       const response = await this.fetchTables();

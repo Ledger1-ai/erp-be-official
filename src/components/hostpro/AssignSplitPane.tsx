@@ -79,14 +79,14 @@ export default function AssignSplitPane({
                 const isAssigned = Boolean(assigneeId);
                 const assigneeName = isAssigned ? (servers.find(s => String(s.id) === assigneeId)?.name || '') : '';
                 const card = (
-                  <div className={`rounded-md border p-2 flex flex-col gap-1 ${isAssigned ? 'opacity-80' : 'cursor-grab active:cursor-grabbing'}`} style={{ backgroundColor: d.color + '22' }}>
+                  <div className={`rounded-md border p-2 flex flex-col gap-1 ${isAssigned ? 'opacity-60 pointer-events-none' : 'cursor-grab active:cursor-grabbing'}`} style={{ backgroundColor: d.color + '22' }}>
                     <div className="flex items-center gap-2">
                       <div className="size-3 rounded-full" style={{ backgroundColor: d.color }} />
                       <div className="font-medium text-sm">{d.name}</div>
                       <div className="ml-auto text-[10px] text-muted-foreground">{(d.tableIds || []).length} tables</div>
                     </div>
-                    {isAssigned && assigneeName && (
-                      <div className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 w-fit">Assigned to {assigneeName}</div>
+                    {isAssigned && (
+                      <div className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 w-fit">Assigned to {assigneeName || assigneeId}</div>
                     )}
                   </div>
                 );

@@ -5,8 +5,25 @@ import { getPreset } from '@/lib/host/presets';
 
 export async function GET() {
   await connectDB();
-  const live = await HostSession.findOne({ status: 'live' }).sort({ startedAt: -1 }).lean();
-  return NextResponse.json({ success: true, data: live || null });
+  const live = await HostSession.findOne({ status: 'live' }).sort({ startedAt: -1 });
+  if (!live) return NextResponse.json({ success: true, data: null });
+  // Sanitize rotation to exclude ineligible servers (non-Servers or inactive)
+  try {
+    const eligible = new Set(
+      (live.servers || [])
+        .filter((s: any) => String(s.role) === 'Server' && s.isActive)
+        .map((s: any) => String(s.id))
+    );
+    const currentOrder: string[] = Array.isArray(live.rotation?.order) ? (live.rotation.order as any).map(String) : [];
+    const filteredOrder = currentOrder.filter(id => eligible.has(String(id)));
+    let pointer = Math.max(0, Math.min(Number(live.rotation?.pointer || 0), Math.max(0, filteredOrder.length - 1)));
+    // If order changed or pointer out of range, persist the sanitized rotation
+    if (filteredOrder.length !== currentOrder.length || pointer !== (live.rotation?.pointer || 0)) {
+      live.rotation = { isLive: Boolean(live.rotation?.isLive), order: filteredOrder, pointer } as any;
+      await live.save();
+    }
+  } catch {}
+  return NextResponse.json({ success: true, data: live.toObject() });
 }
 
 export async function POST(req: NextRequest) {
@@ -17,11 +34,13 @@ export async function POST(req: NextRequest) {
   if (!preset) return NextResponse.json({ success: false, error: 'Preset not found' }, { status: 400 });
   // End any live session
   await HostSession.updateMany({ status: 'live' }, { $set: { status: 'ended', endedAt: new Date() } });
-  const rotation = { isLive: false, order: (servers || []).map((s: any) => String(s.id)), pointer: 0 };
+  // Only include eligible servers in rotation (active Servers role)
+  const eligible = Array.isArray(servers) ? servers.filter((s: any) => String(s.role) === 'Server' && s.isActive) : [];
+  const rotation = { isLive: false, order: eligible.map((s: any) => String(s.id)), pointer: 0 };
   const doc = await HostSession.create({
     presetSlug: preset.slug,
     presetName: preset.name,
-    servers: servers || [],
+    servers: eligible,
     assignments: [],
     tableOccupied: {},
     seatings: [],
