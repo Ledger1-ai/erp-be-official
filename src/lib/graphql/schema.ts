@@ -133,6 +133,7 @@ export const typeDefs = gql`
     syscoCategory: String
     leadTimeDays: Int
     minimumOrderQty: Int
+    minimumOrderUnit: String
     pricePerCase: Float
     lastOrderDate: Date
     preferredVendor: String
@@ -333,7 +334,7 @@ export const typeDefs = gql`
     indexedMenus(restaurantGuid: String!): IndexedMenus
     menuMappings(restaurantGuid: String!, toastItemGuid: String): [MenuMapping!]!
     menuItemCost(restaurantGuid: String!, toastItemGuid: String!): Float!
-    menuItemCapacity(restaurantGuid: String!, toastItemGuid: String!, quantity: Float): MenuItemCapacityResult!
+    menuItemCapacity(restaurantGuid: String!, toastItemGuid: String!, quantity: Float, modifierOptionGuid: String): MenuItemCapacityResult!
     menuItemStock(restaurantGuid: String!, guids: [String!], multiLocationIds: [String!]): [MenuItemStock!]!
     orderTrackingStatus(restaurantGuid: String!): OrderTracking
     menuVisibility(restaurantGuid: String!): MenuVisibility
@@ -407,6 +408,7 @@ export const typeDefs = gql`
     runOrderTracking(restaurantGuid: String!, businessDate: String): Boolean!
     updateMenuItemStock(restaurantGuid: String!, updates: [MenuItemStockUpdateInput!]!): [MenuItemStock!]!
     setMenuVisibility(restaurantGuid: String!, hiddenMenus: [String!], hiddenGroups: [String!]): MenuVisibility!
+    generateRecipeDraft(restaurantGuid: String!, toastItemGuid: String!, priceyness: Int, cuisinePreset: String, atmospherePreset: String): RecipeDraft!
   }
 
   type MenuItemCapacityResult {
@@ -747,6 +749,7 @@ export const typeDefs = gql`
     toastItemSku: String
     components: [MenuMappingComponent!]!
     recipeSteps: [RecipeStep!]
+    recipeMeta: RecipeMeta
     computedCostCache: Float
     lastComputedAt: Date
   }
@@ -776,6 +779,57 @@ export const typeDefs = gql`
     toastItemSku: String
     components: [MenuMappingComponentInput!]!
     recipeSteps: [RecipeStepInput!]
+    recipeMeta: RecipeMetaInput
+  }
+  type RecipeMeta {
+    servings: Int
+    difficulty: String
+    prepTime: Int
+    cookTime: Int
+    totalTime: Int
+    equipment: [String!]
+    miseEnPlace: [String!]
+    plating: String
+    allergens: [String!]
+    tasteProfile: [String!]
+    priceyness: Int
+    cuisinePreset: String
+    atmospherePreset: String
+    notes: String
+  }
+
+  input RecipeMetaInput {
+    servings: Int
+    difficulty: String
+    prepTime: Int
+    cookTime: Int
+    totalTime: Int
+    equipment: [String!]
+    miseEnPlace: [String!]
+    plating: String
+    allergens: [String!]
+    tasteProfile: [String!]
+    priceyness: Int
+    cuisinePreset: String
+    atmospherePreset: String
+    notes: String
+  }
+
+  # Tool-like mutation to generate a structured recipe draft
+  extend type Mutation {
+    generateRecipeDraft(
+      restaurantGuid: String!
+      toastItemGuid: String!
+      priceyness: Int
+      cuisinePreset: String
+      atmospherePreset: String
+    ): RecipeDraft!
+  }
+
+  type RecipeDraft {
+    recipeSteps: [RecipeStep!]
+    recipeMeta: RecipeMeta
+    notes: String
   }
 
   input RecipeStepInput {

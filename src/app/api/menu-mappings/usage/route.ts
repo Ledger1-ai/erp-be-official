@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/db/connection';
 import { MenuMapping } from '@/lib/models/MenuMapping';
 import { InventoryItem } from '@/lib/models/InventoryItem';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { convertQuantity } from '@/lib/units';
 
 type SoldMap = Record<string, number>; // toastItemGuid -> qty sold
 
@@ -57,13 +58,18 @@ async function explodeMapping(
   toastItemGuid: string,
   baseQty: number,
   acc: Map<string, Map<string, number>>, // inventoryItemId -> unit -> qty
-  visited: Set<string>
+  visited: Set<string>,
+  activeModifierOptionGuid?: string | null
 ) {
   if (visited.has(toastItemGuid)) return;
   visited.add(toastItemGuid);
-  const mapping = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean();
-  if (!mapping) return;
-  for (const c of (mapping.components || [])) {
+  const mappingDoc = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean() as any;
+  if (!mappingDoc) return;
+  for (const c of (mappingDoc.components || [])) {
+    if (c?.modifierOptionGuid) {
+      if (!activeModifierOptionGuid) continue;
+      if (String(c.modifierOptionGuid) !== String(activeModifierOptionGuid)) continue;
+    }
     if (c.kind === 'inventory' && c.inventoryItem) {
       const unit = String(c.unit || 'units');
       const q = Number(c.quantity || 0) * baseQty;
@@ -71,7 +77,7 @@ async function explodeMapping(
       const byUnit = acc.get(String(c.inventoryItem))!;
       byUnit.set(unit, (byUnit.get(unit) || 0) + q);
     } else if (c.kind === 'menu' && c.nestedToastItemGuid) {
-      await explodeMapping(restaurantGuid, c.nestedToastItemGuid, baseQty * Number(c.quantity || 0), acc, visited);
+      await explodeMapping(restaurantGuid, c.nestedToastItemGuid, baseQty * Number(c.quantity || 0), acc, visited, activeModifierOptionGuid);
     }
   }
 }
@@ -88,6 +94,7 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate') || undefined;
     const endDate = searchParams.get('endDate') || undefined;
     const pageSize = searchParams.get('pageSize') || '100';
+    const activeModifierOptionGuid = searchParams.get('modifierOptionGuid');
 
     const client = new ToastAPIClient();
     const orders = await fetchOrdersBulk(client, restaurantGuid, {
@@ -99,19 +106,22 @@ export async function GET(request: NextRequest) {
 
     const sold = await buildSoldMap(orders);
 
-    // Aggregate inventory usage
+    // Aggregate inventory usage (keep raw units for now)
     const acc = new Map<string, Map<string, number>>();
     for (const [toastItemGuid, qty] of Object.entries(sold)) {
-      await explodeMapping(restaurantGuid, toastItemGuid, qty, acc, new Set());
+      await explodeMapping(restaurantGuid, toastItemGuid, qty, acc, new Set(), activeModifierOptionGuid);
     }
 
-    // Build response rows with item details
+    // Build response rows normalized to each item's main unit
     const rows: UsageRow[] = [];
     for (const [invId, byUnit] of acc.entries()) {
       const item: any = await InventoryItem.findById(invId).lean();
+      const itemUnit = String(item?.unit || 'each');
+      let total = 0;
       for (const [unit, quantity] of byUnit.entries()) {
-        rows.push({ inventoryItem: String(invId), unit, quantity });
+        total += convertQuantity(Number(quantity || 0), String(unit), itemUnit);
       }
+      rows.push({ inventoryItem: String(invId), unit: itemUnit, quantity: total });
     }
 
     return NextResponse.json({ success: true, data: { sold, usage: rows } });

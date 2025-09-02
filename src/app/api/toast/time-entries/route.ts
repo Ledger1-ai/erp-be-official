@@ -1,19 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { getDefaultTimeZone, formatYMDInTimeZone, getDayRangeForYmdInTz } from '@/lib/timezone';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const restaurantGuid = searchParams.get('restaurantGuid');
-  const startDate = searchParams.get('startDate');
-  const endDate = searchParams.get('endDate');
-
-  if (!restaurantGuid || !startDate || !endDate) {
-    return NextResponse.json({
-      error: 'restaurantGuid, startDate, and endDate are required',
-    }, { status: 400 });
-  }
+  const restaurantGuid = searchParams.get('restaurantGuid') || process.env.TOAST_RESTAURANT_ID || '';
+  let startDate = searchParams.get('startDate');
+  let endDate = searchParams.get('endDate');
 
   try {
+    // Default to current business day in restaurant timezone if dates are missing
+    if (!startDate || !endDate) {
+      const client = new ToastAPIClient();
+      // Resolve timezone via env override, else fetch restaurant info
+      let tz = process.env.TOAST_TIMEZONE || '';
+      if (!tz) {
+        try { tz = (await client.getRestaurant(restaurantGuid as string) as any)?.timeZone || ''; } catch { /* ignore */ }
+      }
+      if (!tz) tz = getDefaultTimeZone();
+      const ymd = formatYMDInTimeZone(tz, new Date());
+      const { start, end } = getDayRangeForYmdInTz(tz, ymd);
+      if (!startDate) startDate = start.toISOString();
+      if (!endDate) endDate = new Date().toISOString();
+    }
+
     const toastClient = new ToastAPIClient();
     const timeEntries = await toastClient.getTimeEntries(restaurantGuid, startDate, endDate);
     return NextResponse.json(timeEntries);

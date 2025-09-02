@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
 import { MenuMapping } from '@/lib/models/MenuMapping';
 import { InventoryItem } from '@/lib/models/InventoryItem';
+import { convertQuantity } from '@/lib/units';
 
 async function computeCost(restaurantGuid: string, toastItemGuid: string, visited = new Set<string>()): Promise<number> {
   if (visited.has(toastItemGuid)) return 0; // prevent cycles
@@ -14,9 +15,13 @@ async function computeCost(restaurantGuid: string, toastItemGuid: string, visite
     if (c.kind === 'inventory' && c.inventoryItem) {
       const inv: any = await InventoryItem.findById(c.inventoryItem).lean();
       const unitCost = Number(inv?.costPerUnit || 0);
-      total += unitCost * Number(c.quantity || 0);
+      const invUnit = String(inv?.unit || 'each');
+      const qtyInInvUnit = convertQuantity(Number(c.quantity || 0), String(c.unit || invUnit), invUnit);
+      total += unitCost * qtyInInvUnit;
     } else if (c.kind === 'menu' && c.nestedToastItemGuid) {
-      total += await computeCost(restaurantGuid, c.nestedToastItemGuid, visited);
+      // cost of nested mapping multiplied by the menu quantity
+      const nestedCost = await computeCost(restaurantGuid, c.nestedToastItemGuid, visited);
+      total += nestedCost * Number(c.quantity || 1);
     }
   }
   return total;

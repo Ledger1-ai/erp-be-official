@@ -4,6 +4,7 @@ import { useState } from "react";
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -224,7 +225,10 @@ export default function SchedulingPage() {
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni&apos;s Scheduling Insights</h3>
+                <div className="flex items-center gap-2 mb-3">
+                  <h3 className="font-semibold text-foreground">Varuni&apos;s Scheduling Insights</h3>
+                  <Badge variant="warning">Coming Soon</Badge>
+                </div>
                 <div className="space-y-3">
                   {aiRecommendations.map((rec, index) => (
                     <div key={index} className="bg-card rounded-lg p-3 border border-border">

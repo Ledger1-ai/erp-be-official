@@ -26,6 +26,7 @@ import RosterConfiguration from '../models/RosterConfiguration';
 import AIInsight from '../models/AIInsight';
 import { VaruniAgent, createGraphQLTool } from '../services/varuni-agent';
 import { GraphQLScalarType, Kind } from 'graphql';
+import { convertQuantity } from '@/lib/units';
 
 async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, visited = new Set<string>()): Promise<number> {
   if (visited.has(toastItemGuid)) return 0;
@@ -37,7 +38,9 @@ async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, 
     if (c.kind === 'inventory' && c.inventoryItem) {
       const inv: any = await InventoryItem.findById(c.inventoryItem).lean();
       const unitCost = Number(inv?.costPerUnit || 0);
-      total += unitCost * Number(c.quantity || 0);
+      const invUnit = String(inv?.unit || 'each');
+      const qtyInInvUnit = convertQuantity(Number(c.quantity || 0), String(c.unit || invUnit), invUnit);
+      total += unitCost * qtyInInvUnit;
     } else if (c.kind === 'menu' && c.nestedToastItemGuid) {
       // If overrides exist, compute cost from overrides instead of underlying mapping
       if (Array.isArray(c.overrides) && c.overrides.length > 0) {
@@ -45,7 +48,9 @@ async function computeMappedCost(restaurantGuid: string, toastItemGuid: string, 
           if (oc.kind === 'inventory' && oc.inventoryItem) {
             const inv: any = await InventoryItem.findById(oc.inventoryItem).lean();
             const unitCost = Number(inv?.costPerUnit || 0);
-            total += unitCost * Number(oc.quantity || 0) * Number(c.quantity || 1);
+            const invUnit = String(inv?.unit || 'each');
+            const qtyInInvUnit = convertQuantity(Number(oc.quantity || 0), String(oc.unit || invUnit), invUnit);
+            total += unitCost * qtyInInvUnit * Number(c.quantity || 1);
           } else if (oc.kind === 'menu' && oc.nestedToastItemGuid) {
             const nestedCost = await computeMappedCost(restaurantGuid, oc.nestedToastItemGuid, visited);
             total += nestedCost * Number(oc.quantity || 1) * Number(c.quantity || 1);
@@ -64,15 +69,20 @@ async function explodeToInventory(
   toastItemGuid: string,
   baseQty: number,
   acc: Map<string, Map<string, number>>,
-  visited: Set<string>
+  visited: Set<string>,
+  activeModifierOptionGuid?: string | null
 ) {
   if (visited.has(toastItemGuid)) return;
   visited.add(toastItemGuid);
   const mapping: any = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean();
   if (!mapping) return;
   for (const c of (mapping.components || [])) {
+    if ((c as any)?.modifierOptionGuid) {
+      if (!activeModifierOptionGuid) continue;
+      if (String((c as any).modifierOptionGuid) !== String(activeModifierOptionGuid)) continue;
+    }
     if (c.kind === 'inventory' && c.inventoryItem) {
-      const unit = String(c.unit || 'units');
+      const unit = String(c.unit || 'each');
       const q = Number(c.quantity || 0) * baseQty;
       if (!acc.has(String(c.inventoryItem))) acc.set(String(c.inventoryItem), new Map());
       const byUnit = acc.get(String(c.inventoryItem))!;
@@ -81,18 +91,22 @@ async function explodeToInventory(
       if (Array.isArray(c.overrides) && c.overrides.length > 0) {
         // explode overrides directly
         for (const oc of c.overrides) {
+          if ((oc as any)?.modifierOptionGuid) {
+            if (!activeModifierOptionGuid) continue;
+            if (String((oc as any).modifierOptionGuid) !== String(activeModifierOptionGuid)) continue;
+          }
           if (oc.kind === 'inventory' && oc.inventoryItem) {
-            const unit = String(oc.unit || 'units');
+            const unit = String(oc.unit || 'each');
             const q = Number(oc.quantity || 0) * baseQty * Number(c.quantity || 1);
             if (!acc.has(String(oc.inventoryItem))) acc.set(String(oc.inventoryItem), new Map());
             const byUnit = acc.get(String(oc.inventoryItem))!;
             byUnit.set(unit, (byUnit.get(unit) || 0) + q);
           } else if (oc.kind === 'menu' && oc.nestedToastItemGuid) {
-            await explodeToInventory(restaurantGuid, oc.nestedToastItemGuid, baseQty * Number(c.quantity || 1) * Number(oc.quantity || 1), acc, visited);
+            await explodeToInventory(restaurantGuid, oc.nestedToastItemGuid, baseQty * Number(c.quantity || 1) * Number(oc.quantity || 1), acc, visited, activeModifierOptionGuid);
           }
         }
       } else {
-        await explodeToInventory(restaurantGuid, c.nestedToastItemGuid, baseQty * Number(c.quantity || 0), acc, visited);
+        await explodeToInventory(restaurantGuid, c.nestedToastItemGuid, baseQty * Number(c.quantity || 0), acc, visited, activeModifierOptionGuid);
       }
     }
   }
@@ -1368,22 +1382,25 @@ export const resolvers = {
     menuItemCost: async (_: unknown, { restaurantGuid, toastItemGuid }: { restaurantGuid: string; toastItemGuid: string }) => {
       return computeMappedCost(restaurantGuid, toastItemGuid);
     },
-    menuItemCapacity: async (_: unknown, { restaurantGuid, toastItemGuid, quantity = 1 }: { restaurantGuid: string; toastItemGuid: string; quantity?: number }) => {
+    menuItemCapacity: async (_: unknown, { restaurantGuid, toastItemGuid, quantity = 1, modifierOptionGuid }: { restaurantGuid: string; toastItemGuid: string; quantity?: number; modifierOptionGuid?: string }) => {
       const acc = new Map<string, Map<string, number>>();
-      await explodeToInventory(restaurantGuid, toastItemGuid, Number(quantity || 1), acc, new Set());
-      // Compute capacity by inventory availability
+      await explodeToInventory(restaurantGuid, toastItemGuid, Number(quantity || 1), acc, new Set(), modifierOptionGuid || undefined);
+      // Compute capacity by inventory availability with unit normalization to item unit
       let capacity = Infinity as number;
       let allHaveStock = true;
       const requirements: Array<{ inventoryItem: string; unit: string; quantityPerOrder: number; available: number }> = [];
       for (const [invId, byUnit] of acc.entries()) {
         const item: any = await InventoryItem.findById(invId).lean();
         const stock = Number(item?.currentStock || 0);
+        const itemUnit = String(item?.unit || 'each');
+        let requiredInItemUnit = 0;
         for (const [unit, qPer] of byUnit.entries()) {
-          const possible = qPer > 0 ? Math.floor(stock / qPer) : 0;
-          if (stock <= 0) allHaveStock = false;
-          if (qPer > 0) capacity = Math.min(capacity, possible);
-          requirements.push({ inventoryItem: String(invId), unit, quantityPerOrder: qPer, available: stock });
+          requiredInItemUnit += convertQuantity(Number(qPer || 0), String(unit), itemUnit);
         }
+        const possible = requiredInItemUnit > 0 ? Math.floor(stock / requiredInItemUnit) : 0;
+        if (stock <= 0) allHaveStock = false;
+        if (requiredInItemUnit > 0) capacity = Math.min(capacity, possible);
+        requirements.push({ inventoryItem: String(invId), unit: itemUnit, quantityPerOrder: requiredInItemUnit, available: stock });
       }
       if (capacity === Infinity) capacity = 0;
       if (!allHaveStock) capacity = 0;
@@ -2231,14 +2248,173 @@ export const resolvers = {
       return { restaurantGuid: doc.restaurantGuid, hiddenMenus: doc.hiddenMenus || [], hiddenGroups: doc.hiddenGroups || [], updatedAt: doc.updatedAt } as any;
     }),
     upsertMenuMapping: withPermission('inventory', async (_: unknown, { input }: any) => {
-      const { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps } = input || {};
+      const { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps, recipeMeta } = input || {};
       if (!restaurantGuid || !toastItemGuid) throw new Error('restaurantGuid and toastItemGuid required');
       const doc = await MenuMapping.findOneAndUpdate(
         { restaurantGuid, toastItemGuid },
-        { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps },
+        { restaurantGuid, toastItemGuid, toastItemName, toastItemSku, components, recipeSteps, recipeMeta },
         { new: true, upsert: true }
       );
       return { id: String(doc._id), ...doc.toObject() };
+    }),
+    generateRecipeDraft: withPermission('inventory', async (_: unknown, { restaurantGuid, toastItemGuid, priceyness, cuisinePreset, atmospherePreset }: { restaurantGuid: string; toastItemGuid: string; priceyness?: number; cuisinePreset?: string; atmospherePreset?: string }) => {
+      const mapping: any = await MenuMapping.findOne({ restaurantGuid, toastItemGuid }).lean();
+      if (!mapping) throw new Error('No mapping found');
+      const itemName = mapping.toastItemName || toastItemGuid;
+      // Build structured context: ingredients and nested components
+      const components = (mapping.components || []).map((c: any) => ({
+        kind: c.kind,
+        inventoryItem: c.inventoryItem ? String(c.inventoryItem) : undefined,
+        nestedToastItemGuid: c.nestedToastItemGuid || undefined,
+        quantity: Number(c.quantity || 0),
+        unit: String(c.unit || ''),
+        overrides: Array.isArray(c.overrides) ? c.overrides : [],
+      }));
+
+      const ontology = `Cooking Ontology:
+Techniques: sear, sauté, sweat, blanch, parboil, braise, roast, bake, confit, poach, steam, grill, broil, smoke, sous-vide.
+Preparations: mince, dice, brunoise, julienne, chiffonade, crush, zest, peel, core, trim, portion, temper, bloom, deglaze, reduce, emulsify.
+Stations: prep, hot line, garde manger, pastry, expo.
+Doneness: rare, medium-rare, medium, medium-well, well-done; al dente.
+Attributes: umami, acidic, sweet, bitter, salty, spicy, smokey, herbaceous, bright, rich.
+Sanitation: HACCP steps where relevant (cooling, holding temps), allergen call-outs.
+Scaling: maintain ratios and salt at ~1.0–1.5% of total weight as guideline.
+`;
+
+      const presetsText = `Pricing: ${priceyness ?? 2}/4. Cuisine: ${cuisinePreset || 'chef_standard'}. Atmosphere: ${atmospherePreset || 'casual_modern'}.`;
+
+      const agent = new VaruniAgent();
+      const system = `${ontology}\nYou generate restaurant-ready structured recipes with clear steps, timings, equipment, and mise.en.place.`;
+      const user = `Create a structured recipe for "${itemName}" using these components (inventory or nested menu):\n${JSON.stringify(components)}\n${presetsText}. Output strictly JSON with fields: recipeMeta{servings, difficulty, prepTime, cookTime, totalTime, equipment[], miseEnPlace[], plating, allergens[], tasteProfile[], priceyness, cuisinePreset, atmospherePreset, notes}, and recipeSteps[{step, instruction, time, notes}].`;
+      const result = await agent.chat(`${system}\n\n${user}`, {
+        graphqlEndpoint: process.env.NEXT_PUBLIC_GRAPHQL_URL || '/api/graphql',
+        callGraphQL: async () => ({} as any),
+      } as any);
+      let parsed: any = {};
+      try { parsed = JSON.parse(result.text || '{}'); } catch {}
+
+      // Local helpers to sanitize AI output to strict GraphQL schema types
+      function coerceString(value: any): string {
+        if (value == null) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        try { return JSON.stringify(value); } catch { return String(value); }
+      }
+
+      function ensureStringArray(value: any): string[] {
+        if (value == null) return [];
+        if (Array.isArray(value)) {
+          return value
+            .map((v) => {
+              if (typeof v === 'string') return v;
+              // Prefer common label fields if present
+              const label = (v && (v.name || v.title || v.label || v.text || v.use)) ? (v.name || v.title || v.label || v.text || v.use) : undefined;
+              if (label) return String(label);
+              return coerceString(v);
+            })
+            .filter((s) => !!s);
+        }
+        return [coerceString(value)].filter((s) => !!s);
+      }
+
+      function parseDurationToMinutes(input: any): number | undefined {
+        if (input == null) return undefined;
+        if (typeof input === 'number' && Number.isFinite(input)) return Math.round(input);
+        if (typeof input !== 'string') return undefined;
+        const s = input.trim().toLowerCase();
+        if (!s) return undefined;
+        if (s === 'ongoing' || s === 'as needed' || s === '-') return undefined;
+        // Simple number string
+        const numericOnly = parseFloat(s);
+        if (!Number.isNaN(numericOnly) && !/[a-z]/.test(s.replace(/[\d.\s]/g, ''))) {
+          return Math.round(numericOnly);
+        }
+        let minutes = 0;
+        const hourMatch = s.match(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)\b/);
+        if (hourMatch) minutes += parseFloat(hourMatch[1]) * 60;
+        const minMatch = s.match(/(\d+(?:\.\d+)?)\s*(m|min|mins|minute|minutes)\b/);
+        if (minMatch) minutes += parseFloat(minMatch[1]);
+        const secMatch = s.match(/(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds)\b/);
+        if (secMatch) minutes += parseFloat(secMatch[1]) / 60;
+        if (minutes > 0) return Math.round(minutes);
+        return undefined;
+      }
+
+      function coerceDifficulty(input: any): string | undefined {
+        if (input == null) return undefined;
+        const s = String(input).trim().toLowerCase();
+        if (!s) return undefined;
+        if (s.startsWith('easy')) return 'Easy';
+        if (s.startsWith('med')) return 'Medium';
+        if (s.startsWith('hard')) return 'Hard';
+        return 'Medium';
+      }
+
+      function clampPriceyness(input: any): number | undefined {
+        if (input == null) return undefined;
+        if (typeof input === 'number' && Number.isFinite(input)) return Math.min(4, Math.max(1, Math.round(input)));
+        const s = String(input).trim().toLowerCase();
+        if (!s) return undefined;
+        if (/^\d/.test(s)) {
+          const n = parseInt(s, 10);
+          if (Number.isFinite(n)) return Math.min(4, Math.max(1, n));
+        }
+        if (s.includes('very')) return 4;
+        if (s.includes('low')) return 1;
+        if (s.includes('medium')) return 2;
+        if (s.includes('high')) return 3;
+        return undefined;
+      }
+
+      function sanitizeMeta(meta: any): any {
+        const out: any = {};
+        if (meta == null || typeof meta !== 'object') return out;
+        if (meta.servings != null && Number.isFinite(Number(meta.servings))) out.servings = Number(meta.servings);
+        const diff = coerceDifficulty(meta.difficulty);
+        if (diff) out.difficulty = diff;
+        const prep = parseDurationToMinutes(meta.prepTime);
+        if (prep != null) out.prepTime = prep;
+        const cook = parseDurationToMinutes(meta.cookTime);
+        if (cook != null) out.cookTime = cook;
+        const total = parseDurationToMinutes(meta.totalTime);
+        if (total != null) out.totalTime = total;
+        out.equipment = ensureStringArray(meta.equipment);
+        out.miseEnPlace = ensureStringArray(meta.miseEnPlace);
+        if (meta.plating != null) out.plating = coerceString(meta.plating);
+        out.allergens = ensureStringArray(meta.allergens);
+        out.tasteProfile = ensureStringArray(meta.tasteProfile);
+        const price = clampPriceyness(meta.priceyness);
+        if (price != null) out.priceyness = price;
+        if (meta.cuisinePreset != null) out.cuisinePreset = coerceString(meta.cuisinePreset);
+        if (meta.atmospherePreset != null) out.atmospherePreset = coerceString(meta.atmospherePreset);
+        if (meta.notes != null) out.notes = coerceString(meta.notes);
+        return out;
+      }
+
+      function sanitizeSteps(steps: any[]): any[] {
+        if (!Array.isArray(steps)) return [];
+        return steps
+          .map((s: any, idx: number) => {
+            const instruction = coerceString(s?.instruction);
+            const time = parseDurationToMinutes(s?.time);
+            const clean: any = {
+              step: Number.isInteger(s?.step) ? s.step : (idx + 1),
+              instruction,
+            };
+            if (time != null) clean.time = Math.max(0, Math.round(time));
+            if (s?.notes != null) clean.notes = coerceString(s.notes);
+            return clean;
+          })
+          .filter((s: any) => !!s.instruction && Number.isInteger(s.step) && s.step > 0);
+      }
+
+      const recipeMeta = sanitizeMeta(parsed.recipeMeta || {});
+      const recipeSteps = sanitizeSteps(Array.isArray(parsed.recipeSteps) ? parsed.recipeSteps : []);
+      if (recipeMeta.totalTime == null && recipeSteps.length > 0) {
+        const summed = recipeSteps.reduce((acc: number, s: any) => acc + (Number.isFinite(s.time) ? s.time : 0), 0);
+        if (summed > 0) recipeMeta.totalTime = summed;
+      }
+      return { recipeMeta, recipeSteps, notes: typeof parsed.notes === 'string' ? parsed.notes : '' };
     }),
     setOrderTracking: withPermission('inventory', async (_: unknown, { restaurantGuid, enabled }: { restaurantGuid: string; enabled: boolean }) => {
       const doc = await OrderTrackingConfig.findOneAndUpdate(
@@ -2291,33 +2467,36 @@ export const resolvers = {
       for (const [invId, byUnit] of acc.entries()) {
         const item: any = await InventoryItem.findById(invId);
         if (!item) continue;
+        const itemUnit = String(item.unit || 'each');
+        let totalUsage = 0;
         for (const [unit, quantity] of byUnit.entries()) {
-          const before = Number(item.currentStock || 0);
-          const after = Math.max(0, before - Number(quantity || 0));
-          item.currentStock = after;
+          totalUsage += convertQuantity(Number(quantity || 0), String(unit), itemUnit);
+        }
+        const before = Number(item.currentStock || 0);
+        const after = Math.max(0, before - totalUsage);
+        item.currentStock = after;
           if (after <= 0) item.status = 'out_of_stock';
           else if (after <= item.minThreshold) item.status = 'critical';
           else if (after <= item.minThreshold * 1.5) item.status = 'low';
           else item.status = 'normal';
           await item.save();
-          await InventoryTransaction.create({
-            inventoryItem: item._id,
-            itemName: item.name,
-            transactionType: 'consumption',
-            quantity: Math.abs(Number(quantity || 0)),
-            unit,
-            unitCost: Number(item.costPerUnit || 0),
-            totalCost: Math.abs(Number(quantity || 0)) * Number(item.costPerUnit || 0),
-            balanceBefore: before,
-            balanceAfter: after,
-            location: item.location,
-            referenceType: 'Sale',
-            referenceNumber: `ORD-${now.getTime()}`,
-            createdBy: creator,
-            createdAt: now,
-            updatedAt: now,
-          });
-        }
+        await InventoryTransaction.create({
+          inventoryItem: item._id,
+          itemName: item.name,
+          transactionType: 'consumption',
+          quantity: Math.abs(totalUsage),
+          unit: itemUnit,
+          unitCost: Number(item.costPerUnit || 0),
+          totalCost: Math.abs(totalUsage) * Number(item.costPerUnit || 0),
+          balanceBefore: before,
+          balanceAfter: after,
+          location: item.location,
+          referenceType: 'Sale',
+          referenceNumber: `ORD-${now.getTime()}`,
+          createdBy: creator,
+          createdAt: now,
+          updatedAt: now,
+        });
       }
       await OrderTrackingConfig.findOneAndUpdate(
         { restaurantGuid },
@@ -2401,11 +2580,11 @@ export const resolvers = {
   },
 
   WasteLog: {
-    id: (wasteLog: { _id: { toString: () => any; }; }) => wasteLog._id.toString(),
-    recordedBy: async (wasteLog: { recordedBy: any; }) => {
-      if (!wasteLog.recordedBy) return null;
-      return await User.findById(wasteLog.recordedBy);
-    }
+    id: (w: any) => String(w._id),
+    recordedBy: async (w: any) => {
+      if (!w.recordedBy) return null;
+      return await User.findById(w.recordedBy);
+    },
   },
 
   Subscription: {
@@ -2433,8 +2612,7 @@ export const resolvers = {
         return null;
       })
     }
-  }
-  ,
+  },
   IndexedMenus: {
     modifierGroupReferences: (parent: any) => {
       const mg = parent?.modifierGroupReferences;

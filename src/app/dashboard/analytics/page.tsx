@@ -6,6 +6,7 @@ import { usePermissions } from "@/lib/hooks/use-permissions";
 import { PermissionDenied, PermissionTab } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
 import {
@@ -211,7 +212,10 @@ export default function AnalyticsPage() {
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Strategic Insights</h3>
+                <div className="flex items-center gap-2 mb-3">
+                  <h3 className="font-semibold text-foreground">Varuni's Strategic Insights</h3>
+                  <Badge variant="warning">Coming Soon</Badge>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {aiInsights.map((insight, index) => (
                     <div key={index} className="bg-card rounded-lg p-4 border border-border">

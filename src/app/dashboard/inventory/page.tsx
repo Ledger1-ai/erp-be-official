@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { AbacusSlider } from "@/components/ui/abacus-slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -16,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
 import { QRCodeSVG } from "qrcode.react";
+import QRCode from "qrcode";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import Webcam from "react-webcam";
 import {
@@ -69,6 +72,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  Type,
   HelpCircle,
 } from "lucide-react";
 import React from "react";
@@ -261,6 +265,8 @@ const defaultLabelTemplate = {
     text: "#000000",
     border: "#cccccc",
   },
+  // Which SKU field to show on label: 'sku' | 'vendorSKU' | 'syscoSKU'
+  skuSource: 'vendorSKU' as 'sku' | 'vendorSKU' | 'syscoSKU',
   elements: {
     logo: {
       enabled: true,
@@ -268,6 +274,7 @@ const defaultLabelTemplate = {
       y: 10,
       width: 40,
       height: 40,
+      src: "/tgl.png",
       dragging: false,
     },
     qrCode: {
@@ -314,6 +321,12 @@ export default function InventoryPage() {
   const [sortKey, setSortKey] = useState<string>("name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [itemsViewMode, setItemsViewMode] = useState<"list" | "abacus">("list");
+  const [abacusValues, setAbacusValues] = useState<Record<string, { stock: number; par: number }>>({});
+  const [abacusMax, setAbacusMax] = useState<Record<string, number>>({});
+  const [abacusLayout, setAbacusLayout] = useState<"grid" | "classic">("grid");
+  const [dirtyCards, setDirtyCards] = useState<Record<string, "dirty" | "saved">>({});
+  const [abacusOriginal, setAbacusOriginal] = useState<Record<string, { stock: number; par: number; max: number }>>({});
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
   const [isQuickCountOpen, setIsQuickCountOpen] = useState(false);
   const [quickCountIndex, setQuickCountIndex] = useState(0);
@@ -328,6 +341,26 @@ export default function InventoryPage() {
   const [wasteReason, setWasteReason] = useState<string>("");
   const [wasteNotes, setWasteNotes] = useState<string>("");
   const [isLabelDesignerOpen, setIsLabelDesignerOpen] = useState(false);
+  const [labelTemplates, setLabelTemplates] = useState<any[]>([]);
+  const [activeLabelTemplate, setActiveLabelTemplate] = useState<any>(defaultLabelTemplate);
+  const [showPackaging, setShowPackaging] = useState<boolean>(false);
+  const [configModal, setConfigModal] = useState<null | 'logo' | 'qrCode' | 'itemName' | 'metadata' | 'canvas' | 'templates'>(null);
+  const medallionFileRef = useRef<HTMLInputElement | null>(null);
+  const dragRafRef = useRef<number | null>(null);
+  const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/inventory/label-templates', { cache: 'no-store' });
+        const json = await res.json();
+        if (json?.success) {
+          setLabelTemplates(json.templates || []);
+          if (json.active) setActiveLabelTemplate(json.active);
+        }
+      } catch {}
+    })();
+  }, []);
   const [isQuantityModifierOpen, setIsQuantityModifierOpen] = useState(false);
   const [isCameraCountingOpen, setIsCameraCountingOpen] = useState(false);
   const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
@@ -656,6 +689,8 @@ export default function InventoryPage() {
       setReceiveDialogOpen(false);
       setEditingOrder(null);
       fetchOrders();
+      // Ensure fresh inventory counts are reflected in the Items table
+      try { await refetchInventory(); } catch {}
 
       const missing = data?.receivePurchaseOrder?.missing || [];
       const totalCredit = data?.receivePurchaseOrder?.totalCredit || 0;
@@ -769,8 +804,6 @@ export default function InventoryPage() {
     win.document.close();
     win.focus();
   };
-
-
   const openAddItemDialog = () => {
     setNewItemForm({
       name: "",
@@ -1255,7 +1288,6 @@ export default function InventoryPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-
         {/* Representative replace dialog */}
         <Dialog open={repDialogOpen} onOpenChange={setRepDialogOpen}>
           <DialogContent className="max-w-lg backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 shadow-2xl">
@@ -1372,6 +1404,46 @@ export default function InventoryPage() {
   const [showPurchaseHistoryModal, setShowPurchaseHistoryModal] = useState(false);
   const [duplicateResolutions, setDuplicateResolutions] = useState<Record<string, boolean>>({});
   const [enrichmentResolutions, setEnrichmentResolutions] = useState<Record<string, boolean>>({});
+
+  // Import metrics for side metadata panel (updates as selections/actions change)
+  const importMetrics = React.useMemo(() => {
+    if (!csvPreviewData) return { selectedNew: 0, selectedNewUnits: 0, selectedNewCost: 0, dupReplace: 0, dupSum: 0, dupDelta: 0, dupDeltaCost: 0, totalValue: 0, unitSet: new Set<string>() };
+    const items = csvPreviewData.items || [];
+    let selectedNew = 0;
+    let selectedNewUnits = 0;
+    let selectedNewCost = 0;
+    let dupReplace = 0;
+    let dupSum = 0;
+    let dupDelta = 0;
+    let dupDeltaCost = 0;
+    const unitSet = new Set<string>();
+    items.forEach((it: any, idx: number) => {
+      if (!it) return;
+      if (it.unit) unitSet.add(String(it.unit));
+      const csvUnits = Number(it.computedUnits || 0);
+      const existing = Number(it.existingItem?.currentStock ?? 0);
+      if (!it.isDuplicate && selectedImportItems.includes(idx)) {
+        selectedNew += 1;
+        selectedNewUnits += csvUnits;
+        selectedNewCost += csvUnits * Number(it.costPerUnit || 0);
+      }
+      if (it.isDuplicate) {
+        const mode = String((duplicateResolutions as any)[it.syscoSUPC] || 'replace');
+        if (mode === 'sum') {
+          dupSum += 1;
+          dupDelta += csvUnits; // sum adds imported amount on top of existing
+          dupDeltaCost += csvUnits * Number(it.costPerUnit || 0);
+        } else {
+          dupReplace += 1;
+          const delta = (csvUnits - existing);
+          dupDelta += delta; // replace changes by delta
+          dupDeltaCost += delta * Number(it.costPerUnit || 0);
+        }
+      }
+    });
+    const totalValue = selectedNewCost + dupDeltaCost;
+    return { selectedNew, selectedNewUnits, selectedNewCost, dupReplace, dupSum, dupDelta, dupDeltaCost, totalValue, unitSet };
+  }, [csvPreviewData, selectedImportItems, duplicateResolutions]);
   const [newItemForm, setNewItemForm] = useState({
     name: "",
     category: "",
@@ -1406,6 +1478,34 @@ export default function InventoryPage() {
     restockPeriod: "weekly",
     restockDays: "7",
   });
+  // Unit conversion helpers (solid defaults for recipes & inventory)
+  const convertUnits = useCallback((value: number, from: string, to: string): number => {
+    if (!Number.isFinite(value)) return 0;
+    const f = from.toLowerCase();
+    const t = to.toLowerCase();
+    if (f === t) return value;
+    // weight
+    if (f === 'lb' && t === 'oz') return value * 16;
+    if (f === 'oz' && t === 'lb') return value / 16;
+    // volume (US)
+    if (f === 'gal' && t === 'qt') return value * 4;
+    if (f === 'qt' && t === 'pt') return value * 2;
+    if (f === 'pt' && t === 'cup') return value * 2;
+    if (f === 'cup' && t === 'tbsp') return value * 16;
+    if (f === 'tbsp' && t === 'tsp') return value * 3;
+    if (f === 'tsp' && t === 'tbsp') return value / 3;
+    if (f === 'tbsp' && t === 'cup') return value / 16;
+    if (f === 'cup' && t === 'pt') return value / 2;
+    if (f === 'pt' && t === 'qt') return value / 2;
+    if (f === 'qt' && t === 'gal') return value / 4;
+    // metric
+    if (f === 'l' && t === 'ml') return value * 1000;
+    if (f === 'ml' && t === 'l') return value / 1000;
+    // cross-system approximations
+    if (f === 'l' && t === 'gal') return value * 0.264172;
+    if (f === 'gal' && t === 'l') return value / 0.264172;
+    return value; // default: unchanged
+  }, []);
 
   // Camera counting state
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -1897,6 +1997,18 @@ export default function InventoryPage() {
     return acc;
   }, []);
 
+  // Comprehensive sort comparator handling numbers, strings, dates, nulls
+  const compareValues = (aVal: any, bVal: any) => {
+    const a = aVal ?? '';
+    const b = bVal ?? '';
+    // numeric
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    // date
+    if (a instanceof Date || b instanceof Date) return new Date(a as any).getTime() - new Date(b as any).getTime();
+    // fallback string compare case-insensitive
+    return String(a).localeCompare(String(b), undefined, { sensitivity: 'base', numeric: true });
+  };
+
   const filteredItems = inventoryItems
     .filter((item: InventoryItem) => {
       const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1905,17 +2017,39 @@ export default function InventoryPage() {
       return matchesSearch && matchesCategory;
     })
     .sort((a: InventoryItem, b: InventoryItem) => {
-      const aValue = a[sortKey as keyof InventoryItem] ?? "";
-      const bValue = b[sortKey as keyof InventoryItem] ?? "";
-
-      if (aValue < bValue) {
-        return sortDirection === "asc" ? -1 : 1;
-      }
-      if (aValue > bValue) {
-        return sortDirection === "asc" ? 1 : -1;
-      }
-      return 0;
+      const aValue = (a as any)[sortKey];
+      const bValue = (b as any)[sortKey];
+      const order = compareValues(aValue, bValue);
+      return sortDirection === 'asc' ? order : -order;
     });
+
+  const getAbacusValue = (item: InventoryItem) => {
+    const row = abacusValues[item.id];
+    return {
+      stock: Number(row?.stock ?? item.currentStock ?? 0),
+      par: Number(row?.par ?? getParLevelValue(item) ?? 0),
+    };
+  };
+
+  const setAbacusStock = (itemId: string, value: number) => {
+    setAbacusValues((prev) => ({ ...prev, [itemId]: { stock: value, par: Number(prev[itemId]?.par ?? 0) } }));
+    setDirtyCards((d) => ({ ...d, [itemId]: "dirty" }));
+  };
+  const setAbacusPar = (itemId: string, value: number) => {
+    setAbacusValues((prev) => ({ ...prev, [itemId]: { stock: Number(prev[itemId]?.stock ?? 0), par: value } }));
+    setDirtyCards((d) => ({ ...d, [itemId]: "dirty" }));
+  };
+
+  const getMaxForItem = (item: InventoryItem) => {
+    const localMax = abacusMax[item.id];
+    const vals = getAbacusValue(item);
+    const base = Math.max(Number(item.maxCapacity || 0), Math.ceil(vals.stock + (getParLevelValue(item) || 0) * 1.5), 10);
+    return Math.max(base, Number(localMax || 0));
+  };
+
+  const setMaxForItem = (itemId: string, value: number) => {
+    setAbacusMax((prev) => ({ ...prev, [itemId]: value }));
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -1988,7 +2122,6 @@ export default function InventoryPage() {
         return "tag-green";
     }
   };
-
   const getWasteCountsForItem = (item: InventoryItem): Record<string, number> => {
     const counts: Record<string, number> = {};
     if (!item?.wasteLogs || !Array.isArray(item.wasteLogs)) return counts;
@@ -2010,6 +2143,28 @@ export default function InventoryPage() {
       case "Other":
       default:
         return "bg-green-600 text-white";
+    }
+  };
+  // Glass morphic tint per waste reason (matches badge color; light/dark)
+  const getWasteTipTint = (reason: string) => {
+    switch (reason) {
+      case "Spoiled": return "bg-red-50/90 dark:bg-red-500/15 border-red-200/60 dark:border-red-400/30";
+      case "Expired": return "bg-yellow-50/90 dark:bg-yellow-500/15 border-yellow-200/60 dark:border-yellow-400/30";
+      case "Cooking Error": return "bg-orange-50/90 dark:bg-orange-500/15 border-orange-200/60 dark:border-orange-400/30";
+      case "Dropped": return "bg-blue-50/90 dark:bg-blue-500/15 border-blue-200/60 dark:border-blue-400/30";
+      case "Contaminated": return "bg-slate-50/90 dark:bg-slate-500/15 border-slate-200/60 dark:border-slate-400/30";
+      default: return "bg-green-50/90 dark:bg-green-500/15 border-green-200/60 dark:border-green-400/30";
+    }
+  };
+  // Tip text color per reason (higher contrast in light mode; soft in dark)
+  const getWasteTipText = (reason: string) => {
+    switch (reason) {
+      case "Spoiled": return "text-red-900 dark:text-red-100";
+      case "Expired": return "text-yellow-900 dark:text-yellow-100";
+      case "Cooking Error": return "text-orange-900 dark:text-orange-100";
+      case "Dropped": return "text-blue-900 dark:text-blue-100";
+      case "Contaminated": return "text-slate-900 dark:text-slate-100";
+      default: return "text-green-900 dark:text-green-100";
     }
   };
   const getCriticalItems = () => inventoryItems.filter((item: InventoryItem) => item.status === "critical");
@@ -2175,7 +2330,6 @@ export default function InventoryPage() {
     link.click();
     document.body.removeChild(link);
   };
-
   const downloadVendorOrderCSV = () => {
     const orderData = exportVendorOrder();
     const generatedAt = new Date().toISOString();
@@ -2342,19 +2496,9 @@ export default function InventoryPage() {
     downloadTextFile(`waste-report-${new Date().toISOString().split('T')[0]}.csv`, csv);
   };
 
-  // QR Code generation function
+  // QR payload used everywhere (label + modal) — keep consistent
   const generateQRData = (item: InventoryItem) => {
-    return JSON.stringify({
-      id: item.id,
-      name: item.name,
-      sku: item.sku,
-      barcode: item.barcode,
-      category: item.category,
-      unit: item.unit,
-      costPerUnit: item.costPerUnit,
-      supplier: item.supplier,
-      timestamp: new Date().toISOString(),
-    });
+    return String(item.qrCode || item.id);
   };
   // Lookup barcode in internal database
   const lookupBarcode = async (barcode: string) => {
@@ -2391,7 +2535,7 @@ export default function InventoryPage() {
       const data = await response.json();
       
       if (response.ok) {
-        toast.success('Barcode mapped successfully! 🎯');
+        toast.success('Barcode mapped successfully!');
         return true;
       } else {
         toast.error(data.error || 'Failed to map barcode');
@@ -2441,7 +2585,7 @@ export default function InventoryPage() {
       if (response.ok) {
         setCsvPreviewData(data);
         setImportStep('review');
-        toast.success(`Parsed ${data.totalParsed} items successfully! 📊`);
+        toast.success(`Parsed ${data.totalParsed} items successfully!`);
         if (data.isHistoryFormat) {
           setShowPurchaseHistoryModal(true);
         }
@@ -2484,7 +2628,7 @@ export default function InventoryPage() {
         
         // Show detailed success/error information
         if (data.imported > 0) {
-          toast.success(`Imported ${data.imported} items successfully! 🎉`);
+          toast.success(`Imported ${data.imported} items successfully!`);
         }
         if (data.errors && data.errors.length > 0) {
           console.error('Import errors:', data.errors);
@@ -2540,7 +2684,7 @@ export default function InventoryPage() {
       const data = await response.json();
       
       if (response.ok) {
-        console.log('🔍 Database Debug Info:', data);
+        console.log('Database Debug Info:', data);
         toast.success(`Database has ${data.stats.totalItems} items (${data.stats.itemsCreatedToday} created today)`);
       } else {
         toast.error('Failed to fetch debug info');
@@ -2578,7 +2722,7 @@ export default function InventoryPage() {
       const data = await response.json();
       
       if (data.success) {
-        console.log('📋 Current schema enum values:', data.categoryEnum);
+        console.log('Current schema enum values:', data.categoryEnum);
         toast.success(`Schema check: ${data.categoryEnum.length} categories available`);
       } else {
         toast.error('Schema check failed');
@@ -2598,7 +2742,7 @@ export default function InventoryPage() {
         const response = await fetch('/api/inventory/clear', { method: 'DELETE' });
         const data = await response.json();
         if (data.success) {
-          toast.success(`✅ Deleted ${data.deleted} items`);
+          toast.success(`Deleted ${data.deleted} items`);
           refetchInventory();
         } else {
           toast.error('Failed to clear inventory');
@@ -2608,7 +2752,7 @@ export default function InventoryPage() {
   };
 
   const forceCacheRefresh = async () => {
-    console.log('🔄 Forcing complete Apollo cache reset...');
+    console.log('Forcing complete Apollo cache reset...');
     
     try {
       // Clear Apollo cache completely
@@ -2633,18 +2777,48 @@ export default function InventoryPage() {
       setScannedData(scannedText);
       
       // Unified QR behavior: identify item and open quantity modifier
+      // First try by QR data (if JSON includes id or barcode), then by barcode mapping
+      // First: treat as canonical string payload (qrCode or id)
+      {
+        const str = String(scannedText || '').trim();
+        let matched: any | null = null;
+        matched = (inventoryItems || []).find((it: any) => String(it.qrCode || it.id) === str);
+        if (!matched) matched = (inventoryItems || []).find((it: any) => String(it.barcode || '') === str);
+        if (matched) {
+          setIsQRScannerOpen(false);
+          const idx = (inventoryItems || []).findIndex((it: any) => String(it.id) === String(matched.id));
+          if (idx >= 0) {
+            setQuickCountIndex(idx);
+            setQuickCountValue("");
+            setQuickSearch("");
+            setIsQuickCountOpen(true);
+          } else {
+            setSelectedItem(matched);
+            setIsQuickCountOpen(true);
+          }
+          return;
+        }
+      }
 
-      // First, check if this barcode is already in our internal database
+      // Fallback: check barcode mapping API
       const existingItem = await lookupBarcode(scannedText);
       if (existingItem) {
         setIsQRScannerOpen(false);
-        setSelectedItem(existingItem);
-        setIsQuantityModifierOpen(true);
+        const idx = (inventoryItems || []).findIndex((it: any) => String(it.id) === String(existingItem.id));
+        if (idx >= 0) {
+          setQuickCountIndex(idx);
+          setQuickCountValue("");
+          setQuickSearch("");
+          setIsQuickCountOpen(true);
+        } else {
+          setSelectedItem(existingItem);
+          setIsQuickCountOpen(true);
+        }
         return;
       }
       
       try {
-        // Try to parse as QR code JSON data
+        // As a final step for add-item mode, parse and prefill
         const parsedData = JSON.parse(scannedText);
         if (qrScanMode === 'add-item') {
           setNewItemForm({
@@ -3327,28 +3501,30 @@ export default function InventoryPage() {
   };
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragState.isDragging || !dragState.element) return;
-    
     const container = e.currentTarget.getBoundingClientRect();
-    const newX = Math.max(0, Math.min(
+    const targetX = Math.max(0, Math.min(
       labelTemplate.width - labelTemplate.elements[dragState.element as keyof typeof labelTemplate.elements].width,
       e.clientX - container.left - dragState.offset.x
     ));
-    const newY = Math.max(0, Math.min(
+    const targetY = Math.max(0, Math.min(
       labelTemplate.height - labelTemplate.elements[dragState.element as keyof typeof labelTemplate.elements].height,
       e.clientY - container.top - dragState.offset.y
     ));
 
-    setLabelTemplate(prev => ({
-      ...prev,
-      elements: {
-        ...prev.elements,
-        [dragState.element!]: {
-          ...prev.elements[dragState.element! as keyof typeof prev.elements],
-          x: newX,
-          y: newY,
+    if (dragRafRef.current) cancelAnimationFrame(dragRafRef.current);
+    dragRafRef.current = requestAnimationFrame(() => {
+      setLabelTemplate(prev => ({
+        ...prev,
+        elements: {
+          ...prev.elements,
+          [dragState.element!]: {
+            ...prev.elements[dragState.element! as keyof typeof prev.elements],
+            x: targetX,
+            y: targetY,
+          },
         },
-      },
-    }));
+      }));
+    });
   };
 
   const handleMouseUp = () => {
@@ -3371,11 +3547,19 @@ export default function InventoryPage() {
       offset: { x: 0, y: 0 },
     });
   };
-  const printLabel = (item: InventoryItem) => {
+  const printLabel = async (item: InventoryItem) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
-    
+
+    const template = activeLabelTemplate || labelTemplate;
     const qrData = generateQRData(item);
+    // Render QR to Data URL for inline img
+    let qrDataUrl = '';
+    try {
+      qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0 });
+    } catch {}
+    const medallionSrc = template.elements?.logo?.src || '/tgl.png';
+
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
@@ -3384,67 +3568,63 @@ export default function InventoryPage() {
           <style>
             body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
             .label { 
-              width: ${labelTemplate.width}px; 
-              height: ${labelTemplate.height}px; 
-              border: 2px solid ${labelTemplate.colors.border};
-              background: ${labelTemplate.colors.background};
-              color: ${labelTemplate.colors.text};
+              width: ${template.width}px; 
+              height: ${template.height}px; 
+              border: 2px solid ${template.colors.border};
+              background: ${template.colors.background};
+              color: ${template.colors.text};
               position: relative;
               overflow: hidden;
             }
             .element { position: absolute; }
             .logo { 
-              width: ${labelTemplate.elements.logo.width}px; 
-              height: ${labelTemplate.elements.logo.height}px;
-              left: ${labelTemplate.elements.logo.x}px;
-              top: ${labelTemplate.elements.logo.y}px;
+              width: ${template.elements.logo.width}px; 
+              height: ${template.elements.logo.height}px;
+              left: ${template.elements.logo.x}px;
+              top: ${template.elements.logo.y}px;
             }
             .qr-container {
-              left: ${labelTemplate.elements.qrCode.x}px;
-              top: ${labelTemplate.elements.qrCode.y}px;
-              width: ${labelTemplate.elements.qrCode.width}px;
-              height: ${labelTemplate.elements.qrCode.height}px;
+              left: ${template.elements.qrCode.x}px;
+              top: ${template.elements.qrCode.y}px;
+              width: ${template.elements.qrCode.width}px;
+              height: ${template.elements.qrCode.height}px;
             }
             .item-name {
-              left: ${labelTemplate.elements.itemName.x}px;
-              top: ${labelTemplate.elements.itemName.y}px;
-              width: ${labelTemplate.elements.itemName.width}px;
-              font-size: ${labelTemplate.elements.itemName.fontSize}px;
-              font-weight: ${labelTemplate.elements.itemName.fontWeight};
-              text-align: ${labelTemplate.elements.itemName.textAlign};
+              left: ${template.elements.itemName.x}px;
+              top: ${template.elements.itemName.y}px;
+              width: ${template.elements.itemName.width}px;
+              font-size: ${template.elements.itemName.fontSize}px;
+              font-weight: ${template.elements.itemName.fontWeight};
+              text-align: ${template.elements.itemName.textAlign};
             }
             .metadata {
-              left: ${labelTemplate.elements.metadata.x}px;
-              top: ${labelTemplate.elements.metadata.y}px;
-              width: ${labelTemplate.elements.metadata.width}px;
-              font-size: ${labelTemplate.elements.metadata.fontSize}px;
-              line-height: ${labelTemplate.elements.metadata.lineHeight};
+              left: ${template.elements.metadata.x}px;
+              top: ${template.elements.metadata.y}px;
+              width: ${template.elements.metadata.width}px;
+              font-size: ${template.elements.metadata.fontSize}px;
+              line-height: ${template.elements.metadata.lineHeight};
             }
             @media print { body { margin: 0; } .label { border: none; } }
           </style>
         </head>
         <body>
           <div class="label">
-            ${labelTemplate.elements.logo.enabled ? `
+            ${template.elements.logo.enabled ? `
               <div class="element logo">
-                <svg viewBox="0 0 100 100" style="width: 100%; height: 100%;">
-                  <circle cx="50" cy="50" r="45" fill="#ea580c" stroke="#fff" stroke-width="3"/>
-                  <text x="50" y="35" text-anchor="middle" fill="white" font-size="16" font-weight="bold">TGL</text>
-                  <text x="50" y="65" text-anchor="middle" fill="white" font-size="8">MEDALLION</text>
-                </svg>
+                <img id="medallion" src="${medallionSrc}" style="width: 100%; height: 100%; object-fit: contain;"/>
               </div>
             ` : ''}
-            ${labelTemplate.elements.qrCode.enabled ? `
+            ${template.elements.qrCode.enabled ? `
               <div class="element qr-container">
-                <div id="qr-code" style="width: 100%; height: 100%; background: #000; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 8px;">QR</div>
+                <img id="qrimg" src="${qrDataUrl}" style="width: 100%; height: 100%; object-fit: contain;" />
               </div>
             ` : ''}
-            ${labelTemplate.elements.itemName.enabled ? `
+            ${template.elements.itemName.enabled ? `
               <div class="element item-name">${item.name}</div>
             ` : ''}
-            ${labelTemplate.elements.metadata.enabled ? `
+            ${template.elements.metadata.enabled ? `
               <div class="element metadata">
-                SKU: ${item.sku}<br>
+                SKU: ${template.skuSource === 'vendorSKU' ? (item.vendorSKU || item.sku) : template.skuSource === 'syscoSKU' ? (item.syscoSKU || item.sku) : (item.sku || '')}<br>
                 Unit: ${item.unit}<br>
                 Cost: $${item.costPerUnit}<br>
                 Supplier: ${item.supplier}<br>
@@ -3453,8 +3633,21 @@ export default function InventoryPage() {
             ` : ''}
           </div>
           <script>
-            window.print();
-            window.close();
+            const waitForImages = () => {
+              const imgs = Array.from(document.images || []);
+              const pending = imgs.filter(img => !img.complete);
+              if (pending.length === 0) {
+                setTimeout(() => { window.print(); window.close(); }, 50);
+              } else {
+                let loaded = 0;
+                pending.forEach(img => {
+                  img.addEventListener('load', () => { loaded++; if (loaded === pending.length) { setTimeout(() => { window.print(); window.close(); }, 50); } });
+                  img.addEventListener('error', () => { loaded++; if (loaded === pending.length) { setTimeout(() => { window.print(); window.close(); }, 50); } });
+                });
+              }
+            };
+            if (document.readyState === 'complete') waitForImages();
+            else window.addEventListener('load', waitForImages);
           </script>
         </body>
       </html>
@@ -3642,9 +3835,12 @@ export default function InventoryPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-              <Button variant="outline" onClick={testDirectInventoryFetch} size="sm">
-                <ScanLine className="mr-2 h-4 w-4" /> Test API
-              </Button>
+              {/* Hide Test API button for now */}
+              {false && (
+                <Button variant="outline" onClick={testDirectInventoryFetch} size="sm">
+                  <ScanLine className="mr-2 h-4 w-4" /> Test API
+                </Button>
+              )}
               <Button variant="outline" onClick={forceCacheRefresh} size="sm">
                 <RefreshCw className="mr-2 h-4 w-4" /> Refresh
               </Button>
@@ -3659,7 +3855,7 @@ export default function InventoryPage() {
                     Import CSV
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                <DialogContent className="w-full max-w-[96vw] max-h-[92vh] overflow-y-auto backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 dark:border-slate-800/40 shadow-2xl">
                   <DialogHeader>
                     <DialogTitle>Import Sysco CSV Order</DialogTitle>
                     <DialogDescription>
@@ -3669,11 +3865,11 @@ export default function InventoryPage() {
                   
                   {importStep === 'upload' && (
                     <div className="py-6">
-                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                        <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                      <div className="border-2 border-dashed rounded-lg p-8 text-center border-border bg-background/50 dark:bg-background/40 backdrop-blur-sm">
+                        <Upload className="mx-auto h-12 w-12 text-muted-foreground" />
                         <div className="mt-4">
                           <label htmlFor="csv-upload" className="cursor-pointer">
-                            <span className="mt-2 block text-sm font-medium text-gray-900">
+                            <span className="mt-2 block text-sm font-medium text-foreground">
                               {csvFile ? csvFile.name : 'Drop your Sysco CSV here or click to browse'}
                             </span>
                             <input
@@ -3684,7 +3880,7 @@ export default function InventoryPage() {
                               onChange={handleCSVUpload}
                             />
                           </label>
-                          <p className="mt-2 text-xs text-gray-500">
+                          <p className="mt-2 text-xs text-muted-foreground">
                             CSV files only. Maximum 10MB.
                           </p>
                         </div>
@@ -3709,10 +3905,10 @@ export default function InventoryPage() {
                     </div>
                   )}
                   {importStep === 'review' && csvPreviewData && (
-                    <div className="py-4">
+                    <div className="py-4 space-y-4">
                       {/* Purchase History Warning Modal */}
                       <Dialog open={showPurchaseHistoryModal} onOpenChange={setShowPurchaseHistoryModal}>
-                        <DialogContent className="max-w-md">
+                        <DialogContent className="max-w-md backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 dark:border-slate-800/40 shadow-2xl">
                           <DialogHeader>
                             <DialogTitle>Detected Purchase History CSV</DialogTitle>
                             <DialogDescription>
@@ -3728,147 +3924,187 @@ export default function InventoryPage() {
                         </DialogContent>
                       </Dialog>
 
-                      <div className="grid grid-cols-3 gap-4 mb-6">
-                        <div className="bg-blue-50 p-4 rounded-lg">
-                          <div className="flex items-center">
-                            <FileText className="h-6 w-6 text-blue-600" />
-                            <div className="ml-3">
-                              <p className="text-sm font-medium text-blue-900">Total Items</p>
-                              <p className="text-lg font-semibold text-blue-600">{csvPreviewData.totalParsed}</p>
-                            </div>
+                      {/* Review HUD (replaces sidebar summary) */}
+                      <div className="rounded-xl border border-white/20 dark:border-slate-800/40 bg-white/40 dark:bg-slate-900/30 backdrop-blur-md shadow-md p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">Total Items: {csvPreviewData.totalParsed}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">Selected New: {importMetrics.selectedNew}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">New Units: {importMetrics.selectedNewUnits}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">Dup Replace: {importMetrics.dupReplace}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">Dup Sum: {importMetrics.dupSum}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40">Net Change: {importMetrics.dupDelta}</span>
+                            <span className="text-xs px-2 py-1 rounded-full border border-emerald-300/50 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-500/10">Est Value: ${Number(importMetrics.totalValue || 0).toFixed(2)}</span>
                           </div>
-                        </div>
-                        <div className="bg-green-50 p-4 rounded-lg">
-                          <div className="flex items-center">
-                            <CheckCircle className="h-6 w-6 text-green-600" />
-                            <div className="ml-3">
-                              <p className="text-sm font-medium text-green-900">New Items</p>
-                              <p className="text-lg font-semibold text-green-600">{csvPreviewData.summary.new}</p>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="bg-yellow-50 p-4 rounded-lg">
-                          <div className="flex items-center">
-                            <AlertCircle className="h-6 w-6 text-yellow-600" />
-                            <div className="ml-3">
-                              <p className="text-sm font-medium text-yellow-900">Duplicates</p>
-                              <p className="text-lg font-semibold text-yellow-600">{csvPreviewData.summary.duplicates}</p>
-                            </div>
+                          <div className="flex gap-2 flex-wrap">
+                            <Button variant="outline" size="sm" onClick={selectAllNewItems}>Select All New</Button>
+                            <Button variant="outline" size="sm" onClick={() => setSelectedImportItems([])}>Clear Selection</Button>
+                            <Button variant="outline" size="sm" onClick={() => {
+                              // Select all duplicate rows
+                              if (!csvPreviewData) return;
+                              const dupIdx = csvPreviewData.items.map((it: any, idx: number) => it.isDuplicate ? idx : -1).filter((n: number) => n >= 0);
+                              setSelectedImportItems((prev) => Array.from(new Set([...(prev||[]), ...dupIdx])));
+                            }}>Select All Duplicates</Button>
+                            <Button variant="outline" size="sm" onClick={() => {
+                              // Set all duplicate actions to Replace
+                              if (!csvPreviewData) return;
+                              const map: Record<string, string> = {};
+                              csvPreviewData.items.forEach((it: any) => { if (it.isDuplicate) map[it.syscoSUPC] = 'replace'; });
+                              setDuplicateResolutions(map as any);
+                            }}>All Replace</Button>
+                            <Button variant="outline" size="sm" onClick={() => {
+                              // Set all duplicate actions to Sum
+                              if (!csvPreviewData) return;
+                              const map: Record<string, string> = {};
+                              csvPreviewData.items.forEach((it: any) => { if (it.isDuplicate) map[it.syscoSUPC] = 'sum'; });
+                              setDuplicateResolutions(map as any);
+                            }}>All Sum</Button>
+                            <Button variant="outline" size="sm" onClick={() => {
+                              // Enable all enrichment fields for duplicates
+                              if (!csvPreviewData) return;
+                              const next: Record<string, Record<string, boolean>> = {} as any;
+                              csvPreviewData.items.forEach((it: any) => {
+                                if (!it.isDuplicate) return;
+                                const fields = Array.isArray(it.enrichmentFields) ? it.enrichmentFields : [];
+                                next[it.syscoSUPC] = fields.reduce((acc: any, f: string) => { acc[f] = true; return acc; }, {});
+                              });
+                              setEnrichmentResolutions(next as any);
+                            }}>Select All Enrichment</Button>
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex justify-between items-center mb-4">
-                        <div className="flex space-x-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={selectAllNewItems}
-                          >
-                            Select All New
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSelectedImportItems([])}
-                          >
-                            Clear Selection
-                          </Button>
-                        </div>
-                        <p className="text-sm text-gray-600">
-                          {selectedImportItems.length} items selected for import
-                        </p>
-                      </div>
-
-                      <div className="max-h-96 overflow-y-auto border rounded-lg">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50 sticky top-0">
+                      <div className="max-h-[68vh] overflow-y-auto rounded-xl border border-white/20 dark:border-slate-800/40 bg-white/50 dark:bg-slate-900/40 backdrop-blur-md shadow-xl">
+                        <table className="w-full text-sm divide-y divide-gray-200 dark:divide-slate-800">
+                          <thead className="sticky top-0 bg-white/70 dark:bg-slate-900/70 backdrop-blur-sm">
                             <tr>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">
                                 <input 
                                   type="checkbox" 
                                   checked={selectedImportItems.length === csvPreviewData.items.filter((item: any) => !item.isDuplicate).length}
                                   onChange={selectAllNewItems}
                                 />
                               </th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">SUPC</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Each $</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Case $</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Case Qty</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Split Qty</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">CSV Units</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Existing Count</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Delta</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duplicate Action</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Enrich Missing Fields</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Name</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">SUPC</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Category</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Each $</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Case $</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Case Qty</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Split Qty</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">CSV Units</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Unit Type</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Existing Count</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Delta</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Duplicate Action</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Final Count</th>
+                              <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Enrich Missing Fields</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-gray-200">
+                          <tbody className="divide-y divide-gray-200 dark:divide-slate-800">
                             {csvPreviewData.items.map((item: any, index: number) => (
-                              <tr key={index} className={item.isDuplicate ? 'bg-yellow-50' : 'bg-white'}>
+                              <tr key={index} className={item.isDuplicate ? 'bg-yellow-50/60 dark:bg-yellow-900/20' : 'bg-white/60 dark:bg-slate-900/30'}>
                                 <td className="px-3 py-2">
                                   <input 
                                     type="checkbox"
-                                    disabled={item.isDuplicate}
                                     checked={selectedImportItems.includes(index)}
                                     onChange={() => toggleItemSelection(index)}
                                   />
                                 </td>
-                                <td className="px-3 py-2">
-                                  {item.isDuplicate ? (
-                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                      <AlertCircle className="w-3 h-3 mr-1" />
-                                      Duplicate
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                      <CheckCircle className="w-3 h-3 mr-1" />
-                                      New
-                                    </span>
-                                  )}
+                                <td className="px-3 py-2 text-sm text-foreground">
+                                  <div className="flex items-center gap-2">
+                                    {item.isDuplicate ? (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 border border-yellow-200/60 dark:border-yellow-400/30">
+                                        <AlertCircle className="w-3 h-3" />
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 border border-green-200/60 dark:border-green-400/30">
+                                        <CheckCircle className="w-3 h-3" />
+                                      </span>
+                                    )}
+                                    <span>{item.name}</span>
+                                  </div>
                                 </td>
-                                <td className="px-3 py-2 text-sm text-gray-900">{item.name}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.syscoSUPC}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.category}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">${Number(item.costPerUnit || 0).toFixed(2)}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">${Number(item.pricePerCase || 0).toFixed(2)}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.caseQty ?? ''}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.splitQty ?? ''}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.computedUnits ?? ''}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{item.existingItem?.currentStock ?? ''}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">{typeof item.existingItem?.currentStock === 'number' && typeof item.computedUnits === 'number' ? (Number(item.computedUnits) - Number(item.existingItem.currentStock)) : ''}</td>
-                                <td className="px-3 py-2 text-sm text-gray-600">
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.syscoSUPC}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.category}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">${Number(item.costPerUnit || 0).toFixed(2)}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">${Number(item.pricePerCase || 0).toFixed(2)}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.caseQty ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.splitQty ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.computedUnits ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.unit || 'each'}{(() => {
+                                  const existingUnit = String(item.existingItem?.unit || '').trim().toLowerCase();
+                                  const csvUnit = String(item.unit || '').trim().toLowerCase();
+                                  return existingUnit && csvUnit && existingUnit !== csvUnit ? (
+                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 border border-yellow-200/60 dark:border-yellow-400/30" title={`Existing: ${existingUnit} → CSV: ${csvUnit}`}>
+                                      mismatch
+                                    </span>
+                                  ) : null;
+                                })()}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{item.existingItem?.currentStock ?? ''}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">{typeof item.existingItem?.currentStock === 'number' && typeof item.computedUnits === 'number' ? (Number(item.computedUnits) - Number(item.existingItem.currentStock)) : ''}</td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">
                                   {item.isDuplicate ? (
                                     <div className="flex items-center gap-2">
-                                      <label className="text-xs text-gray-700">Replace current count with CSV?</label>
-                                      <input
-                                        type="checkbox"
-                                        checked={!!duplicateResolutions[item.syscoSUPC]}
-                                        onChange={(e) => setDuplicateResolutions((m) => ({ ...m, [item.syscoSUPC]: e.target.checked }))}
-                                      />
+                                      <label className="text-xs text-muted-foreground">Duplicate Action</label>
+                                      <Select value={String(duplicateResolutions[item.syscoSUPC] || 'replace')} onValueChange={(v) => setDuplicateResolutions((m) => ({ ...m, [item.syscoSUPC]: v }))}>
+                                        <SelectTrigger className="w-[140px]">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="replace">Replace</SelectItem>
+                                          <SelectItem value="sum">Sum</SelectItem>
+                                        </SelectContent>
+                                      </Select>
                                     </div>
                                   ) : (
-                                    <span className="text-xs text-gray-400">—</span>
+                                    <span className="text-xs text-muted-foreground">—</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-2 text-sm text-gray-600">
-                                  {item.isDuplicate && item.canEnrich ? (
-                                    <div className="flex flex-col gap-1">
-                                      <div className="text-xs text-gray-700">Missing fields to fill: {item.enrichmentFields.join(', ')}</div>
-                                      <label className="text-xs text-gray-700 flex items-center gap-2">
-                                        <input
-                                          type="checkbox"
-                                          checked={!!enrichmentResolutions[item.syscoSUPC]}
-                                          onChange={(e) => setEnrichmentResolutions((m) => ({ ...m, [item.syscoSUPC]: e.target.checked }))}
-                                        />
-                                        Apply enrichment for this item
-                                      </label>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">
+                                  {item.isDuplicate ? (() => {
+                                    const csvUnits = Number(item.computedUnits || 0);
+                                    const existing = Number(item.existingItem?.currentStock ?? 0);
+                                    const mode = String(duplicateResolutions[item.syscoSUPC] || 'replace');
+                                    const finalCount = mode === 'sum' ? (existing + csvUnits) : csvUnits;
+                                    return finalCount;
+                                  })() : (
+                                    <span className="text-xs text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-sm text-muted-foreground">
+                                  {item.isDuplicate ? (
+                                    <div className="space-y-1">
+                                      <div className="text-xs text-muted-foreground">Eligible Enrichment Fields</div>
+                                      <div className="max-h-24 overflow-auto rounded-md border border-white/30 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm p-2">
+                                        {(['syscoSKU','vendorSKU','casePackSize','vendorCode','syscoCategory','pricePerCase','costPerUnit','unit','brand','description'] as const).map((field) => {
+                                          const eligible = (item.enrichmentFields || []).includes(field);
+                                          const selectedMap = (() => {
+                                            const raw = enrichmentResolutions[item.syscoSUPC] as unknown;
+                                            if (raw && typeof raw === 'object') return raw as Record<string, boolean>;
+                                            return {} as Record<string, boolean>;
+                                          })();
+                                          const selected = !!selectedMap[field];
+                                          return (
+                                            <label key={field} className={`flex items-center gap-2 text-xs py-0.5 text-muted-foreground ${eligible ? '' : 'opacity-50'}`}>
+                                              <input
+                                                type="checkbox"
+                                                disabled={!eligible}
+                                                checked={selected}
+                                                onChange={(e) => setEnrichmentResolutions((m) => {
+                                                  const raw = m[item.syscoSUPC] as unknown;
+                                                  const curr = (raw && typeof raw === 'object') ? (raw as Record<string, boolean>) : {};
+                                                  return { ...m, [item.syscoSUPC]: { ...curr, [field]: e.target.checked } } as Record<string, any>;
+                                                })}
+                                              />
+                                              {field}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
                                     </div>
                                   ) : (
-                                    <span className="text-xs text-gray-400">—</span>
+                                    <span className="text-xs text-muted-foreground">—</span>
                                   )}
                                 </td>
                               </tr>
@@ -3889,6 +4125,8 @@ export default function InventoryPage() {
                           Continue
                         </Button>
                       </div>
+
+                      {/* Sidebar removed in favor of HUD above the table */}
                     </div>
                   )}
 
@@ -3896,7 +4134,7 @@ export default function InventoryPage() {
                     <div className="py-4 space-y-4">
                       <div className="prose max-w-none">
                         <h3 className="text-lg font-semibold">Review & Confirm Import</h3>
-                        <ol className="list-decimal ml-5 text-sm text-gray-700 space-y-1">
+                        <ol className="list-decimal ml-5 text-sm text-muted-foreground space-y-1">
                           <li>New items will be created with Sysco identifiers, pricing, and case pack size.</li>
                           <li>Duplicates you checked will have their current count replaced with CSV computed units.</li>
                           <li>If you enabled enrichment for a duplicate, missing fields (e.g., casePackSize, pricePerCase, costPerUnit, brand) will be filled from the CSV.</li>
@@ -3904,7 +4142,7 @@ export default function InventoryPage() {
                         </ol>
                       </div>
 
-                      <div className="rounded border p-3 text-sm">
+                      <div className="rounded border border-border p-3 text-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm">
                         <div><strong>Selected new items:</strong> {selectedImportItems.length}</div>
                         <div><strong>Duplicates to replace count:</strong> {Object.values(duplicateResolutions).filter(Boolean).length}</div>
                         <div><strong>Duplicates to enrich:</strong> {Object.values(enrichmentResolutions).filter(Boolean).length}</div>
@@ -3923,8 +4161,8 @@ export default function InventoryPage() {
                   {importStep === 'complete' && (
                     <div className="py-8 text-center">
                       <CheckCircle className="mx-auto h-12 w-12 text-green-600" />
-                      <h3 className="mt-4 text-lg font-medium text-gray-900">Import Complete!</h3>
-                      <p className="mt-2 text-sm text-gray-600">
+                      <h3 className="mt-4 text-lg font-medium text-foreground">Import Complete!</h3>
+                      <p className="mt-2 text-sm text-muted-foreground">
                         Your Sysco items have been processed. You can now map barcodes to them.
                       </p>
                       <div className="mt-6 flex justify-center space-x-2 flex-wrap gap-2">
@@ -4231,12 +4469,25 @@ export default function InventoryPage() {
                     <div className="space-y-4">
                       <div>
                         <Label htmlFor="unit">Unit</Label>
-                        <Input 
-                          id="unit" 
-                          placeholder="lbs, pieces, bottles, etc." 
-                          value={newItemForm.unit}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, unit: e.target.value }))}
-                        />
+                        <Select value={newItemForm.unit || ''} onValueChange={(v) => setNewItemForm(prev => ({ ...prev, unit: v }))}>
+                          <SelectTrigger id="unit">
+                            <SelectValue placeholder="Select unit" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="each">Each</SelectItem>
+                            <SelectItem value="oz">Ounce (oz)</SelectItem>
+                            <SelectItem value="lb">Pound (lb)</SelectItem>
+                            <SelectItem value="gal">Gallon (gal)</SelectItem>
+                            <SelectItem value="l">Liter (L)</SelectItem>
+                            <SelectItem value="ml">Milliliter (ml)</SelectItem>
+                            <SelectItem value="tsp">Teaspoon (tsp)</SelectItem>
+                            <SelectItem value="tbsp">Tablespoon (tbsp)</SelectItem>
+                            <SelectItem value="cup">Cup</SelectItem>
+                            <SelectItem value="qt">Quart (qt)</SelectItem>
+                            <SelectItem value="pt">Pint (pt)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <div className="text-xs text-muted-foreground mt-1">Choose the base unit. Conversions are applied automatically.</div>
                       </div>
                       {canViewFinancialData && (
                         <div>
@@ -4292,16 +4543,7 @@ export default function InventoryPage() {
                           onChange={(e) => setNewItemForm(prev => ({ ...prev, minThreshold: e.target.value }))}
                         />
                       </div>
-                      <div>
-                        <Label htmlFor="par-level">Par Level</Label>
-                        <Input 
-                          id="par-level" 
-                          type="number" 
-                          placeholder="Ideal stock (target)" 
-                          value={newItemForm.parLevel || ''}
-                          onChange={(e) => setNewItemForm(prev => ({ ...prev, parLevel: e.target.value }))}
-                        />
-                      </div>
+                      {/* Removed redundant Par Level input (parLevel). We use minThreshold as Par. */}
                       <div>
                         <Label htmlFor="average-daily-usage">Average Daily Usage</Label>
                         <Input
@@ -4559,8 +4801,16 @@ export default function InventoryPage() {
         {canViewFinancialData && (
           <Card className="border-orange-200 bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20">
             <CardContent className="p-6">
-              <h3 className="font-semibold text-foreground mb-3">🧠 Varuni's Inventory Insights</h3>
-              <div className="grid gap-4">
+              <div className="flex items-start space-x-4">
+                <div className="bg-orange-600 rounded-full p-2">
+                  <Brain className="h-6 w-6 text-white" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-3">
+                    <h3 className="font-semibold text-foreground">Varuni's Inventory Insights</h3>
+                    <Badge variant="warning">Coming Soon</Badge>
+                  </div>
+                  <div className="grid gap-4">
                 {Array.isArray(insightsData?.aiInsights) && insightsData!.aiInsights.length > 0 ? (
                   insightsData!.aiInsights.map((ins: any) => (
                     <div key={ins.id} className="bg-card border border-border rounded-lg p-4">
@@ -4596,6 +4846,8 @@ export default function InventoryPage() {
                 ) : (
                   <p className="text-sm text-muted-foreground">No insights yet. They will be generated nightly or via the Varuni chat.</p>
                 )}
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -4676,7 +4928,7 @@ export default function InventoryPage() {
                   <CardDescription>Items requiring immediate reordering</CardDescription>
                 </CardHeader>
                 <CardContent className="flex-1 flex flex-col">
-                  <div className="flex-1 overflow-auto space-y-3 pr-1">
+                  <div className="flex-1 overflow-auto space-y-3 pr-1 max-h-[420px]">
                     {getCriticalItems().map((item: InventoryItem) => {
                       const qty = criticalQty[item.id] ?? computeMinOrderQuantity(item);
                       const checked = !!criticalSelected[item.id];
@@ -4746,7 +4998,6 @@ export default function InventoryPage() {
                 </CardContent>
               </Card>
             </div>
-
             {/* Enhanced Stock Movement Chart */}
             {canViewFinancialData && (
               <Card>
@@ -5446,7 +5697,7 @@ export default function InventoryPage() {
                     </div>
 
                     <div className="bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg p-4">
-                      <h3 className="font-medium text-orange-900 dark:text-orange-100 mb-2">📦 Expected Deliveries Today</h3>
+                      <h3 className="font-medium text-orange-900 dark:text-orange-100 mb-2">Expected Deliveries Today</h3>
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <div>
@@ -5655,6 +5906,14 @@ export default function InventoryPage() {
                     <Button 
                       variant="outline" 
                       size="sm"
+                      onClick={() => setIsLabelDesignerOpen(true)}
+                    >
+                      <Palette className="mr-2 h-4 w-4" />
+                      Label Designer
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
                       onClick={() => {
                         setIsQuickCountOpen(true);
                         setQuickCountIndex(0);
@@ -5682,11 +5941,55 @@ export default function InventoryPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={showPackaging} onChange={(e) => setShowPackaging(e.target.checked)} />
+                      Show Packaging in separate table
+                    </label>
                     <Button variant="ghost" onClick={() => setFilterCategory(null)}>Clear</Button>
                   </div>
                 </div>
               )}
               <CardContent>
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <Tabs value={itemsViewMode} onValueChange={(v) => setItemsViewMode(v as any)}>
+                    <TabsList>
+                      <TabsTrigger value="list">List</TabsTrigger>
+                      <TabsTrigger value="abacus">Abacus</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  {itemsViewMode === 'abacus' && (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs">Layout</Label>
+                      <Tabs value={abacusLayout} onValueChange={(v) => setAbacusLayout(v as any)}>
+                        <TabsList>
+                          <TabsTrigger value="grid">Grid</TabsTrigger>
+                          <TabsTrigger value="classic">Classic</TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                      <Button size="sm" variant="outline" onClick={async () => {
+                        const entries = Object.entries(dirtyCards).filter(([_, s]) => s === 'dirty');
+                        if (!entries.length) return;
+                        try {
+                          for (const [id] of entries) {
+                            const item = (inventoryItems as any[]).find((x) => x.id === id);
+                            if (!item) continue;
+                            const vals = getAbacusValue(item);
+                            const toStock = Number(vals.stock || 0);
+                            const toPar = Number(vals.par || 0);
+                            await updateStock({ variables: { id, quantity: toStock } });
+                            await updateInventoryItem({ variables: { id, input: { minThreshold: toPar, parLevel: toPar } } });
+                          }
+                          toast.success('Saved all changes');
+                          setDirtyCards((d) => Object.fromEntries(Object.entries(d).map(([k]) => [k, 'saved'])));
+                          try { await refetchInventory(); } catch {}
+                        } catch (e: any) {
+                          toast.error(e?.message || 'Batch save failed');
+                        }
+                      }}>Save All</Button>
+                    </div>
+                  )}
+                </div>
+                {itemsViewMode === 'list' && (<>
                 <Table className="hidden md:table">
                   <TableHeader>
                     <TableRow>
@@ -5703,7 +6006,7 @@ export default function InventoryPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredItems.map((item: InventoryItem) => {
+                    {(showPackaging ? filteredItems.filter((i: any) => i.category !== 'Packaging') : filteredItems).map((item: InventoryItem) => {
                       const usage = (item as any).averageDailyUsage > 0 ? (item as any).averageDailyUsage : 0;
                       const daysLeft = usage > 0 ? Math.floor((item.currentStock || 0) / usage) : Infinity;
                       return (
@@ -5719,8 +6022,19 @@ export default function InventoryPage() {
                           <TableCell>
                             <div>
                               <p className="font-medium">{item.currentStock} {item.unit}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {(() => {
+                                  const packUnits = Math.max(1, Number(item.casePackSize || 0));
+                                  if (!Number.isFinite(packUnits) || packUnits <= 1) return null;
+                                  const stock = Number(item.currentStock || 0);
+                                  const cases = stock / packUnits;
+                                  if (!Number.isFinite(cases) || cases <= 0) return null;
+                                  const oneDecimal = Math.round(cases * 10) / 10;
+                                  return `est ${oneDecimal.toFixed(1)} case${(oneDecimal >= 2 ? 's' : '')}`;
+                                })()}
+                              </p>
                               {canViewFinancialData && (
-                                <p className="text-xs text-muted-foreground">${(item.currentStock * item.costPerUnit).toFixed(2)}</p>
+                                <p className="text-xs text-muted-foreground">${(Number(item.currentStock || 0) * Number(item.costPerUnit || 0)).toFixed(2)}</p>
                               )}
                             </div>
                           </TableCell>
@@ -5729,8 +6043,24 @@ export default function InventoryPage() {
                             <div className="flex flex-wrap gap-1">
                               {(() => {
                                 const counts = getWasteCountsForItem(item);
+                                const descriptions: Record<string, string> = {
+                                  'Spoiled': 'Spoilage due to temperature/time/handling',
+                                  'Expired': 'Shelf-life exceeded before consumption',
+                                  'Cooking Error': 'Preparation mistakes, burned/undercooked',
+                                  'Dropped': 'Dropped during handling/service',
+                                  'Contaminated': 'Cross-contamination or compromised safety',
+                                  'Other': 'Everything that doesn\'t fit above'
+                                };
                                 return WASTE_REASONS.map((reason) => (
-                                  <Badge key={reason} variant="outline" title={reason} className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>{counts[reason] || 0}</Badge>
+                                  <div key={reason} className="relative group">
+                                    <Badge variant="outline" className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>{counts[reason] || 0}</Badge>
+                                    <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 hidden group-hover:block z-50">
+                                      <div className={`whitespace-nowrap rounded-md border ${getWasteTipTint(reason)} backdrop-blur-md shadow px-2 py-1 text-[10px] ${getWasteTipText(reason)}`}> 
+                                        <span className="font-medium mr-1">{reason}:</span>
+                                        <span>{descriptions[reason] || reason}</span>
+                                      </div>
+                                    </div>
+                                  </div>
                                 ));
                               })()}
                             </div>
@@ -5751,7 +6081,20 @@ export default function InventoryPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            {Math.max(0, (getParLevelValue(item)) - (item.currentStock || 0))}
+                            <div>
+                              <p className="font-medium">{Math.max(0, (getParLevelValue(item)) - (item.currentStock || 0))} {item.unit}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {(() => {
+                                  const packUnits = Math.max(1, Number(item.casePackSize || 0));
+                                  if (!Number.isFinite(packUnits) || packUnits <= 1) return null;
+                                  const needed = Math.max(0, (getParLevelValue(item)) - (Number(item.currentStock || 0)));
+                                  if (needed <= 0) return null;
+                                  const cases = needed / packUnits;
+                                  const oneDecimal = Math.round(cases * 10) / 10;
+                                  return `est ${oneDecimal.toFixed(1)} case${(oneDecimal >= 2 ? 's' : '')}`;
+                                })()}
+                              </p>
+                            </div>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{format(new Date(item.lastUpdated), "P")}</TableCell>
                           <TableCell>
@@ -5779,19 +6122,54 @@ export default function InventoryPage() {
                     })}
                   </TableBody>
                 </Table>
-                {/* Floating legend - glass morphism, light/dark compatible */}
-                <div className="fixed bottom-3 right-3 z-40">
-                  <div className="pointer-events-auto rounded-lg border border-white/20 dark:border-slate-800/50 bg-white/30 dark:bg-slate-900/30 backdrop-blur-md saturate-150 shadow-lg ring-1 ring-white/20 dark:ring-slate-800/50 px-3 py-2 text-xs text-slate-800 dark:text-slate-200">
-                    <div className="flex items-center flex-wrap gap-1">
-                      <span className="mr-1 font-semibold">Legend:</span>
-                      {WASTE_REASONS.map((reason) => (
-                        <Badge key={reason} variant="outline" className={`${getWasteTagClass(reason)} border-none px-2 py-0.5 text-[10px]`}>
-                          {reason}
-                        </Badge>
-                      ))}
-                    </div>
+                {showPackaging && (
+                  <div className="mt-8">
+                    <h4 className="text-sm font-semibold text-muted-foreground mb-2">Packaging</h4>
+                    <Table className="hidden md:table">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Item</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead>On Hand</TableHead>
+                          <TableHead>Par Level</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredItems.filter((i: any) => i.category === 'Packaging').map((item: any) => (
+                          <TableRow key={item.id} onClick={() => { setSelectedItem(item); setDetailViewItem(item); }} className="cursor-pointer">
+                            <TableCell>
+                              <div className="font-medium">{item.name}</div>
+                              <div className="text-sm text-muted-foreground">{item.sku}</div>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">{item.category}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{item.currentStock} {item.unit}</div>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">{getParLevelValue(item)} {item.unit}</TableCell>
+                            <TableCell>
+                              <span className={`px-2 py-1 text-xs rounded ${getStatusColor(computeStatus(item.currentStock, item.minThreshold, getParLevelValue(item)))}`}>
+                                {friendlyStatusLabel(computeStatus(item.currentStock, item.minThreshold, getParLevelValue(item)))}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center space-x-2">
+                                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); printLabel(item); }}>
+                                  <Printer className="h-4 w-4" />
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); openEditDialog(item); }}>
+                                  <i className="fa fa-cog"></i>
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
-                </div>
+                )}
+                {/* Removed floating legend; hover tabs on badges now explain each reason */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:hidden">
                   {filteredItems.map((item: InventoryItem) => (
                     <Card key={item.id}>
@@ -5839,6 +6217,114 @@ export default function InventoryPage() {
                     </Card>
                   ))}
                 </div>
+                </>)}
+                {itemsViewMode === 'abacus' && (
+                  <div className={abacusLayout === 'grid' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" : "flex flex-col gap-4"}>
+                    {(showPackaging ? filteredItems.filter((i: any) => i.category !== 'Packaging') : filteredItems).map((item: InventoryItem) => {
+                      const vals = getAbacusValue(item);
+                      const maxCap = getMaxForItem(item);
+                      const packUnits = Math.max(1, Number(item.casePackSize || 0));
+                      return (
+                        <Card key={item.id} className={`${dirtyCards[item.id] === 'dirty' ? 'ring-2 ring-orange-400/60 dark:ring-orange-500/60' : dirtyCards[item.id] === 'saved' ? 'ring-2 ring-green-400/60 dark:ring-green-500/60' : ''}`}>
+                          <CardHeader className="border-b">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <CardTitle className="text-base">{item.name}</CardTitle>
+                                <CardDescription className="text-xs">{item.category} • {item.unit}</CardDescription>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xs text-muted-foreground">Status</div>
+                                <div className={`text-xs font-medium ${getStatusColor(computeStatus(vals.stock, item.minThreshold, vals.par))}`}>{friendlyStatusLabel(computeStatus(vals.stock, item.minThreshold, vals.par))}</div>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="pt-4 space-y-4">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-sm font-medium">On Hand</span>
+                                <div className="flex items-center gap-2">
+                                  <input className="w-20 h-8 rounded border bg-background px-2 text-sm" type="number" value={Number(vals.stock || 0)} onChange={(e) => { const next = Number(e.target.value || 0); if (next > maxCap) setMaxForItem(item.id, next); setAbacusStock(item.id, next); }} />
+                                  <span className="text-sm font-semibold text-muted-foreground">{item.unit}</span>
+                                </div>
+                              </div>
+                              {abacusLayout === 'classic' ? (
+                                <AbacusSlider min={0} max={maxCap} step={1} value={[vals.stock]} onValueChange={(v) => setAbacusStock(item.id, Number(v?.[0] || 0))} />
+                              ) : (
+                                <Slider min={0} max={maxCap} step={1} value={[vals.stock]} onValueChange={(v) => setAbacusStock(item.id, Number(v?.[0] || 0))} />
+                              )}
+                              <div className="mt-2 flex items-center justify-between">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">Cases</span>
+                                  <span className="text-[10px] text-muted-foreground">({packUnits} / case)</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    className="w-24 h-8 rounded border bg-background px-2 text-sm"
+                                    type="number"
+                                    step="0.01"
+                                    value={(Number(vals.stock || 0) / packUnits).toFixed(2)}
+                                    onChange={(e) => {
+                                      const nextCases = Number(e.target.value || 0);
+                                      const asUnits = Math.max(0, nextCases * packUnits);
+                                      if (asUnits > maxCap) setMaxForItem(item.id, asUnits);
+                                      setAbacusStock(item.id, asUnits);
+                                    }}
+                                  />
+                                  <span className="text-xs text-muted-foreground">case{(Number(vals.stock || 0) / packUnits) !== 1 ? 's' : ''}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-sm font-medium">Par Level</span>
+                                <div className="flex items-center gap-2">
+                                  <input className="w-20 h-8 rounded border bg-background px-2 text-sm" type="number" value={Number(vals.par || 0)} onChange={(e) => { const next = Number(e.target.value || 0); if (next > maxCap) setMaxForItem(item.id, next); setAbacusPar(item.id, next); }} />
+                                  <span className="text-sm font-semibold text-muted-foreground">{item.unit}</span>
+                                </div>
+                              </div>
+                              {abacusLayout === 'classic' ? (
+                                <AbacusSlider min={0} max={maxCap} step={1} value={[vals.par]} onValueChange={(v) => setAbacusPar(item.id, Number(v?.[0] || 0))} />
+                              ) : (
+                                <Slider min={0} max={maxCap} step={1} value={[vals.par]} onValueChange={(v) => setAbacusPar(item.id, Number(v?.[0] || 0))} />
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] text-muted-foreground">Max</span>
+                                <input className="w-20 h-8 rounded border bg-background px-2 text-sm" type="number" value={Number(maxCap || 0)} onChange={(e) => { const next = Math.max(0, Number(e.target.value || 0)); setMaxForItem(item.id, next); }} />
+                              </div>
+                              <div className="text-xs text-muted-foreground">Adjusting max affects slider range</div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3 text-center">
+                              <div>
+                                <div className="text-[11px] text-muted-foreground">Days Left</div>
+                                <div className="text-sm font-semibold">{(() => { const usage = (item as any).averageDailyUsage > 0 ? (item as any).averageDailyUsage : 0; const daysLeft = usage > 0 ? Math.floor((vals.stock || 0) / usage) : Infinity; return daysLeft === Infinity ? '∞' : `${daysLeft}`; })()}</div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-muted-foreground">Order to Par</div>
+                                <div className="text-sm font-semibold">{Math.max(0, vals.par - vals.stock)}</div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-muted-foreground">Value</div>
+                                <div className="text-sm font-semibold">${(Number(vals.stock || 0) * Number(item.costPerUnit || 0)).toFixed(2)}</div>
+                              </div>
+                            </div>
+                          </CardContent>
+                          <div className="px-6 pb-4 flex items-center justify-end gap-2">
+                            <Button size="sm" variant="ghost" onClick={() => {
+                              const orig = abacusOriginal[item.id] || { stock: Number(item.currentStock || 0), par: Number(getParLevelValue(item) || 0), max: Number(item.maxCapacity || 0) };
+                              setAbacusStock(item.id, Number(orig.stock || 0));
+                              setAbacusPar(item.id, Number(orig.par || 0));
+                              setMaxForItem(item.id, Number(orig.max || getMaxForItem(item)));
+                              setDirtyCards((d) => ({ ...d, [item.id]: undefined as any }));
+                            }}>Reset</Button>
+                            <Button size="sm" variant="outline" onClick={async () => { try { const toStock = Number(vals.stock || 0); const toPar = Number(vals.par || 0); await updateStock({ variables: { id: item.id, quantity: toStock } }); await updateInventoryItem({ variables: { id: item.id, input: { minThreshold: toPar, parLevel: toPar } } }); toast.success(`Updated ${item.name}`); try { await refetchInventory(); } catch {} } catch (e: any) { toast.error(e?.message || 'Failed to update'); } }}>Save</Button>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -5870,7 +6356,7 @@ export default function InventoryPage() {
          <Dialog open={isLabelDesignerOpen} onOpenChange={setIsLabelDesignerOpen}>
            <DialogContent className="max-w-6xl">
              <DialogHeader>
-               <DialogTitle>🎨 Dynamic Label Designer</DialogTitle>
+               <DialogTitle>Dynamic Label Designer</DialogTitle>
                <DialogDescription>Drag and drop elements to create custom inventory labels with TGL medallion</DialogDescription>
              </DialogHeader>
              <div className="grid grid-cols-3 gap-6 py-4">
@@ -5906,9 +6392,126 @@ export default function InventoryPage() {
                    </div>
                  </div>
 
+                 <div className="grid grid-cols-2 gap-3">
+                   <div>
+                     <Label className="text-sm">SKU Source</Label>
+                     <Select value={String(labelTemplate.skuSource)} onValueChange={(v) => setLabelTemplate(prev => ({ ...prev, skuSource: v as any }))}>
+                       <SelectTrigger>
+                         <SelectValue />
+                       </SelectTrigger>
+                       <SelectContent>
+                         <SelectItem value="sku">Primary SKU</SelectItem>
+                         <SelectItem value="vendorSKU">Vendor SKU</SelectItem>
+                         <SelectItem value="syscoSKU">Sysco SKU</SelectItem>
+                       </SelectContent>
+                     </Select>
+                   </div>
+                 </div>
+
+                 <div>
+                   <Label>Templates</Label>
+                   <Select value={currentTemplateId || ''} onValueChange={(val) => {
+                     setCurrentTemplateId(val);
+                     const t = (labelTemplates || []).find((x: any) => String(x._id) === String(val));
+                     if (t) setLabelTemplate({
+                       id: String(t._id),
+                       name: t.name,
+                       width: t.width,
+                       height: t.height,
+                       colors: t.colors,
+                       skuSource: t.skuSource || 'vendorSKU',
+                       elements: t.elements,
+                     });
+                   }}>
+                     <SelectTrigger>
+                       <SelectValue placeholder="Choose saved template" />
+                     </SelectTrigger>
+                     <SelectContent>
+                       {(labelTemplates || []).map((t: any) => (
+                         <SelectItem key={String(t._id)} value={String(t._id)}>
+                           {t.name}{t.isActive ? ' (Active)' : ''}
+                         </SelectItem>
+                       ))}
+                     </SelectContent>
+                   </Select>
+                   <div className="mt-2 flex items-center gap-2">
+                     <Button size="sm" variant="outline" onClick={async () => {
+                       if (!currentTemplateId) return;
+                       try {
+                         const res = await fetch('/api/inventory/label-templates', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: currentTemplateId, setActive: true }) });
+                         const json = await res.json();
+                         if (json?.success) {
+                           setLabelTemplates(json.templates || []);
+                           if (json.active) setActiveLabelTemplate(json.active);
+                           toast.success('Active template set');
+                         } else {
+                           toast.error(json?.error || 'Failed to set active');
+                         }
+                       } catch {
+                         toast.error('Failed to set active');
+                       }
+                     }}>Set Active</Button>
+                     <Button size="sm" variant="destructive" onClick={async () => {
+                       if (!currentTemplateId) return;
+                       try {
+                         const res = await fetch(`/api/inventory/label-templates?id=${encodeURIComponent(currentTemplateId)}`, { method: 'DELETE' });
+                         const json = await res.json();
+                         if (json?.success) {
+                           setLabelTemplates(json.templates || []);
+                           setCurrentTemplateId(json.active? String(json.active._id) : '');
+                           if (json.active) setActiveLabelTemplate(json.active);
+                           toast.success('Template deleted');
+                         } else {
+                           toast.error(json?.error || 'Failed to delete template');
+                         }
+                       } catch {
+                         toast.error('Failed to delete template');
+                       }
+                     }}>Delete</Button>
+                   </div>
+                 </div>
+
+                 <div>
+                   <Label>Medallion Image (default: /tgl.png)</Label>
+                   <div className="flex items-center gap-2">
+                     <Input value={labelTemplate.elements.logo.src || ''} onChange={(e) => setLabelTemplate(prev => ({ ...prev, elements: { ...prev.elements, logo: { ...prev.elements.logo, src: e.target.value } } }))} placeholder="Enter image URL (https://...) or leave blank" />
+                     <Button type="button" variant="outline" size="sm" onClick={() => medallionFileRef.current?.click()}>Upload</Button>
+                     <input ref={medallionFileRef} className="hidden" type="file" accept="image/*" onChange={async (e) => {
+                       const file = e.target.files?.[0];
+                       if (!file) return;
+                       const reader = new FileReader();
+                       reader.onload = () => {
+                         const dataUrl = String(reader.result || '');
+                         setLabelTemplate(prev => ({ ...prev, elements: { ...prev.elements, logo: { ...prev.elements.logo, src: dataUrl } } }));
+                       };
+                       reader.readAsDataURL(file);
+                     }} />
+                   </div>
+                   <div className="mt-2 rounded-lg border bg-white/50 dark:bg-slate-900/40 backdrop-blur-md shadow-sm p-2 flex items-center gap-3">
+                     <div className="w-12 h-12 rounded-lg overflow-hidden ring-1 ring-white/30 dark:ring-slate-800/50 bg-gradient-to-br from-orange-100 to-orange-200 dark:from-orange-500/20 dark:to-orange-600/10 flex items-center justify-center">
+                       <img src={(labelTemplate.elements.logo.src || '/tgl.png')} onError={(e:any)=>{ e.currentTarget.src='/tgl.png'; }} className="w-full h-full object-contain" alt="medallion"/>
+                     </div>
+                     <div className="text-xs text-muted-foreground">Preview • glassmorphism</div>
+                   </div>
+                 </div>
+
                  {/* Element Toggle Controls */}
                  <div className="space-y-4">
                    <Label className="text-sm font-semibold">Label Elements</Label>
+                   <div className="grid grid-cols-2 gap-2">
+                     <Button type="button" size="sm" variant="outline" onClick={() => setConfigModal('logo')} title="Medallion">
+                       <Palette className="h-4 w-4" />
+                     </Button>
+                     <Button type="button" size="sm" variant="outline" onClick={() => setConfigModal('qrCode')} title="QR Code">
+                       <QrCode className="h-4 w-4" />
+                     </Button>
+                     <Button type="button" size="sm" variant="outline" onClick={() => setConfigModal('itemName')} title="Item Name">
+                       <Type className="h-4 w-4" />
+                     </Button>
+                     <Button type="button" size="sm" variant="outline" onClick={() => setConfigModal('metadata')} title="Metadata">
+                       <FileText className="h-4 w-4" />
+                     </Button>
+                   </div>
                    
                    {/* Logo Controls */}
                    <div className="border rounded-lg p-3 space-y-2">
@@ -5925,7 +6528,7 @@ export default function InventoryPage() {
                              }
                            }))}
                          />
-                         <span className="font-medium">🏅 TGL Medallion</span>
+                         <span className="font-medium">TGL Medallion</span>
                        </label>
                      </div>
                      {labelTemplate.elements.logo.enabled && (
@@ -5979,7 +6582,7 @@ export default function InventoryPage() {
                              }
                            }))}
                          />
-                         <span className="font-medium">📱 QR Code</span>
+                         <span className="font-medium">QR Code</span>
                        </label>
                      </div>
                      {labelTemplate.elements.qrCode.enabled && (
@@ -6033,7 +6636,7 @@ export default function InventoryPage() {
                              }
                            }))}
                          />
-                         <span className="font-medium">📝 Item Name</span>
+                         <span className="font-medium">Item Name</span>
                        </label>
                      </div>
                      {labelTemplate.elements.itemName.enabled && (
@@ -6069,7 +6672,7 @@ export default function InventoryPage() {
                              }
                            }))}
                          />
-                         <span className="font-medium">📋 Metadata</span>
+                         <span className="font-medium">Metadata</span>
                        </label>
                      </div>
                      {labelTemplate.elements.metadata.enabled && (
@@ -6096,14 +6699,14 @@ export default function InventoryPage() {
                {/* Interactive Design Canvas */}
                <div className="col-span-2 space-y-4">
                  <div className="flex items-center justify-between">
-                   <Label className="text-lg font-semibold">🎨 Design Canvas</Label>
+                   <Label className="text-lg font-semibold">Design Canvas</Label>
                    <div className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/20 px-3 py-1 rounded-full">
                      💡 Drag elements to reposition them
                    </div>
                  </div>
-                 <div className="border-2 border-dashed border-border rounded-lg p-6 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+                 <div className="border border-white/20 dark:border-slate-800/40 rounded-xl p-6 flex items-center justify-center bg-white/50 dark:bg-slate-900/40 backdrop-blur-md shadow-xl">
                    <div 
-                     className="relative border-2 border-border bg-white shadow-lg overflow-hidden"
+                     className="relative border border-white/30 dark:border-slate-800/40 bg-white/80 dark:bg-slate-900/60 shadow-lg overflow-hidden rounded-lg"
                      style={{
                        width: `${Math.min(labelTemplate.width, 400)}px`,
                        height: `${Math.min(labelTemplate.height, 300)}px`,
@@ -6114,9 +6717,9 @@ export default function InventoryPage() {
                      onMouseLeave={handleMouseUp}
                    >
                      {/* Grid Guidelines */}
-                     <div className="absolute inset-0 opacity-20" style={{
-                       backgroundImage: 'radial-gradient(circle, #94a3b8 1px, transparent 1px)',
-                       backgroundSize: '10px 10px'
+                     <div className="absolute inset-0 opacity-40 [mask-image:radial-gradient(circle_at_center,black,transparent_70%)]" style={{
+                       backgroundImage: 'linear-gradient(0deg, rgba(148,163,184,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.15) 1px, transparent 1px)',
+                       backgroundSize: '12px 12px'
                      }} />
 
                      {/* TGL Medallion Logo */}
@@ -6133,18 +6736,9 @@ export default function InventoryPage() {
                          }}
                          onMouseDown={(e) => handleMouseDown(e, 'logo')}
                        >
-                         <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-sm">
-                           <defs>
-                             <linearGradient id="medallionGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                               <stop offset="0%" stopColor="#f97316" />
-                               <stop offset="100%" stopColor="#ea580c" />
-                             </linearGradient>
-                           </defs>
-                           <circle cx="50" cy="50" r="45" fill="url(#medallionGradient)" stroke="#fff" strokeWidth="3"/>
-                           <circle cx="50" cy="50" r="35" fill="none" stroke="#fff" strokeWidth="1" opacity="0.6"/>
-                           <text x="50" y="35" textAnchor="middle" fill="white" fontSize="16" fontWeight="bold">TGL</text>
-                           <text x="50" y="65" textAnchor="middle" fill="white" fontSize="8" opacity="0.9">MEDALLION</text>
-                         </svg>
+                         <div className="w-full h-full rounded-lg overflow-hidden ring-1 ring-white/20 dark:ring-slate-800/40 bg-white/40 dark:bg-slate-800/50 backdrop-blur-md">
+                           <img src={(labelTemplate.elements.logo.src || '/tgl.png')} onError={(e:any)=>{ e.currentTarget.src='/tgl.png'; }} className="w-full h-full object-contain" alt="medallion"/>
+                         </div>
                        </div>
                      )}
 
@@ -6250,7 +6844,21 @@ export default function InventoryPage() {
                >
                  Reset to Default
                </Button>
-               <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+               <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={async () => {
+                 try {
+                   const res = await fetch('/api/inventory/label-templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template: labelTemplate }) });
+                   const json = await res.json();
+                   if (json?.success) {
+                     setLabelTemplates(json.templates || []);
+                     setActiveLabelTemplate(json.active || labelTemplate);
+                     toast.success('Template saved');
+                   } else {
+                     toast.error(json?.error || 'Failed to save template');
+                   }
+                 } catch (e) {
+                   toast.error('Failed to save template');
+                 }
+               }}>
                  <Save className="mr-2 h-4 w-4" />
                  Save Template
                </Button>
@@ -6997,16 +7605,19 @@ export default function InventoryPage() {
                   <div>
                     <Label>Current Stock</Label>
                         <Input value={detailViewItem.currentStock ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, currentStock: parseFloat(e.target.value) || 0 }))} type="number" />
+                        <div className="text-xs text-muted-foreground mt-1">in {detailViewItem.unit}</div>
                   </div>
                   <div>
                     <Label>Min Threshold</Label>
                         <Input value={detailViewItem.minThreshold ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, minThreshold: parseFloat(e.target.value) || 0 }))} type="number" />
+                        <div className="text-xs text-muted-foreground mt-1">in {detailViewItem.unit}</div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Max Capacity</Label>
                         <Input value={detailViewItem.maxCapacity ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, maxCapacity: parseFloat(e.target.value) || 0 }))} type="number" />
+                        <div className="text-xs text-muted-foreground mt-1">in {detailViewItem.unit}</div>
                   </div>
                   <div>
                     <Label>Location</Label>
@@ -7021,10 +7632,12 @@ export default function InventoryPage() {
                   <div>
                     <Label>Reorder Point</Label>
                             <Input value={detailViewItem.reorderPoint ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, reorderPoint: parseFloat(e.target.value) || 0 }))} type="number" />
+                            <div className="text-xs text-muted-foreground mt-1">in {detailViewItem.unit}</div>
                   </div>
                   <div>
                     <Label>Reorder Quantity</Label>
                             <Input value={detailViewItem.reorderQuantity ?? ''} onChange={(e) => setDetailViewItem(prev => ({ ...prev, reorderQuantity: parseFloat(e.target.value) || 0 }))} type="number" />
+                            <div className="text-xs text-muted-foreground mt-1">in {detailViewItem.unit}</div>
                   </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -7055,12 +7668,12 @@ export default function InventoryPage() {
                   <Label>QR Code for this Item</Label>
                       <div className="flex items-center gap-4 mt-2">
                         <div className="bg-white p-2 rounded-md">
-                          <QRCodeSVG value={selectedItem.qrCode || selectedItem.id} size={64} />
+                          <QRCodeSVG value={String(selectedItem.qrCode || selectedItem.id)} size={64} />
                         </div>
-                        <Button variant="outline" onClick={() => setIsLabelDesignerOpen(true)}>
-                      <Printer className="mr-2 h-4 w-4" />
-                      Print Label
-                    </Button>
+                        <Button variant="outline" onClick={() => printLabel(selectedItem as any)}>
+                          <Printer className="mr-2 h-4 w-4" />
+                          Print Label
+                        </Button>
                   </div>
                 </div>
                   </div>

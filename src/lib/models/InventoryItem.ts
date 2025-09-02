@@ -170,6 +170,11 @@ const inventoryItemSchema = new mongoose.Schema({
     default: 1,
     min: 1
   },
+  minimumOrderUnit: {
+    type: String,
+    enum: ['case', 'each', 'lb', 'oz', 'gal', 'l'],
+    default: 'case'
+  },
   pricePerCase: {
     type: Number,
     default: 0,

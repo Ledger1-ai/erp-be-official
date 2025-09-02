@@ -1,6 +1,7 @@
 import { connectDB } from '@/lib/db/connection';
 import AIInsight from '@/lib/models/AIInsight';
 import { VaruniAgent, createGraphQLTool } from './varuni-agent';
+import { upsertEmbedding } from './rag';
 
 let schedulerInitialized = false;
 
@@ -72,6 +73,17 @@ export function initVaruniScheduler(): void {
 
 	setTimeout(() => {
 		runNightlyInsights();
+		// Optional: trigger reindex nightly after insights
+		if (process.env.VARUNI_RAG_ENABLED === 'true') {
+			setTimeout(async () => {
+				try {
+					await fetch((process.env.NEXT_PUBLIC_GRAPHQL_URL || 'http://localhost:3000') + '/api/varuni/reindex', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+					console.log('[Varuni Scheduler] Nightly reindex triggered');
+				} catch (e) {
+					console.warn('[Varuni Scheduler] Nightly reindex failed', e);
+				}
+			}, 5_000);
+		}
 		// Every 24 hours afterwards
 		setInterval(runNightlyInsights, 24 * 60 * 60 * 1000);
 	}, Math.max(5_000, msUntilMidnight));

@@ -74,7 +74,9 @@ export async function POST(request: NextRequest) {
           const pack = (columns[7] || '').trim();
           const size = (columns[8] || '').trim();
           const unit = (columns[9] || '').trim();
-          packSizeLike = pack || '';
+          // Build a normalized Pack/Size string like "6/12.9OZ" or "4/5LB"
+          const sizePart = `${(size || '').toString().trim()}${(unit || '').toString().trim()}`.replace(/\s+/g, '');
+          packSizeLike = (pack || sizePart) ? `${pack || '1'}/${sizePart || '1EA'}` : '';
           brand = (columns[10] || '').trim();
           mfrNum = (columns[11] || '').trim();
           description = (columns[12] || '').trim();
@@ -118,25 +120,57 @@ export async function POST(request: NextRequest) {
         console.log(`✅ Parsing item ${parsedItems.length + 1}: ${cleanDescription} (Brand: ${brand || 'None'})`);
 
         // Smart price parsing
-        const caseSize = parseCasePackSize(packSizeLike);
+        const packInfo = parsePackSizeDetails(packSizeLike);
+        const caseSize = packInfo.totalUnits; // total content in parsed unit
+        const perEachUnits = (caseSize && packInfo.packs) ? (caseSize / Math.max(1, packInfo.packs)) : (packInfo.sizeValue || 1);
         const casePriceNum = parsePrice(casePrice);
         const eachPriceNum = parsePrice(eachPrice);
 
         // Compute quantities from case/split
         const caseQtyNum = Number(parseFloat((caseQty || '0').toString().replace(/[^0-9.\-]/g, '')) || 0);
         const splitQtyNum = Number(parseFloat((splitQty || '0').toString().replace(/[^0-9.\-]/g, '')) || 0);
-        const computedUnits = (Number.isFinite(caseQtyNum) ? caseQtyNum : 0) * (Number.isFinite(caseSize) ? caseSize : 1) + (Number.isFinite(splitQtyNum) ? splitQtyNum : 0);
+        // Simplified counting rule:
+        // - Primary count uses Case Qty; if Case Qty is 0, use Split Qty as number of cases
+        // - Units per case are derived from pack/size (packs * normalized size)
+        const effectiveCases = (Number.isFinite(caseQtyNum) && caseQtyNum > 0) ? caseQtyNum : (Number.isFinite(splitQtyNum) ? splitQtyNum : 0);
+        const computedUnits = (Number.isFinite(effectiveCases) ? effectiveCases : 0) * (Number.isFinite(caseSize) ? caseSize : 1);
 
         // Determine best pricing strategy
         let finalCostPerUnit = 0;
         let finalPricePerCase = casePriceNum;
 
         if (eachPriceNum > 0) {
-          finalCostPerUnit = eachPriceNum;
-          finalPricePerCase = casePriceNum > 0 ? casePriceNum : (eachPriceNum * (caseSize || 1));
-        } else if (casePriceNum > 0 && caseSize > 0) {
-          finalCostPerUnit = casePriceNum / caseSize;
-          finalPricePerCase = casePriceNum;
+          // Special MARKET case: Case Qty is 0 and Case $ is MARKET/blank ⇒ Each $ is the total for one full pack (caseSize)
+          const casePriceLooksMarket = !casePrice || /MARKET/i.test(casePrice) || !(casePriceNum > 0);
+          const eachIsCaseTotal = (caseQtyNum === 0) && casePriceLooksMarket;
+          if (eachIsCaseTotal) {
+            // Treat Each $ as total for (packs * sizeValue) units
+            const unitsInThisEach = (caseSize || 1);
+            finalCostPerUnit = unitsInThisEach > 0 ? (eachPriceNum / unitsInThisEach) : eachPriceNum;
+            finalPricePerCase = eachPriceNum; // one each == one case equivalent
+          } else {
+            // Normal interpretation: Each $ is per split/pack (e.g., per 5 lb in 6/5 LB)
+            const unitsPerEach = perEachUnits || 1;
+            finalCostPerUnit = unitsPerEach > 0 ? (eachPriceNum / unitsPerEach) : eachPriceNum;
+            // If case price is MARKET/blank, synthesize from per-unit * packs*size
+            finalPricePerCase = casePriceNum > 0 ? casePriceNum : (finalCostPerUnit * (caseSize || 1));
+          }
+        } else if (casePriceNum > 0) {
+          // If #AVG pack, interpret Case $ as price per lb (unit weight basis)
+          if (packInfo.isAvgWeight && packInfo.unit === 'lb') {
+            finalCostPerUnit = casePriceNum; // price per lb
+            finalPricePerCase = finalCostPerUnit * (caseSize || 1);
+          } else if (caseSize > 0) {
+            finalCostPerUnit = casePriceNum / caseSize; // regular per-unit from case price
+            finalPricePerCase = casePriceNum;
+          }
+        } else if (perLb && packInfo.family === 'weight') {
+          const perLbNum = parsePrice(perLb);
+          if (perLbNum > 0) {
+            // If our unit is lb, use directly; if oz, convert
+            if (packInfo.unit === 'lb') finalCostPerUnit = perLbNum;
+            else if (packInfo.unit === 'oz') finalCostPerUnit = perLbNum / 16;
+          }
         }
 
         console.log(`💰 Pricing for ${cleanDescription}: Case=$${casePriceNum} (${casePrice}) Each=$${eachPriceNum} (${eachPrice}) → Final: $${finalCostPerUnit}/each`);
@@ -152,7 +186,7 @@ export async function POST(request: NextRequest) {
           costPerUnit: finalCostPerUnit || 0,
           vendorCode: mfrNum || '',
           supplier: 'Sysco',
-          unit: 'each',
+          unit: packInfo.unit || 'each',
           category: mapSyscoCategory(syscoCategoryText || recordType, `${brand || ''} ${description || ''}`.trim(), description || ''),
           caseQty: caseQtyNum,
           splitQty: splitQtyNum,
@@ -200,6 +234,7 @@ export async function POST(request: NextRequest) {
               ['syscoCategory', existing.syscoCategory, item.syscoCategory],
               ['pricePerCase', Number(existing.pricePerCase || 0), Number(item.pricePerCase || 0)],
               ['costPerUnit', Number(existing.costPerUnit || 0), Number(item.costPerUnit || 0)],
+              ['unit', existing.unit, item.unit],
               ['brand', existing.brand, item.brand],
               ['description', existing.description, item.description],
             ];
@@ -207,6 +242,12 @@ export async function POST(request: NextRequest) {
               const hasOld = typeof oldVal === 'number' ? oldVal > 0 : !!(oldVal && String(oldVal).trim());
               const hasNew = typeof newVal === 'number' ? newVal > 0 : !!(newVal && String(newVal).trim());
               if (!hasOld && hasNew) enrichmentFields.push(field);
+            }
+            // Special-case: surface unit mismatch even if both are present
+            const exUnit = String(existing.unit || '').trim().toLowerCase();
+            const csvUnit = String((item as any).unit || '').trim().toLowerCase();
+            if (csvUnit && exUnit && exUnit !== csvUnit && !enrichmentFields.includes('unit')) {
+              enrichmentFields.push('unit');
             }
           }
           
@@ -216,7 +257,8 @@ export async function POST(request: NextRequest) {
               id: existing._id,
               name: existing.name,
               syscoSKU: existing.syscoSKU,
-              currentStock: existing.currentStock
+              currentStock: existing.currentStock,
+              unit: existing.unit
             } : null,
             isDuplicate: !!existing,
             canEnrich: existing ? enrichmentFields.length > 0 : false,
@@ -240,60 +282,72 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'import') {
-      // Get selected items to import
+      // Get selected rows from the UI
       const selectedIndices = JSON.parse(formData.get('selectedItems') as string || '[]');
-      const duplicateResolutions = JSON.parse((formData.get('duplicateResolutions') as string) || '{}');
-      const enrichmentResolutions = JSON.parse((formData.get('enrichmentResolutions') as string) || '{}');
-      const itemsToImport = selectedIndices.map((index: number) => parsedItems[index]);
-      
+      const duplicateResolutions = JSON.parse((formData.get('duplicateResolutions') as string) || '{}'); // { SUPC: 'replace'|'sum' }
+      const enrichmentResolutions = JSON.parse((formData.get('enrichmentResolutions') as string) || '{}'); // { SUPC: { field: true } }
+
       const imported: any[] = [];
       const importErrors: any[] = [];
 
-      // First, process duplicates replacement requests regardless of selection
+      // Split selected rows into duplicates to update and new items to create
+      const duplicatesToProcess: Array<{ supc: string; item: any; existing: any }> = [];
+      const newItemsToCreate: any[] = [];
+      for (const idx of selectedIndices) {
+        const item = parsedItems[idx];
+        if (!item) continue;
+        const supc = String(item?.syscoSUPC || '').trim();
+        const existing = await InventoryItem.findOne({
+          $or: [
+            { syscoSKU: supc },
+            { name: { $regex: new RegExp(item.name, 'i') } }
+          ]
+        });
+        if (existing) duplicatesToProcess.push({ supc, item, existing });
+        else newItemsToCreate.push(item);
+      }
+
+      // Process only SELECTED duplicates according to chosen action
       try {
-        for (const dup of parsedItems) {
-          const supc = String(dup?.syscoSUPC || '').trim();
-          const wantsReplace = !!duplicateResolutions[supc];
+        for (const { supc, item: dup, existing } of duplicatesToProcess) {
+          const mode = String(duplicateResolutions[supc] || 'replace');
+          const wantsReplace = mode === 'replace' || mode === 'sum';
           const wantsEnrich = !!enrichmentResolutions[supc];
           if (!wantsReplace) continue;
-          const existing = await InventoryItem.findOne({
-            $or: [
-              { syscoSKU: supc },
-              { name: { $regex: new RegExp(dup.name, 'i') } }
-            ]
-          });
-          if (existing) {
-            const before = Number(existing.currentStock || 0);
-            const after = Number(dup.computedUnits || 0);
-            existing.currentStock = after;
-            existing.lastUpdated = new Date();
-            if (wantsEnrich) {
-              // Apply enrichment for missing fields
-              const applyIfMissing = (field: string, newVal: any) => {
-                const oldVal: any = (existing as any)[field];
-                const hasOld = typeof oldVal === 'number' ? oldVal > 0 : !!(oldVal && String(oldVal).trim());
-                const hasNew = typeof newVal === 'number' ? newVal > 0 : !!(newVal && String(newVal).trim());
-                if (!hasOld && hasNew) (existing as any)[field] = newVal;
-              };
-              applyIfMissing('syscoSKU', dup.syscoSUPC);
-              applyIfMissing('vendorSKU', dup.syscoSUPC);
-              applyIfMissing('casePackSize', Number(dup.casePackSize || 0));
-              applyIfMissing('vendorCode', dup.vendorCode);
-              applyIfMissing('syscoCategory', dup.syscoCategory);
-              applyIfMissing('pricePerCase', Number(dup.pricePerCase || 0));
-              applyIfMissing('costPerUnit', Number(dup.costPerUnit || 0));
-              applyIfMissing('brand', dup.brand);
-              applyIfMissing('description', dup.description);
-            }
-            await existing.save();
-            imported.push({ id: existing._id, name: existing.name, syscoSKU: existing.syscoSKU, replacedCount: true, before, after });
+          const before = Number(existing.currentStock || 0);
+          const importedUnits = Number(dup.computedUnits || 0);
+          const after = mode === 'sum' ? (before + importedUnits) : importedUnits;
+          existing.currentStock = after;
+          existing.lastUpdated = new Date();
+          if (wantsEnrich) {
+            const allow = enrichmentResolutions[supc] || {};
+            const applyIfMissing = (field: string, newVal: any) => {
+              if (!allow[field]) return;
+              const oldVal: any = (existing as any)[field];
+              const hasOld = typeof oldVal === 'number' ? oldVal > 0 : !!(oldVal && String(oldVal).trim());
+              const hasNew = typeof newVal === 'number' ? newVal > 0 : !!(newVal && String(newVal).trim());
+              if (!hasOld && hasNew) (existing as any)[field] = newVal;
+            };
+            applyIfMissing('syscoSKU', dup.syscoSUPC);
+            applyIfMissing('vendorSKU', dup.syscoSUPC);
+            applyIfMissing('casePackSize', Number(dup.casePackSize || 0));
+            applyIfMissing('vendorCode', dup.vendorCode);
+            applyIfMissing('syscoCategory', dup.syscoCategory);
+            applyIfMissing('pricePerCase', Number(dup.pricePerCase || 0));
+            applyIfMissing('costPerUnit', Number(dup.costPerUnit || 0));
+            applyIfMissing('unit', dup.unit);
+            applyIfMissing('brand', dup.brand);
+            applyIfMissing('description', dup.description);
           }
+          await existing.save();
+          imported.push({ id: existing._id, name: existing.name, syscoSKU: existing.syscoSKU, replacedCount: true, before, after });
         }
       } catch (e: any) {
         importErrors.push({ item: 'duplicates', error: e?.message || 'Failed to apply duplicate replacements' });
       }
 
-      for (const item of itemsToImport) {
+      // Create only selected NEW items
+      for (const item of newItemsToCreate) {
         try {
           // Check if item already exists
           const existing = await InventoryItem.findOne({
@@ -327,9 +381,11 @@ export async function POST(request: NextRequest) {
             vendorCode: item.vendorCode,
             supplier: item.supplier,
             unit: item.unit,
-            currentStock: 0, // Keep 0 for new items to avoid unintended inventory jumps
+            currentStock: Number(item.computedUnits || 0),
             minThreshold: 10, // Default threshold
             maxCapacity: 100, // Default capacity
+            minimumOrderQty: 1,
+            minimumOrderUnit: 'case',
             preferredVendor: 'Sysco',
             notes: `Imported from Sysco CSV on ${new Date().toISOString()}`,
             createdBy: new mongoose.Types.ObjectId('507f1f77bcf86cd799439011') // System user ID
@@ -374,7 +430,7 @@ export async function POST(request: NextRequest) {
         items: imported,
         errors: importErrors,
         summary: {
-          attempted: itemsToImport.length,
+          attempted: selectedIndices.length,
           successful: imported.length,
           failed: importErrors.length
         }
@@ -427,6 +483,45 @@ function parseCasePackSize(packSize: string): number {
   // Extract number from strings like "4/1GAL", "12/1.5 LT", etc.
   const match = packSize.match(/^(\d+)/);
   return match ? parseInt(match[1]) : 1;
+}
+
+// Parse Pack/Size like "4/10#AVG", "1/500CT", "4/1GAL", "6/12.9OZ", "9/.5 GAL"
+// Returns { packs, sizeValue, unit, family, totalUnits }
+function parsePackSizeDetails(packSize: string): { packs: number; sizeValue: number; unit: string; family: 'count'|'weight'|'volume'|'unknown'; totalUnits: number; isAvgWeight?: boolean } {
+  if (!packSize) return { packs: 1, sizeValue: 1, unit: 'each', family: 'unknown', totalUnits: 1 };
+  const cleaned = packSize.replace(/\s+/g, '').toUpperCase();
+  const m = cleaned.match(/^(\d+)\/(.+)$/);
+  const packs = m ? parseInt(m[1]) : 1;
+  const sizePart = m ? m[2] : cleaned;
+
+  // Examples: 10#AVG, 1GAL, 12.9OZ, 500CT, .5GAL
+  const sizeMatch = sizePart.match(/([0-9]*\.?[0-9]+)\s*([A-Z.#\s]+)/);
+  const sizeValue = sizeMatch ? parseFloat(sizeMatch[1]) : 1;
+  const unitRaw = (sizeMatch ? sizeMatch[2] : 'EA').toUpperCase().replace(/\s+/g, '').replace(/\./g, '');
+
+  // Normalize to CSV unit tokens but DO NOT convert across systems
+  let unit: string = 'each';
+  let family: 'count'|'weight'|'volume'|'unknown' = 'unknown';
+  let isAvgWeight = false;
+  if (/^(CT|COUNT|EA|EACH|PCS|PIECE|PIECES|PK|PACKS?)$/.test(unitRaw)) { unit = 'ct'; family = 'count'; }
+  else if (/^(LB|LBS|POUND|POUNDS|#|#AVG|AVG)$/.test(unitRaw)) { unit = 'lb'; family = 'weight'; isAvgWeight = /AVG/.test(unitRaw); }
+  else if (/^(OZ|OUNCE|OUNCES)$/.test(unitRaw)) { unit = 'oz'; family = 'weight'; }
+  else if (/^(KG|KGS|KILOGRAM|KILOGRAMS)$/.test(unitRaw)) { unit = 'kg'; family = 'weight'; }
+  else if (/^(G|GM|GRAM|GRAMS)$/.test(unitRaw)) { unit = 'g'; family = 'weight'; }
+  else if (/^(GAL|GALLON|GALLONS)$/.test(unitRaw)) { unit = 'gal'; family = 'volume'; }
+  else if (/^(ML|MILLILITER|MILLILITERS)$/.test(unitRaw)) { unit = 'ml'; family = 'volume'; }
+  else if (/^(L|LT|LTR|LITER|LITRE|LITERS|LITRES)$/.test(unitRaw)) { unit = 'l'; family = 'volume'; }
+  else if (/^(FLOZ|FOZ|FLUIDOUNCE|FLUIDOUNCES)$/.test(unitRaw)) { unit = 'fl_oz'; family = 'volume'; }
+  else if (/^(QT|QTS|QUART|QUARTS)$/.test(unitRaw)) { unit = 'qt'; family = 'volume'; }
+  else if (/^(PT|PTS|PINT|PINTS)$/.test(unitRaw)) { unit = 'pt'; family = 'volume'; }
+  else if (/^(CUP|CUPS)$/.test(unitRaw)) { unit = 'cup'; family = 'volume'; }
+  else { unit = 'each'; family = 'unknown'; }
+
+  // No cross-unit conversion here. Keep size in original unit basis.
+  const perPackUnits = sizeValue;
+  const totalUnits = Math.max(1, packs) * Math.max(1, perPackUnits);
+  // Return the original unit token (lowercase) for display/storage
+  return { packs: Math.max(1, packs), sizeValue, unit, family, totalUnits, isAvgWeight };
 }
 
 // Helper function to parse price strings

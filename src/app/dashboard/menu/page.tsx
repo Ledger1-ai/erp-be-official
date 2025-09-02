@@ -6,9 +6,32 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardAction }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { listCompatibleUnits, convertQuantity, getUnitDef, baseUnitFor } from "@/lib/units";
+function buildModelsForInventory(invId: string, components: any[], invMap: Map<string, any>) {
+  const out: Array<ReturnType<typeof buildDimensionalAnalysisModel>> = [];
+  const push = (comp: any) => {
+    if (!comp || comp.kind !== 'inventory' || !comp.inventoryItem) return;
+    if (String(comp.inventoryItem) !== String(invId)) return;
+    const inv = invMap.get(String(comp.inventoryItem));
+    const invUnit = String(inv?.unit || 'each');
+    const fromUnit = String(comp.unit || invUnit);
+    const qty = Number(comp.quantity || 0);
+    // Only show analysis if mapping unit differs from primary unit
+    if (fromUnit !== invUnit) {
+      out.push(buildDimensionalAnalysisModel(qty, fromUnit, invUnit));
+    }
+  };
+  for (const c of (components || [])) {
+    if (c.kind === 'inventory') push(c);
+    else if (c.kind === 'menu' && Array.isArray(c.overrides) && c.overrides.length > 0) {
+      for (const oc of c.overrides) push(oc);
+    }
+  }
+  return out;
+}
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Link as LinkIcon, RefreshCw, EyeOff, Eye, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
-import { useIndexedMenus, useIndexMenus, useOrderTrackingStatus, useSetOrderTracking, useInventoryItems, useMenuMappings, useUpsertMenuMapping, useMenuItemCapacity, useMenuItemStock, useUpdateMenuItemStock, useMenuVisibility, useSetMenuVisibility } from "@/lib/hooks/use-graphql";
+import { useIndexedMenus, useIndexMenus, useOrderTrackingStatus, useSetOrderTracking, useInventoryItems, useMenuMappings, useUpsertMenuMapping, useMenuItemCapacity, useMenuItemStock, useUpdateMenuItemStock, useMenuVisibility, useSetMenuVisibility, useMenuItemCost, useGenerateRecipeDraft } from "@/lib/hooks/use-graphql";
 import { apolloClient } from "@/lib/apollo-client";
 import { GET_MENU_MAPPINGS } from "@/lib/hooks/use-graphql";
 //
@@ -210,8 +233,72 @@ export default function MenuPage() {
     return categoryItems.filter(i => i.name.toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q));
   }, [search, categoryItems]);
 
-  const { data: capacityData } = useMenuItemCapacity(selectedRestaurant || "", selectedItem?.guid || "", 1);
+  const { data: capacityData } = useMenuItemCapacity(selectedRestaurant || "", selectedItem?.guid || "", 1, activeModifierOptionGuid || undefined);
   const capacity = useMemo(() => capacityData?.menuItemCapacity || null, [capacityData]);
+  const { data: costData, loading: costLoading } = useMenuItemCost(selectedRestaurant || "", selectedItem?.guid || "");
+  const foodCost = useMemo(() => {
+    const c = Number(costData?.menuItemCost ?? NaN);
+    return Number.isFinite(c) ? c : null;
+  }, [costData?.menuItemCost]);
+
+  // Live, client-side COGS & capacity derived from current mapping edits (no save required)
+  const live = useMemo(() => {
+    try {
+      const perInv = new Map<string, { qtyInItemUnit: number; unit: string }>();
+      const addInventoryUsage = (invId: string, qty: number, unit: string) => {
+        const inv = invMap.get(String(invId));
+        if (!inv) return;
+        const itemUnit = String(inv.unit || 'each');
+        const q = convertQuantity(Number(qty || 0), String(unit || itemUnit), itemUnit);
+        const prev = perInv.get(String(invId)) || { qtyInItemUnit: 0, unit: itemUnit };
+        prev.qtyInItemUnit += q;
+        perInv.set(String(invId), prev);
+      };
+
+      const walk = (comp: any, multiplier: number) => {
+        if (!comp) return;
+        // Respect modifier filter: include base components always; include modifier-tagged only if active matches
+        if (comp.modifierOptionGuid && activeModifierOptionGuid && String(comp.modifierOptionGuid) !== String(activeModifierOptionGuid)) return;
+        if (comp.modifierOptionGuid && !activeModifierOptionGuid) return; // hide modifier-specific when none active
+        if (comp.kind === 'inventory' && comp.inventoryItem) {
+          const qty = Number(comp.quantity || 0) * multiplier;
+          addInventoryUsage(String(comp.inventoryItem), qty, String(comp.unit || 'each'));
+        } else if (comp.kind === 'menu') {
+          const factor = Number(comp.quantity || 1) * multiplier;
+          if (Array.isArray(comp.overrides) && comp.overrides.length > 0) {
+            for (const oc of comp.overrides) walk(oc, factor);
+          }
+          // If no overrides loaded, skip to avoid stale server dependence
+        }
+      };
+      for (const c of (components || [])) walk(c, 1);
+
+      const requirements = Array.from(perInv.entries()).map(([invId, v]) => {
+        const inv = invMap.get(String(invId));
+        const stock = Number(inv?.currentStock || 0);
+        return { inventoryItem: String(invId), unit: v.unit, quantityPerOrder: v.qtyInItemUnit, available: stock };
+      });
+      let capacityVal = Infinity; let allHaveStock = true;
+      for (const r of requirements) {
+        const possible = r.quantityPerOrder > 0 ? Math.floor(Number(r.available || 0) / r.quantityPerOrder) : 0;
+        if (Number(r.available || 0) <= 0) allHaveStock = false;
+        if (r.quantityPerOrder > 0) capacityVal = Math.min(capacityVal, possible);
+      }
+      if (capacityVal === Infinity) capacityVal = 0;
+      if (!allHaveStock) capacityVal = 0;
+
+      // Live COGS per order
+      const totalCost = requirements.reduce((s, r) => {
+        const inv = invMap.get(String(r.inventoryItem));
+        const cpu = Number(inv?.costPerUnit || 0);
+        return s + Number(r.quantityPerOrder || 0) * cpu;
+      }, 0);
+
+      return { requirements, capacity: capacityVal, allHaveStock, totalCost };
+    } catch {
+      return { requirements: [] as any[], capacity: 0, allHaveStock: false, totalCost: null as number | null };
+    }
+  }, [components, invMap, activeModifierOptionGuid]);
   const allGuids = useMemo(() => Array.from(new Set((flatItems || []).map(i => i.guid))), [flatItems]);
   const { data: stockData, refetch: refetchStock } = useMenuItemStock(selectedRestaurant || "", allGuids, undefined);
   const [updateMenuItemStock] = useUpdateMenuItemStock();
@@ -223,12 +310,14 @@ export default function MenuPage() {
     try {
       const cleanComponents = stripTypenameDeep(components);
       const cleanSteps = stripTypenameDeep(recipeSteps);
+      const cleanMeta = stripTypenameDeep(recipeMeta);
       await upsertMenuMapping({ variables: { input: {
         restaurantGuid: selectedRestaurant,
         toastItemGuid: selectedItem.guid,
         toastItemName: selectedItem.name,
         components: cleanComponents,
         recipeSteps: cleanSteps,
+        recipeMeta: cleanMeta,
       } } });
       // Refetch to confirm persistence and refresh UI
       try { await refetchMapping(); } catch {}
@@ -244,9 +333,11 @@ export default function MenuPage() {
     if (doc) {
       setComponents(stripTypenameDeep(doc.components || []));
       setRecipeSteps(stripTypenameDeep(doc.recipeSteps || []));
+      setRecipeMeta(stripTypenameDeep((doc as any).recipeMeta || {}));
     } else {
       setComponents([]);
       setRecipeSteps([]);
+      setRecipeMeta({});
     }
     setActiveModifierOptionGuid(null);
   }, [existingMappingData?.menuMappings, selectedItem?.guid]);
@@ -269,6 +360,11 @@ export default function MenuPage() {
   };
 
   const [recipeSteps, setRecipeSteps] = useState<{ step: number; instruction: string; time?: number; notes?: string }[]>([]);
+  const [recipeMeta, setRecipeMeta] = useState<{ servings?: number; difficulty?: string; prepTime?: number; cookTime?: number; totalTime?: number; equipment?: string[]; miseEnPlace?: string[]; plating?: string; allergens?: string[]; tasteProfile?: string[]; priceyness?: number; cuisinePreset?: string; atmospherePreset?: string; notes?: string }>({});
+  const [draftPriceyness, setDraftPriceyness] = useState<number>(2);
+  const [draftCuisine, setDraftCuisine] = useState<string>('chef_standard');
+  const [draftAtmosphere, setDraftAtmosphere] = useState<string>('casual_modern');
+  const [generateRecipeDraft, { loading: drafting }] = useGenerateRecipeDraft();
   const addRecipeStep = () => {
     setRecipeSteps((prev) => [...prev, { step: (prev[prev.length - 1]?.step || 0) + 1, instruction: '' }]);
   };
@@ -504,7 +600,14 @@ export default function MenuPage() {
                   })()}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {components.map((c, idx) => (
+                    {components
+                      .map((c, originalIndex) => ({ c, originalIndex }))
+                      .filter(({ c }) => {
+                        if (activeModifierOptionGuid) return c.modifierOptionGuid && String(c.modifierOptionGuid) === String(activeModifierOptionGuid);
+                        return !c.modifierOptionGuid;
+                      })
+                      .map(({ c, originalIndex }) => (
+                      (() => { const idx = originalIndex; return (
                       <div key={idx} className="border rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <Badge variant="secondary">{c.kind === 'inventory' ? 'Inventory' : 'Menu'}</Badge>
@@ -527,11 +630,9 @@ export default function MenuPage() {
                               </div>
                             )}
                             <div className="text-[10px] text-muted-foreground mt-1">ID: {c.kind === 'inventory' ? c.inventoryItem : c.nestedToastItemGuid}</div>
-                            {c.modifierOptionGuid && (
-                              <div className="mt-1">
-                                <Badge variant="outline">Modifier: {optionByGuid.get(String(c.modifierOptionGuid))?.name || c.modifierOptionGuid}</Badge>
-                              </div>
-                            )}
+                            <div className="mt-1 flex items-center gap-2">
+                              <Badge variant="outline">{activeModifierOptionGuid ? `Modifier: ${optionByGuid.get(String(activeModifierOptionGuid))?.name || activeModifierOptionGuid}` : 'Base'}</Badge>
+                            </div>
                           </div>
                           <div className="flex flex-col gap-1">
                             <label className="text-xs text-muted-foreground">Quantity</label>
@@ -539,7 +640,26 @@ export default function MenuPage() {
                           </div>
                           <div className="flex flex-col gap-1">
                             <label className="text-xs text-muted-foreground">Unit</label>
-                            <Input value={c.unit} onChange={(e) => setComponents((prev) => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))} />
+                            {c.kind === 'inventory' ? (
+                              (() => {
+                                const inv = invMap.get(String(c.inventoryItem));
+                                const invUnit = String(inv?.unit || 'each');
+                                const options = listCompatibleUnits(invUnit);
+                                const value = options.includes(String(c.unit)) ? String(c.unit) : invUnit;
+                                return (
+                                  <Select value={value} onValueChange={(v) => setComponents((prev) => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select unit" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {options.map((u) => (<SelectItem key={u} value={u}>{u}</SelectItem>))}
+                                    </SelectContent>
+                                  </Select>
+                                );
+                              })()
+                            ) : (
+                              <Input value={c.unit} onChange={(e) => setComponents((prev) => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))} />
+                            )}
                           </div>
                           <div className="col-span-2 flex flex-col gap-1">
                             <label className="text-xs text-muted-foreground">Notes</label>
@@ -575,11 +695,30 @@ export default function MenuPage() {
                                         }))} />
                                       </div>
                                       <div className="col-span-3">
-                                        <Input value={oc.unit || ''} disabled={oc.kind !== 'inventory'} onChange={(e) => setComponents((prev) => prev.map((p, i) => {
-                                          if (i !== idx) return p;
-                                          const overrides = (p.overrides || []).map((x, j) => j === oidx ? { ...x, unit: e.target.value } : x);
-                                          return { ...p, overrides };
-                                        }))} />
+                                        {oc.kind === 'inventory' ? (
+                                          (() => {
+                                            const inv = invMap.get(String(oc.inventoryItem));
+                                            const invUnit = String(inv?.unit || 'each');
+                                            const options = listCompatibleUnits(invUnit);
+                                            const value = options.includes(String(oc.unit || '')) ? String(oc.unit) : invUnit;
+                                            return (
+                                              <Select value={value} onValueChange={(v) => setComponents((prev) => prev.map((p, i) => {
+                                                if (i !== idx) return p;
+                                                const overrides = (p.overrides || []).map((x, j) => j === oidx ? { ...x, unit: v } : x);
+                                                return { ...p, overrides };
+                                              }))}>
+                                                <SelectTrigger>
+                                                  <SelectValue placeholder="Select unit" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                  {options.map((u) => (<SelectItem key={u} value={u}>{u}</SelectItem>))}
+                                                </SelectContent>
+                                              </Select>
+                                            );
+                                          })()
+                                        ) : (
+                                          <Input value={oc.unit || ''} disabled onChange={() => {}} />
+                                        )}
                                       </div>
                                     </div>
                                   ))}
@@ -592,8 +731,9 @@ export default function MenuPage() {
                           )}
                         </div>
                       </div>
+                      ); })()
                     ))}
-                    <Button variant="outline" onClick={() => setComponents((prev) => [...prev, { kind: 'inventory', quantity: 1, unit: '' } as any])}><LinkIcon className="mr-2 h-4 w-4" />Add Ingredient</Button>
+                    <Button variant="outline" onClick={() => setComponents((prev) => [...prev, { kind: 'inventory', quantity: 1, unit: '', ...(activeModifierOptionGuid ? { modifierOptionGuid: activeModifierOptionGuid } : {}) } as any])}><LinkIcon className="mr-2 h-4 w-4" />Add Ingredient</Button>
                   </div>
 
                   <div className="flex gap-2">
@@ -611,7 +751,7 @@ export default function MenuPage() {
                         const q = invSearch.trim().toLowerCase();
                         const filteredInv = q ? items.filter((i: any) => (i.name || '').toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q)) : items;
                         return filteredInv.map((inv: any) => (
-                          <Button key={String(inv.id)} variant="ghost" className="w-full justify-between" onClick={() => setComponents((prev) => [...prev, { kind: 'inventory', inventoryItem: String(inv.id), quantity: 1, unit: inv.unit || '' } as any])}>
+                          <Button key={String(inv.id)} variant="ghost" className="w-full justify-between" onClick={() => setComponents((prev) => [...prev, { kind: 'inventory', inventoryItem: String(inv.id), quantity: 1, unit: inv.unit || '', ...(activeModifierOptionGuid ? { modifierOptionGuid: activeModifierOptionGuid } : {}) } as any])}>
                             <span className="text-left">
                               <span className="block text-sm text-foreground">{inv.name}</span>
                               <span className="block text-xs text-muted-foreground">{inv.category} · {inv.unit}</span>
@@ -652,12 +792,91 @@ export default function MenuPage() {
                   </div>
 
                   <div className="pt-2">
-                    <h4 className="font-medium mb-2">Estimated Capacity</h4>
+                    <h4 className="font-medium mb-2">COGS & Capacity</h4>
                     <div className="text-sm text-muted-foreground">
-                      {capacity ? (
+                      {selectedItem ? (
                         <>
-                          <div>Max orders from stock: <span className="font-semibold text-foreground">{capacity.capacity}</span></div>
-                          {!capacity.allHaveStock && <div className="text-red-600">Not all ingredients in stock</div>}
+                          <div>Max orders from stock: <span className="font-semibold text-foreground">{live.capacity}</span></div>
+                          {!live.allHaveStock && <div className="text-red-600">Not all ingredients in stock</div>}
+                          {/* Requirement breakdown */}
+                          <div className="mt-2 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">Food COGS per order:</span>
+                              <span className="ml-2 font-semibold text-foreground">{live.totalCost != null ? `$${live.totalCost.toFixed(2)}` : '—'}</span>
+                              {live.totalCost != null && selectedItem?.price != null && Number(selectedItem.price) > 0 && (
+                                <span className="ml-3 text-muted-foreground">Food Cost %: <span className="font-semibold text-foreground">{((live.totalCost / Number(selectedItem.price)) * 100).toFixed(1)}%</span></span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 space-y-2">
+                            {(() => {
+                              const reqs = (live.requirements || []).map((r: any) => {
+                                const inv = invMap.get(String(r.inventoryItem));
+                                const name = inv?.name || String(r.inventoryItem);
+                                const unit = String(r.unit || inv?.unit || 'each');
+                                const perOrder = Number(r.quantityPerOrder || 0);
+                                const stock = Number(r.available || 0);
+                                const possible = perOrder > 0 ? Math.floor(stock / perOrder) : 0;
+                                const costPerUnit = Number(inv?.costPerUnit || 0);
+                                const cost = perOrder * costPerUnit;
+                                const onlyForActiveModifier = (arr: any[]) => arr.filter((comp: any) => {
+                                  if (!comp) return false;
+                                  if (comp.modifierOptionGuid) {
+                                    if (!activeModifierOptionGuid) return false;
+                                    return String(comp.modifierOptionGuid) === String(activeModifierOptionGuid);
+                                  }
+                                  return true;
+                                });
+                                const models = buildModelsForInventory(String(r.inventoryItem), onlyForActiveModifier(components) as any, invMap);
+                                return { id: String(r.inventoryItem), name, unit, perOrder, stock, possible, costPerUnit, cost, models };
+                              });
+                              const totalCost = reqs.reduce((s: number, row: { cost: number }) => s + row.cost, 0);
+                              return (
+                                <>
+                                  {reqs.map((row: { id: string; name: string; unit: string; perOrder: number; stock: number; possible: number; costPerUnit: number; cost: number; models: Array<ReturnType<typeof buildDimensionalAnalysisModel>> }, idx: number) => (
+                                    <div key={row.id + ':' + idx} className="border rounded-md p-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <div>
+                                          <div className="text-foreground text-sm font-medium">{row.name}</div>
+                                          <div className="text-[10px] text-muted-foreground">ID: {row.id}</div>
+                                        </div>
+                                        <div className="flex items-center gap-3 text-xs">
+                                          <div><span className="text-muted-foreground">Per order:</span> <span className="text-foreground font-medium">{row.perOrder.toFixed(4)} {row.unit}</span></div>
+                                          <div><span className="text-muted-foreground">Stock:</span> <span className="text-foreground font-medium">{row.stock.toFixed(2)} {row.unit}</span></div>
+                                          <div><span className="text-muted-foreground">Possible:</span> <span className="text-foreground font-medium">{row.possible}</span></div>
+                                          <div><span className="text-muted-foreground">Cost:</span> <span className="text-foreground font-semibold">${row.cost.toFixed(2)}</span></div>
+                                        </div>
+                                      </div>
+                                      <div className="text-[10px] text-muted-foreground">Unit cost: ${row.costPerUnit.toFixed(4)} / {row.unit}</div>
+                                      {row.models.length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                          {row.models.map((m: ReturnType<typeof buildDimensionalAnalysisModel>, mi: number) => (
+                                            <DimensionalChain key={mi} model={m} />
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {reqs.length > 0 && (
+                                    <div className="border rounded-md p-3 bg-secondary/10">
+                                      <div className="flex items-center justify-between">
+                                        <div className="text-sm text-muted-foreground">Σ Ingredient COGS</div>
+                                        <div className="text-foreground font-semibold">${totalCost.toFixed(2)}
+                                          {selectedItem?.price != null && Number(selectedItem.price) > 0 && (
+                                            <span className="ml-2 text-[10px] text-muted-foreground">Food Cost % = {(totalCost / Number(selectedItem.price) * 100).toFixed(1)}%</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
+                            {(!live.requirements || live.requirements.length === 0) && (
+                              <div className="p-2 text-xs text-muted-foreground">No ingredient requirements found.</div>
+                            )}
+                          </div>
                         </>
                       ) : (
                         <div>—</div>
@@ -667,7 +886,47 @@ export default function MenuPage() {
 
                   {/* Recipe steps */}
                   <div className="pt-4">
-                    <h4 className="font-medium mb-2">Recipe Steps</h4>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium">Recipe & Steps</h4>
+                      <div className="flex items-center gap-2">
+                        <Select value={String(draftPriceyness)} onValueChange={(v) => setDraftPriceyness(Number(v))}>
+                          <SelectTrigger className="w-28"><SelectValue placeholder="Priceyness" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">$ (1)</SelectItem>
+                            <SelectItem value="2">$$ (2)</SelectItem>
+                            <SelectItem value="3">$$$ (3)</SelectItem>
+                            <SelectItem value="4">$$$$ (4)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Input className="w-40" placeholder="Cuisine preset" value={draftCuisine} onChange={(e) => setDraftCuisine(e.target.value)} />
+                        <Input className="w-48" placeholder="Atmosphere preset" value={draftAtmosphere} onChange={(e) => setDraftAtmosphere(e.target.value)} />
+                        <Button variant="outline" disabled={!selectedRestaurant || !selectedItem || drafting} onClick={async () => {
+                          if (!selectedRestaurant || !selectedItem) return;
+                          try {
+                            const { data } = await generateRecipeDraft({ variables: { restaurantGuid: selectedRestaurant, toastItemGuid: selectedItem.guid, priceyness: draftPriceyness, cuisinePreset: draftCuisine, atmospherePreset: draftAtmosphere } });
+                            const draft = data?.generateRecipeDraft;
+                            if (draft) {
+                              const steps = Array.isArray(draft.recipeSteps) ? draft.recipeSteps : [];
+                              setRecipeSteps(steps.map((s: any, idx: number) => ({ step: s.step ?? (idx + 1), instruction: String(s.instruction || ''), time: s.time != null ? Number(s.time) : undefined, notes: s.notes ? String(s.notes) : undefined })));
+                              setRecipeMeta({ ...(draft.recipeMeta || {}), priceyness: draft.recipeMeta?.priceyness ?? draftPriceyness, cuisinePreset: draft.recipeMeta?.cuisinePreset ?? draftCuisine, atmospherePreset: draft.recipeMeta?.atmospherePreset ?? draftAtmosphere });
+                            }
+                          } catch {}
+                        }}>{drafting ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Drafting</>) : 'Generate Draft'}</Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 text-sm">
+                      <Input placeholder="Servings" value={String(recipeMeta.servings ?? '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, servings: e.target.value ? Number(e.target.value) : undefined }))} />
+                      <Input placeholder="Difficulty (Easy/Medium/Hard)" value={String(recipeMeta.difficulty || '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, difficulty: e.target.value }))} />
+                      <Input placeholder="Prep Time (min)" value={String(recipeMeta.prepTime ?? '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, prepTime: e.target.value ? Number(e.target.value) : undefined }))} />
+                      <Input placeholder="Cook Time (min)" value={String(recipeMeta.cookTime ?? '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, cookTime: e.target.value ? Number(e.target.value) : undefined }))} />
+                      <Input placeholder="Total Time (min)" value={String(recipeMeta.totalTime ?? '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, totalTime: e.target.value ? Number(e.target.value) : undefined }))} />
+                      <Input placeholder="Equipment (comma-separated)" value={(recipeMeta.equipment || []).join(', ')} onChange={(e) => setRecipeMeta((m) => ({ ...m, equipment: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : [] }))} />
+                      <Input placeholder="Mise en place (comma-separated)" value={(recipeMeta.miseEnPlace || []).join(', ')} onChange={(e) => setRecipeMeta((m) => ({ ...m, miseEnPlace: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : [] }))} />
+                      <Input placeholder="Allergens (comma-separated)" value={(recipeMeta.allergens || []).join(', ')} onChange={(e) => setRecipeMeta((m) => ({ ...m, allergens: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : [] }))} />
+                      <Input placeholder="Taste profile (comma-separated)" value={(recipeMeta.tasteProfile || []).join(', ')} onChange={(e) => setRecipeMeta((m) => ({ ...m, tasteProfile: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : [] }))} />
+                      <Input placeholder="Plating notes" value={String(recipeMeta.plating || '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, plating: e.target.value }))} />
+                      <Input placeholder="Recipe notes" value={String(recipeMeta.notes || '')} onChange={(e) => setRecipeMeta((m) => ({ ...m, notes: e.target.value }))} />
+                    </div>
                     <div className="space-y-2">
                       {recipeSteps.map((s, idx) => (
                         <div key={idx} className="grid grid-cols-6 gap-2 items-center">
@@ -783,6 +1042,191 @@ export default function MenuPage() {
       </div>
     </DashboardLayout>
   );
+}
+
+
+function DimensionalAnalysis({ components, invMap }: { components: any[]; invMap: Map<string, any> }) {
+  // Build models for inventory components (including overrides for nested menu components)
+  const lines = useMemo(() => {
+    const out: Array<{ name: string; model: ReturnType<typeof buildDimensionalAnalysisModel> }> = [];
+    const pushLine = (comp: any) => {
+      if (!comp || comp.kind !== 'inventory' || !comp.inventoryItem) return;
+      const inv = invMap.get(String(comp.inventoryItem));
+      const name = inv?.name || String(comp.inventoryItem);
+      const invUnit = String(inv?.unit || 'each');
+      const fromUnit = String(comp.unit || invUnit);
+      const qty = Number(comp.quantity || 0);
+      const model = buildDimensionalAnalysisModel(qty, fromUnit, invUnit);
+      out.push({ name, model });
+    };
+    for (const c of (components || [])) {
+      if (c.kind === 'inventory') pushLine(c);
+      else if (c.kind === 'menu' && Array.isArray(c.overrides) && c.overrides.length > 0) {
+        for (const oc of c.overrides) pushLine(oc);
+      }
+    }
+    return out;
+  }, [components, invMap]);
+
+  if (!lines.length) return null;
+
+  return (
+    <div className="mt-4">
+      <div className="space-y-1">
+        {lines.map((l, idx) => (
+          <DimensionalChain key={idx} model={l.model} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DimensionalChain({ model }: { model: ReturnType<typeof buildDimensionalAnalysisModel> }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-muted-foreground">
+        <span>{formatNum(model.initial.qty)} </span>
+        <UnitWithCancel text={model.initial.unit} cancelled={!!model.initial.strike} />
+      </span>
+      {model.factors.map((f: { numQty: number; numUnit: string; denQty: number; denUnit: string; strikeNum?: boolean; strikeDen?: boolean }, i: number) => (
+        <span key={i} className="inline-flex items-center gap-2">
+          <span>×</span>
+          <Fraction
+            num={{ qty: f.numQty, unit: f.numUnit, strike: f.strikeNum }}
+            den={{ qty: f.denQty, unit: f.denUnit, strike: f.strikeDen }}
+          />
+        </span>
+      ))}
+      <span>=</span>
+      <span className="text-foreground font-medium">
+        {formatNum(model.result.qty)} {model.result.unit}
+      </span>
+    </div>
+  );
+}
+
+function Fraction({ num, den }: { num: { qty: number; unit: string; strike?: boolean }; den: { qty: number; unit: string; strike?: boolean } }) {
+  return (
+    <span className="inline-grid grid-cols-1 justify-items-center">
+      <span>
+        <span>{formatNum(num.qty)} </span>
+        <UnitWithCancel text={num.unit} cancelled={!!num.strike} />
+      </span>
+      <span className="block w-full border-t border-muted-foreground" />
+      <span>
+        <span>{formatNum(den.qty)} </span>
+        <UnitWithCancel text={den.unit} cancelled={!!den.strike} />
+      </span>
+    </span>
+  );
+}
+
+function UnitWithCancel({ text, cancelled }: { text: string; cancelled?: boolean }) {
+  return (
+    <span className="relative inline-block">
+      <span>{text}</span>
+      {cancelled && (
+        <span className="absolute inset-0 pointer-events-none" aria-hidden>
+          <span
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '50%',
+              height: 2,
+              backgroundColor: 'rgb(234 88 12)', // orange
+              transform: 'rotate(-20deg) translateY(-50%)',
+              transformOrigin: 'center',
+            }}
+          />
+        </span>
+      )}
+    </span>
+  );
+}
+
+function buildDimensionalAnalysisModel(quantity: number, fromUnit: string, toUnit: string) {
+  const fDef = getUnitDef(fromUnit);
+  const tDef = getUnitDef(toUnit);
+  const from = fDef ? fDef.key : String(fromUnit);
+  const to = tDef ? tDef.key : String(toUnit);
+  const model: any = { initial: { qty: quantity, unit: from, strike: false }, factors: [] as any[], result: { qty: 0, unit: to } };
+  if (!fDef || !tDef) {
+    const result = convertQuantity(quantity, from, to);
+    model.result.qty = result;
+    return model;
+  }
+  const sameKind = fDef.kind === tDef.kind;
+  const baseFrom = baseUnitFor(from);
+  const baseTo = baseUnitFor(to);
+  const FL_OZ_TO_ML = 29.5735295625;
+
+  let currentQty = quantity;
+  let lastNumUnit: string | null = null;
+  const addFactor = (numQty: number, numUnit: string, denQty: number, denUnit: string) => {
+    const factor: any = { numQty, numUnit, denQty, denUnit, strikeNum: false, strikeDen: false };
+    // Strike denominator if it cancels with previous numerator or initial
+    if (lastNumUnit && lastNumUnit === denUnit) {
+      // strike previous numerator unit
+      const prev = model.factors[model.factors.length - 1];
+      if (prev) prev.strikeNum = true;
+      else model.initial.strike = true;
+      factor.strikeDen = true;
+    } else if (!lastNumUnit && model.initial.unit === denUnit) {
+      model.initial.strike = true;
+      factor.strikeDen = true;
+    }
+    model.factors.push(factor);
+    lastNumUnit = numUnit;
+    currentQty = currentQty * (numQty / denQty);
+  };
+
+  // Step 1: to base of from-kind if needed
+  if (from !== baseFrom) {
+    addFactor(fDef.toBase, baseFrom, 1, from);
+  } else {
+    // if already at baseFrom, the first next factor will cancel this
+    lastNumUnit = baseFrom;
+  }
+
+  if (sameKind) {
+    // Step 2: from base to target unit
+    if (to !== baseFrom) {
+      const denom = getUnitDef(to)!.toBase;
+      addFactor(1, to, denom, baseFrom);
+    }
+  } else {
+    // Cross-family bridge for volumes (US <-> metric)
+    if ((fDef.kind === 'volume_us' && tDef.kind === 'volume_metric')) {
+      addFactor(FL_OZ_TO_ML, 'ml', 1, 'fl_oz');
+      if (to !== baseTo) {
+        const denom = getUnitDef(to)!.toBase;
+        addFactor(1, to, denom, baseTo);
+      }
+    } else if ((fDef.kind === 'volume_metric' && tDef.kind === 'volume_us')) {
+      addFactor(1, 'fl_oz', FL_OZ_TO_ML, 'ml');
+      if (to !== baseTo) {
+        const denom = getUnitDef(to)!.toBase;
+        addFactor(1, to, denom, baseTo);
+      }
+    } else {
+      // Incompatible families (e.g., mass <-> volume)
+      currentQty = convertQuantity(quantity, from, to);
+      model.factors = [];
+    }
+  }
+
+  model.result.qty = currentQty;
+  model.result.unit = to;
+  return model as { initial: { qty: number; unit: string; strike: boolean }; factors: Array<{ numQty: number; numUnit: string; denQty: number; denUnit: string; strikeNum?: boolean; strikeDen?: boolean }>; result: { qty: number; unit: string } };
+}
+
+function formatNum(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  const rounded = Math.round(n);
+  if (Math.abs(n - rounded) < 1e-9) return String(rounded);
+  const s = Math.abs(n) >= 1 ? n.toFixed(4) : n.toFixed(6);
+  return s.replace(/0+$/,'').replace(/\.$/,'');
 }
 
 

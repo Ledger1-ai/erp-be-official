@@ -32,9 +32,11 @@ export default function AssignSplitPane({
   }, [local]);
   const domainById = useMemo(() => new Map((preset.domains || []).map(d => [d.id, d])), [preset.domains]);
   function moveDomain(domainId: string, serverId: string) {
+    // Normalize droppable id to base server id (strip shift suffix if present)
+    const baseServerId = String(serverId).split('::')[0];
     const next = local.map(a => ({ ...a, domainIds: a.domainIds.filter(d => d !== domainId) }));
-    let target = next.find(a => a.serverId === serverId);
-    if (!target) { (next as any).push({ serverId, domainIds: [] }); target = next[next.length - 1]; }
+    let target = next.find(a => a.serverId === baseServerId);
+    if (!target) { (next as any).push({ serverId: baseServerId, domainIds: [] }); target = next[next.length - 1]; }
     target.domainIds = Array.from(new Set([...(target.domainIds || []), domainId]));
     setLocal(next);
     onChange(next);
@@ -50,10 +52,9 @@ export default function AssignSplitPane({
   for (const d of (preset.domains || [])) unassignedDomainIds.add(d.id);
   for (const a of local) for (const id of (a.domainIds || [])) unassignedDomainIds.delete(id);
 
-  // Split team by role
-  // Show only active members, except include inactive who currently have domains (for reassignment visibility)
-  const serversOnly = servers.filter(s => ((s.role || 'Server') === 'Server') && (s.isActive || ((serverById.get(String(s.id))?.domainIds?.length || 0) > 0)));
-  const bartendersOnly = servers.filter(s => ((s.role || '').includes('Bartender')) && (s.isActive || ((serverById.get(String(s.id))?.domainIds?.length || 0) > 0)));
+  // Split team by role. Show all shift cards regardless of active status.
+  const serversOnly = servers.filter(s => ((s.role || 'Server') === 'Server'));
+  const bartendersOnly = servers.filter(s => ((s.role || '').includes('Bartender')));
 
   return (
     <DndContext onDragEnd={handleDragEnd} collisionDetection={rectIntersection}>
@@ -107,17 +108,21 @@ export default function AssignSplitPane({
 function DraggableDomain({ id, children }: { id: string; children: React.ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
   const style: React.CSSProperties = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {};
+  if (isDragging) {
+    (style as any).position = 'relative';
+    (style as any).zIndex = 9999;
+  }
   return (
-    <div ref={setNodeRef} style={style} {...listeners} {...attributes} className={isDragging ? 'opacity-80 ring-2 ring-primary rounded-md' : ''}>
+    <div ref={setNodeRef} style={style} {...listeners} {...attributes} className={isDragging ? 'opacity-80 ring-2 ring-primary rounded-md relative z-50' : ''}>
       {children}
     </div>
   );
 }
 
-function DroppableServer({ id, children }: { id: string; children: React.ReactNode }) {
-  const { isOver, setNodeRef } = useDroppable({ id });
+function DroppableServer({ id, disabled, children }: { id: string; disabled?: boolean; children: React.ReactNode }) {
+  const { isOver, setNodeRef } = useDroppable({ id, disabled: Boolean(disabled) });
   return (
-    <div ref={setNodeRef} className={isOver ? 'ring-2 ring-primary rounded-md' : ''}>
+    <div ref={setNodeRef} className={`${isOver ? 'ring-2 ring-primary rounded-md' : ''} ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
       {children}
     </div>
   );
@@ -147,7 +152,16 @@ function AssignedTags({ serverId, local, domainById }: { serverId: string; local
   );
 }
 
-function TeamColumn({ title, members, serverById, domainById, local }: { title: string; members: Array<{ id: string; name: string; role?: string; range?: string; isActive?: boolean }>; serverById: Map<string, { serverId: string; domainIds: string[] }>; domainById: Map<string, any>; local: Array<{ serverId: string; domainIds: string[] }> }) {
+function TeamColumn({ title, members, serverById, domainById, local }: { title: string; members: Array<{ id: string; name: string; role?: string; range?: string; isActive?: boolean; start?: string; end?: string; shiftIndex?: number; shiftCount?: number }>; serverById: Map<string, { serverId: string; domainIds: string[] }>; domainById: Map<string, any>; local: Array<{ serverId: string; domainIds: string[] }> }) {
+  const activeById = React.useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const m of members) {
+      const key = String(m.id);
+      if (m.isActive) map.set(key, true);
+      else if (!map.has(key)) map.set(key, false);
+    }
+    return map;
+  }, [members]);
   return (
     <Card className="bg-card">
       <CardHeader>
@@ -155,21 +169,40 @@ function TeamColumn({ title, members, serverById, domainById, local }: { title: 
       </CardHeader>
       <CardContent className="space-y-2">
         {members.map(s => (
-          <DroppableServer key={s.id} id={String(s.id)}>
+          <DroppableServer key={`${s.id}:${(s as any).shiftIndex || 0}:${s.start || s.range || ''}`} id={`${String(s.id)}${(s as any).shiftIndex ? `::${(s as any).shiftIndex}` : ''}`} disabled={(s.isActive === false) && (activeById.get(String(s.id)) === true)}>
             <div className="border rounded-md p-2 bg-card/70 backdrop-blur">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-medium leading-tight">{s.name || '—'}</div>
+                  <div className="font-medium leading-tight flex items-center gap-2">
+                    {s.name || '—'}
+                    {Boolean((s as any).shiftIndex) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">Shift {(s as any).shiftIndex}</span>
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground">{s.role || title}{s.range ? ` • ${s.range}` : ''}</div>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {(serverById.get(String(s.id))?.domainIds?.length || 0)} domains • {Array.from((serverById.get(String(s.id))?.domainIds || [])).reduce((acc, id) => acc + ((domainById.get(id)?.tableIds || []).length), 0)} tables
+                  {(() => {
+                    const baseId = String(s.id);
+                    const shadow = (s.isActive === false) && (activeById.get(baseId) === true);
+                    const domains = shadow ? [] : (serverById.get(baseId)?.domainIds || []);
+                    const tables = domains.reduce((acc, id) => acc + ((domainById.get(id)?.tableIds || []).length), 0);
+                    return `${domains.length} domains • ${tables} tables`;
+                  })()}
                 </div>
               </div>
-              <AssignedTags serverId={String(s.id)} local={local} domainById={domainById} />
-              {s.isActive === false && (
+              {(() => {
+                const baseId = String(s.id);
+                const shadow = (s.isActive === false) && (activeById.get(baseId) === true);
+                return shadow ? null : <AssignedTags serverId={baseId} local={local} domainById={domainById} />;
+              })()}
+              {(() => {
+                const baseId = String(s.id);
+                const shadow = (s.isActive === false) && (activeById.get(baseId) === true);
+                return (!shadow && s.isActive === false && ((serverById.get(baseId)?.domainIds?.length || 0) > 0)) ? (
                 <div className="mt-2 text-[10px] px-2 py-1 rounded-md bg-amber-500/15 text-amber-700">Inactive - reassign domains</div>
-              )}
+                ) : null;
+              })()}
             </div>
           </DroppableServer>
         ))}

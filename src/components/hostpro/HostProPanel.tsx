@@ -89,13 +89,26 @@ export default function HostProPanel() {
             return v.includes('server') || v.includes('bart') || v.includes('host');
           })
           .map((s: any) => ({ id: String(s.userId || s.id || s.name), name: s.name, department: s.department, role: normRole(s.role), isActive: s.isActive, range: s.range, start: s.start, end: s.end }));
-        // Deduplicate by id to avoid duplicate React keys and double entries
-        const uniq = Array.from(new Map(mapped.map(m => [String(m.id), m])).values());
-        setServers(uniq);
+        // Group by user id and expand to one entry per shift with Shift X tagging
+        const byUser = new Map<string, any[]>();
+        for (const m of mapped) {
+          const key = String(m.id);
+          if (!byUser.has(key)) byUser.set(key, []);
+          byUser.get(key)!.push(m);
+        }
+        for (const arr of byUser.values()) {
+          arr.sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
+        }
+        const expanded: any[] = [];
+        for (const arr of byUser.values()) {
+          const count = arr.length;
+          arr.forEach((m, idx) => expanded.push({ ...m, shiftIndex: idx + 1, shiftCount: count }));
+        }
+        setServers(expanded);
         // If team members changed and there was a previous submit, show hazard
         try {
           const el = document.getElementById('assign-tab');
-          if (el && uniq.length && (session?.assignments?.length || 0)) {
+          if (el && expanded.length && (session?.assignments?.length || 0)) {
             el.innerHTML = 'Assign ⚠️';
           }
         } catch {}
@@ -146,7 +159,15 @@ export default function HostProPanel() {
     setLoading(true);
     try {
       // Only include eligible servers (active Servers role) in rotation/session
-      const eligibleServers = servers.filter(s => String(s.role) === 'Server' && s.isActive);
+      const eligibleServersBase = servers.filter(s => String(s.role) === 'Server' && s.isActive);
+      // Deduplicate by base id in case multiple shift cards exist for same person
+      const seen = new Set<string>();
+      const eligibleServers = eligibleServersBase.filter(s => {
+        const key = String(s.id).split('::')[0];
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).map(s => ({ ...s, id: String(s.id).split('::')[0] }));
       const res = await fetch('/api/hostpro/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ presetSlug: preset.slug, servers: eligibleServers }) });
       const json = await res.json();
       if (json?.success) setSession(json.data);
@@ -161,10 +182,52 @@ export default function HostProPanel() {
   }
 
   async function autoAssign() {
-    const eligibleServers = computeTeamMembers(servers, session).filter(s => String(s.role) === 'Server' && s.isActive);
-    const r = await fetch('/api/hostpro/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ servers: eligibleServers }) });
-    const j = await r.json();
-    if (j?.success) setSession((s: any) => ({ ...s, assignments: j.data }));
+    // Build domain list in the same order as shown in the Assign panel
+    const domains = (livePreset?.domains || []) as Array<{ id: string; name: string }>;
+    const domainIds = domains.map(d => d.id);
+
+    // Partition team by role, include only active shift card per person (dedupe by base id)
+    const team = computeTeamMembers(servers, session);
+    function dedupeByBaseId(list: Array<any>) {
+      const seen = new Set<string>();
+      return list.filter(s => {
+        const base = String(s.id).split('::')[0];
+        if (seen.has(base)) return false;
+        seen.add(base);
+        return true;
+      }).map(s => ({ ...s, id: String(s.id).split('::')[0] }));
+    }
+    const activeServers = dedupeByBaseId(team.filter(s => String(s.role) === 'Server' && s.isActive));
+    const activeBartenders = dedupeByBaseId(team.filter(s => (String(s.role || '').includes('Bartender')) && s.isActive));
+
+    // Fallbacks if one group is empty
+    const serverPool = activeServers.length ? activeServers : activeBartenders;
+    const bartenderPool = activeBartenders.length ? activeBartenders : activeServers;
+
+    // Distribute: first three domains to servers; remaining to bartenders
+    const serverDomainIds = domainIds.slice(0, 3);
+    const bartenderDomainIds = domainIds.slice(3);
+
+    const assignMap = new Map<string, Set<string>>();
+    function pushAssign(id: string, d: string) {
+      const set = assignMap.get(id) || new Set<string>();
+      set.add(d);
+      assignMap.set(id, set);
+    }
+    function rrAssign(domIds: string[], pool: Array<{ id: string }>) {
+      if (!domIds.length || !pool.length) return;
+      let i = 0;
+      for (const d of domIds) {
+        const target = pool[i % pool.length];
+        pushAssign(String(target.id), d);
+        i++;
+      }
+    }
+    rrAssign(serverDomainIds, serverPool);
+    rrAssign(bartenderDomainIds, bartenderPool);
+
+    const nextAssignments = Array.from(assignMap.entries()).map(([serverId, set]) => ({ serverId, domainIds: Array.from(set) }));
+    await updateAssignments(nextAssignments);
   }
 
   const presetName = preset?.name || 'Preset';
@@ -183,7 +246,7 @@ export default function HostProPanel() {
     return { ...preset, width, height, tables };
   }, [preset, layoutData]);
   const livePreset = computeLiveDomains(basePreset);
-  const activeServersOnly = React.useMemo(() => servers.filter(s => String(s.role) === 'Server' && s.isActive), [servers]);
+  const activeAssignableStaff = React.useMemo(() => servers.filter(s => (String(s.role) === 'Server' || String(s.role).includes('Bartender')) && s.isActive), [servers]);
 
   function inferAssignedServerIdForTable(tableId?: string): string | undefined {
     if (!tableId) return undefined;
@@ -512,7 +575,7 @@ export default function HostProPanel() {
                           if (!manualMode) return;
                           setManualTableId(String(tid));
                           const inferred = inferAssignedServerIdForTable(String(tid));
-                          setManualServerId(inferred || (activeServersOnly[0]?.id ? String(activeServersOnly[0].id) : ''));
+                          setManualServerId(inferred || (activeAssignableStaff[0]?.id ? String(activeAssignableStaff[0].id) : ''));
                         }}
                       />
                     );
@@ -612,10 +675,10 @@ export default function HostProPanel() {
                         <div className="flex items-center gap-2">
                           <div className="text-xs w-20">Server</div>
                           <select className="flex-1 rounded-md border bg-background px-2 py-1 text-sm" value={manualServerId} onChange={(e) => setManualServerId(e.target.value)}>
-                            {activeServersOnly.length === 0 ? (
-                              <option value="">No active servers</option>
+                            {activeAssignableStaff.length === 0 ? (
+                              <option value="">No active staff</option>
                             ) : null}
-                            {activeServersOnly.map((s) => (
+                            {activeAssignableStaff.map((s) => (
                               <option key={s.id} value={String(s.id)}>{s.name}</option>
                             ))}
                           </select>
@@ -744,7 +807,7 @@ function SeatGuestForm({ onSeat }: { onSeat: (partySize: number) => void }) {
   );
 }
 
-function ActiveStaff({ servers }: { servers: Array<{ id: string; name: string; role?: string; isActive?: boolean; range?: string }> }) {
+function ActiveStaff({ servers }: { servers: Array<{ id: string; name: string; role?: string; isActive?: boolean; range?: string; start?: string; end?: string; shiftIndex?: number; shiftCount?: number }> }) {
   const groups: Record<string, typeof servers> = { Server: [], Bartender: [], Host: [] };
   for (const s of servers) {
     const key = (s.role as any) || 'Server';
@@ -759,9 +822,14 @@ function ActiveStaff({ servers }: { servers: Array<{ id: string; name: string; r
           <div className="font-semibold mb-2">{k}s</div>
           <div className="space-y-2">
             {(groups[k] || []).map((s) => (
-              <div key={s.id} className="flex items-center justify-between rounded-lg border px-3 py-2 bg-card/70 backdrop-blur">
+              <div key={`${s.id}:${(s as any).shiftIndex || 0}:${s.start || s.range || ''}`} className="flex items-center justify-between rounded-lg border px-3 py-2 bg-card/70 backdrop-blur">
                 <div>
-                  <div className="font-medium leading-tight">{s.name}</div>
+                  <div className="font-medium leading-tight flex items-center gap-2">
+                    {s.name}
+                    {Boolean((s as any).shiftIndex) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">Shift {(s as any).shiftIndex}</span>
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground">{s.range || '—'}</div>
                 </div>
                 <span className={`text-xs rounded-full px-2 py-0.5 ${s.isActive ? 'bg-green-500/15 text-green-600 dark:text-green-400' : 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400'}`}>{s.isActive ? 'Active' : 'Scheduled'}</span>
@@ -819,23 +887,25 @@ function mergeAssignments(assignments: Array<{ serverId: string; domainIds: stri
 function computeTeamMembers(servers: Array<any>, session: any): Array<any> {
   const TTL_MINUTES = 30; // keep inactive assigned members visible for 30 minutes
   const now = Date.now();
-  const active = servers.filter(s => ['Server','Bartender'].includes((s.role as any) || 'Server') && s.isActive);
-  const byId = new Map(active.map(s => [String(s.id), s]));
+  // Preserve multiple same-day shifts for the same person
+  const visible = servers.filter(s => ['Server','Bartender'].includes((s.role as any) || 'Server'));
+  const presentIds = new Set(visible.map(s => String(s.id)));
+  const result = Array.from(visible);
   // Include previously assigned but now inactive staff for reassignment, preserve known names
   if (Array.isArray(session?.assignments)) {
     for (const a of session.assignments) {
       const id = String(a.serverId);
-      if (!byId.has(id)) {
+      if (!presentIds.has(id)) {
         const fallback = Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === id) : undefined;
         const lastActiveAt = fallback?.lastActiveAt ? new Date(fallback.lastActiveAt).getTime() : 0;
         const withinTtl = lastActiveAt > 0 ? (now - lastActiveAt) <= TTL_MINUTES * 60 * 1000 : false;
         if (withinTtl || ((a?.domainIds || []).length > 0)) {
-          byId.set(id, { id, name: fallback?.name || id, role: fallback?.role || 'Server', isActive: false });
+          result.push({ id, name: fallback?.name || id, role: fallback?.role || 'Server', isActive: false });
         }
       }
     }
   }
-  return Array.from(byId.values());
+  return result;
 }
 
 

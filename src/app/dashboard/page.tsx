@@ -6,6 +6,7 @@ import { usePermissions } from "@/lib/hooks/use-permissions";
 import { ConditionalRender } from "@/components/ui/permission-denied";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRouter } from "next/navigation";
 import CustomChartTooltip from "@/components/ui/chart-tooltip";
@@ -370,7 +371,10 @@ export default function DashboardPage() {
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-foreground mb-2">🧠 Varuni AI Insights</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-semibold text-foreground">Varuni AI Insights</h3>
+                  <Badge variant="warning">Coming Soon</Badge>
+                </div>
                 <p className="text-muted-foreground text-sm mb-3">
                   Based on current trends, I recommend increasing staff for tomorrow&apos;s dinner rush. 
                   Your inventory for chicken breast is running low - consider reordering soon.

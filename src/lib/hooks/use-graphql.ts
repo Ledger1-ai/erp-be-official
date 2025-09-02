@@ -634,8 +634,9 @@ export const GET_MENU_MAPPINGS = gql`
       restaurantGuid
       toastItemGuid
       toastItemName
-      components { kind inventoryItem nestedToastItemGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid quantity unit notes } }
+      components { kind inventoryItem nestedToastItemGuid modifierOptionGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid modifierOptionGuid quantity unit notes } }
       recipeSteps { step instruction time notes }
+      recipeMeta { servings difficulty prepTime cookTime totalTime equipment miseEnPlace plating allergens tasteProfile priceyness cuisinePreset atmospherePreset notes }
       computedCostCache
       lastComputedAt
     }
@@ -648,11 +649,24 @@ export const UPSERT_MENU_MAPPING = gql`
       id
       restaurantGuid
       toastItemGuid
-      components { kind inventoryItem nestedToastItemGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid quantity unit notes } }
+      components { kind inventoryItem nestedToastItemGuid modifierOptionGuid quantity unit notes overrides { kind inventoryItem nestedToastItemGuid modifierOptionGuid quantity unit notes } }
       recipeSteps { step instruction time notes }
+      recipeMeta { servings difficulty prepTime cookTime totalTime equipment miseEnPlace plating allergens tasteProfile priceyness cuisinePreset atmospherePreset notes }
     }
   }
 `;
+
+export const GENERATE_RECIPE_DRAFT = gql`
+  mutation GenerateRecipeDraft($restaurantGuid: String!, $toastItemGuid: String!, $priceyness: Int, $cuisinePreset: String, $atmospherePreset: String) {
+    generateRecipeDraft(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid, priceyness: $priceyness, cuisinePreset: $cuisinePreset, atmospherePreset: $atmospherePreset) {
+      recipeMeta { servings difficulty prepTime cookTime totalTime equipment miseEnPlace plating allergens tasteProfile priceyness cuisinePreset atmospherePreset notes }
+      recipeSteps { step instruction time notes }
+      notes
+    }
+  }
+`;
+
+export const useGenerateRecipeDraft = () => useMutation(GENERATE_RECIPE_DRAFT);
 
 export const GET_MENU_ITEM_COST = gql`
   query MenuItemCost($restaurantGuid: String!, $toastItemGuid: String!) {
@@ -661,8 +675,8 @@ export const GET_MENU_ITEM_COST = gql`
 `;
 
 export const GET_MENU_ITEM_CAPACITY = gql`
-  query MenuItemCapacity($restaurantGuid: String!, $toastItemGuid: String!, $quantity: Float) {
-    menuItemCapacity(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid, quantity: $quantity) {
+  query MenuItemCapacity($restaurantGuid: String!, $toastItemGuid: String!, $quantity: Float, $modifierOptionGuid: String) {
+    menuItemCapacity(restaurantGuid: $restaurantGuid, toastItemGuid: $toastItemGuid, quantity: $quantity, modifierOptionGuid: $modifierOptionGuid) {
       capacity
       allHaveStock
       requirements { inventoryItem unit quantityPerOrder available }
@@ -967,9 +981,10 @@ export const useIndexedMenus = (restaurantGuid: string) => useQuery(GET_INDEXED_
 export const useMenuVisibility = (restaurantGuid: string) => useQuery(GET_MENU_VISIBILITY, { variables: { restaurantGuid }, skip: !restaurantGuid });
 export const useMenuMappings = (restaurantGuid: string, toastItemGuid?: string) => useQuery(GET_MENU_MAPPINGS, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid });
 export const useUpsertMenuMapping = () => useMutation(UPSERT_MENU_MAPPING);
+// duplicate exported below; keep single definition above
 export const useMenuItemCost = (restaurantGuid: string, toastItemGuid: string) => useQuery(GET_MENU_ITEM_COST, { variables: { restaurantGuid, toastItemGuid }, skip: !restaurantGuid || !toastItemGuid });
-export const useMenuItemCapacity = (restaurantGuid: string, toastItemGuid: string, quantity?: number) =>
-  useQuery(GET_MENU_ITEM_CAPACITY, { variables: { restaurantGuid, toastItemGuid, quantity }, skip: !restaurantGuid || !toastItemGuid });
+export const useMenuItemCapacity = (restaurantGuid: string, toastItemGuid: string, quantity?: number, modifierOptionGuid?: string | null) =>
+  useQuery(GET_MENU_ITEM_CAPACITY, { variables: { restaurantGuid, toastItemGuid, quantity, modifierOptionGuid: modifierOptionGuid || null }, skip: !restaurantGuid || !toastItemGuid });
 export const useMenuItemStock = (restaurantGuid: string, guids?: string[], multiLocationIds?: string[]) =>
   useQuery(GET_MENU_ITEM_STOCK, { variables: { restaurantGuid, guids, multiLocationIds }, skip: !restaurantGuid || (!guids && !multiLocationIds) });
 export const useUpdateMenuItemStock = () => useMutation(UPDATE_MENU_ITEM_STOCK);
@@ -1052,6 +1067,10 @@ export const useGlobalSearch = (query: string, limit: number = 10, options?: { s
 export const usePurchaseOrders = (vendorId?: string, status?: string) => useQuery(GET_PURCHASE_ORDERS, { variables: { vendorId, status } });
 export const useCreatePurchaseOrder = () => useMutation(CREATE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
 export const useUpdatePurchaseOrder = () => useMutation(UPDATE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
-export const useReceivePurchaseOrder = () => useMutation(RECEIVE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
+export const useReceivePurchaseOrder = () => useMutation(RECEIVE_PURCHASE_ORDER, { refetchQueries: [
+  { query: GET_PURCHASE_ORDERS },
+  { query: GET_INVENTORY_ITEMS },
+  { query: GET_LOW_STOCK_ITEMS },
+] });
 export const useResetPurchaseOrder = () => useMutation(RESET_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
 export const useDeletePurchaseOrder = () => useMutation(DELETE_PURCHASE_ORDER, { refetchQueries: [{ query: GET_PURCHASE_ORDERS }] });
