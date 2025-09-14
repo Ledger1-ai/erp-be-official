@@ -19,6 +19,10 @@ export default function FloorMap({
   labels,
   manualMode = false,
   onManualPick,
+  flashTableId,
+  quickSeatMode,
+  selectedQuickSeatTable,
+  onQuickSeatPick,
 }: {
   preset: FloorPreset;
   occupied?: TableState;
@@ -31,6 +35,10 @@ export default function FloorMap({
   labels?: Array<{ x: number; y: number; text: string; size?: number }>;
   manualMode?: boolean;
   onManualPick?: (tableId: string) => void;
+  flashTableId?: string;
+  quickSeatMode?: boolean;
+  selectedQuickSeatTable?: string | null;
+  onQuickSeatPick?: (tableId: string) => void;
 }) {
   const w = preset.width || 1200;
   const h = preset.height || 760;
@@ -99,7 +107,11 @@ export default function FloorMap({
     const dom = domainOfTable.get(t.id);
     const isHighlighted = highlightDomains.length === 0 || (dom && highlightDomains.includes(dom.id));
     const tint = showDomains && dom ? dom.color : undefined;
-    const stroke = occupied[t.id] ? '#ef4444' : 'rgba(15,23,42,0.35)';
+    const isFlash = flashTableId === t.id;
+    const isQuickSeatSelected = quickSeatMode && selectedQuickSeatTable === t.id;
+    const stroke = (occupied[t.id] || isFlash) ? '#ef4444' : (isQuickSeatSelected ? '#22c55e' : 'rgba(15,23,42,0.35)');
+    const dashed = {};
+    const isClickable = quickSeatMode ? !occupied[t.id] : manualMode;
     const glassFill = 'rgba(255,255,255,0.42)';
     function hexToRgb(hex?: string): { r: number; g: number; b: number } | null {
       if (!hex) return null;
@@ -143,7 +155,18 @@ export default function FloorMap({
     // Use CSS variable for instant theme switch without recompute
     const textColor = getLabelColorFromTint(tint);
     const tintAlpha = (hex?: string) => hex ? `${hex}66` : undefined; // ~40%
-    const common = { onClick: () => (manualMode ? onManualPick?.(t.id) : onPick?.(t.id)) } as any;
+    const common = {
+      onClick: () => {
+        if (quickSeatMode && !occupied[t.id]) {
+          onQuickSeatPick?.(t.id);
+        } else if (manualMode) {
+          onManualPick?.(t.id);
+        } else {
+          onPick?.(t.id);
+        }
+      },
+      style: { cursor: isClickable ? 'pointer' : 'default' }
+    } as any;
     const orderInfo = ordersByTable[t.id];
     const domInfo = domainOfTable.get(t.id);
     const assignedName = domInfo ? assignedServerByDomain.get(domInfo.id) : undefined;
@@ -153,7 +176,7 @@ export default function FloorMap({
     if (t.type === 'barSeat') {
       return (
         <g key={t.id} transform={`translate(${x}, ${y})`} className="cursor-pointer" {...common}>
-          <rect width={30} height={20} rx={8} ry={8} fill={glassFill} stroke={stroke} strokeWidth={occupied[t.id] ? 3 : 1.5} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
+          <rect width={30} height={20} rx={8} ry={8} fill={glassFill} stroke={stroke} strokeWidth={(occupied[t.id] || isFlash) ? 4 : (isQuickSeatSelected ? 3 : 1.5)} className={isFlash ? 'table-flash-stroke' : ''} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
           {tint && (<rect width={30} height={20} rx={8} ry={8} fill={tintAlpha(tint)} />)}
           <title>{`Table ${t.id}${serverMatch}\nChecks: ${orderInfo?.checks ?? 0}${orderInfo?.total ? `\nTotal: $${(orderInfo.total/100).toFixed(2)}` : ''}`}</title>
           <text x={15} y={14} fontSize={10} textAnchor="middle" fill={textColor} style={{ userSelect: 'none' }}>{t.id}</text>
@@ -166,7 +189,7 @@ export default function FloorMap({
       const r = Math.min(wRect, hRect) / 2;
       return (
         <g key={t.id} transform={`translate(${x}, ${y})`} className="cursor-pointer" {...common}>
-          <circle cx={r} cy={r} r={r} fill={glassFill} stroke={stroke} strokeWidth={occupied[t.id] ? 3 : 1.5} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
+          <circle cx={r} cy={r} r={r} fill={glassFill} stroke={stroke} strokeWidth={(occupied[t.id] || isFlash) ? 4 : (isQuickSeatSelected ? 3 : 1.5)} className={isFlash ? 'table-flash-stroke' : ''} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
           {tint && (<circle cx={r} cy={r} r={r} fill={tintAlpha(tint)} />)}
           <title>{`Table ${t.id}${serverMatch}\nChecks: ${orderInfo?.checks ?? 0}${orderInfo?.total ? `\nTotal: $${(orderInfo.total/100).toFixed(2)}` : ''}`}</title>
           <text x={r} y={r + 4} fontSize={12} textAnchor="middle" fill={textColor} style={{ userSelect: 'none' }}>{t.id}</text>
@@ -180,7 +203,7 @@ export default function FloorMap({
       const points = `${cx},${cy - half} ${cx + half},${cy} ${cx},${cy + half} ${cx - half},${cy}`;
       return (
         <g key={t.id} className="cursor-pointer" {...common}>
-          <polygon points={points} fill={glassFill} stroke={stroke} strokeWidth={occupied[t.id] ? 3 : 1.5} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
+          <polygon points={points} fill={glassFill} stroke={stroke} strokeWidth={(occupied[t.id] || isFlash) ? 4 : (isQuickSeatSelected ? 3 : 1.5)} className={isFlash ? 'table-flash-stroke' : ''} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.15))' }} />
           {tint && (<polygon points={points} fill={tintAlpha(tint)} />)}
           <title>{`Table ${t.id}${serverMatch}\nChecks: ${orderInfo?.checks ?? 0}${orderInfo?.total ? `\nTotal: $${(orderInfo.total/100).toFixed(2)}` : ''}`}</title>
           <text x={cx} y={cy + 4} fontSize={12} textAnchor="middle" fill={textColor} style={{ userSelect: 'none' }}>{t.id}</text>
@@ -191,7 +214,7 @@ export default function FloorMap({
     // Default rectangle
     return (
       <g key={t.id} transform={`translate(${x}, ${y})`} className="cursor-pointer" {...common}>
-        <rect rx={10} ry={10} width={wRect} height={hRect} fill={glassFill} stroke={stroke} strokeWidth={occupied[t.id] ? 3 : 1.5} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 8px 18px rgba(0,0,0,0.18))' }} />
+        <rect rx={10} ry={10} width={wRect} height={hRect} fill={glassFill} stroke={stroke} strokeWidth={(occupied[t.id] || isFlash) ? 4 : (isQuickSeatSelected ? 3 : 1.5)} className={isFlash ? 'table-flash-stroke' : ''} style={{ backdropFilter: 'blur(8px)' as any, filter: 'drop-shadow(0 8px 18px rgba(0,0,0,0.18))' }} />
         {tint && (<rect rx={10} ry={10} width={wRect} height={hRect} fill={tintAlpha(tint)} />)}
         <title>{`Table ${t.id}${serverMatch}\nChecks: ${orderInfo?.checks ?? 0}${orderInfo?.total ? `\nTotal: $${(orderInfo.total/100).toFixed(2)}` : ''}`}</title>
         <text x={wRect / 2} y={hRect / 2 + 4} textAnchor="middle" fontSize={12} fill={textColor} style={{ userSelect: 'none' }}>{t.id}</text>
@@ -208,6 +231,37 @@ export default function FloorMap({
           <div className="absolute inset-0 animate-float-diagonal" style={{ background: 'radial-gradient(700px 400px at 50% 10%, rgba(236,72,153,0.08), transparent)' }} />
         </div>
         <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="xMidYMid meet">
+        <style>{`
+          .table-flash-stroke {
+            stroke: #ef4444;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            animation: table-glow 600ms ease-out forwards;
+          }
+          @keyframes table-glow {
+            0% {
+              stroke-width: 1;
+              opacity: 0.3;
+              filter: drop-shadow(0 0 0 rgba(239,68,68,0));
+            }
+            30% {
+              stroke-width: 2;
+              opacity: 0.7;
+              filter: drop-shadow(0 0 6px rgba(239,68,68,0.4));
+            }
+            60% {
+              stroke-width: 3;
+              opacity: 1;
+              filter: drop-shadow(0 0 10px rgba(239,68,68,0.7));
+            }
+            100% {
+              stroke-width: 4;
+              opacity: 1;
+              filter: drop-shadow(0 0 0 rgba(239,68,68,0));
+            }
+          }
+        `}</style>
         <defs>
           <pattern id="minorGrid" width="32" height="32" patternUnits="userSpaceOnUse">
             <path d="M 32 0 L 0 0 0 32" fill="none" stroke="rgba(100,116,139,0.12)" strokeWidth="1" />

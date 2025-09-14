@@ -218,15 +218,15 @@ export default function SchedulingPage() {
         </div>
 
         {/* AI Recommendations */}
-        <Card className="bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border-orange-200 dark:border-orange-800">
+        <Card className="bg-gradient-to-r from-teal-50 to-teal-100 dark:from-teal-950/20 dark:to-teal-900/20 border-teal-200 dark:border-teal-800">
           <CardContent className="p-6">
             <div className="flex items-start space-x-4">
-              <div className="bg-orange-600 rounded-full p-2">
+              <div className="bg-teal-600 rounded-full p-2">
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-3">
-                  <h3 className="font-semibold text-foreground">Varuni&apos;s Scheduling Insights</h3>
+                  <h3 className="font-semibold text-foreground">Varuni Scheduling Insights</h3>
                   <Badge variant="warning">Coming Soon</Badge>
                 </div>
                 <div className="space-y-3">

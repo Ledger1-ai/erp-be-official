@@ -225,7 +225,8 @@ userSchema.methods.getPermissions = function(): string[] {
       'hostpro'
     ],
     'Staff': [
-      'dashboard' // Very limited access
+      'dashboard',
+      'inventory' // Basic inventory access for staff
     ]
   };
 

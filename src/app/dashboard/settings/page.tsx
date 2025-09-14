@@ -1189,7 +1189,7 @@ export default function SettingsPage() {
                 <CardContent className="space-y-4">
                   <div>
                     <Label htmlFor="business-name">Business Name</Label>
-                    <Input id="business-name" defaultValue="The Graine Ledger" />
+                    <Input id="business-name" defaultValue="ledger1" />
                   </div>
                   <div>
                     <Label htmlFor="timezone">Timezone</Label>

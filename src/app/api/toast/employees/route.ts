@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { isDemoMode } from '@/lib/config/demo';
+import { TeamMember } from '@/lib/models/TeamMember';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 import { connectDB } from '@/lib/db/connection';
 
@@ -21,6 +23,55 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
+    // In demo mode, serve employees from TeamMember records to avoid any live sources
+    if (isDemoMode()) {
+      const onlyActive = !includeInactive;
+      const members = await TeamMember.find(onlyActive ? { status: 'active' } : {}).lean();
+      const mapRoleToJob = (role?: string) => ({ guid: (role || 'Employee').toLowerCase().replace(/\s+/g,'-'), title: role || 'Employee', tip: false });
+      const restaurant = 'rest-1';
+      const demoEmployees = members.map((m: any) => ({
+        id: String(m._id),
+        toastGuid: `tm-${String(m._id)}`,
+        firstName: (m.name || '').split(' ')[0] || m.name || 'Employee',
+        lastName: (m.name || '').split(' ').slice(1).join(' ') || '',
+        email: m.email || undefined,
+        jobTitles: [mapRoleToJob(m.role)],
+        isActive: m.status === 'active',
+        lastSyncDate: new Date().toISOString(),
+        syncStatus: 'synced',
+        isLocallyDeleted: false,
+        // enrich with performance aggregates via server-side fetch to /api/performance
+        _perf: null,
+      }));
+      // Fetch aggregates in one call
+      let aggregates: Array<{ _id: string; avg?: number; count?: number; red?: number; yellow?: number; blue?: number }> = [];
+      try {
+        const qs = new URLSearchParams({ restaurantGuid: restaurant }).toString();
+        const res = await fetch(`http://localhost:3000/api/performance?${qs}`, { cache: 'no-store' });
+        const json = await res.json();
+        if (json?.success) aggregates = json.data?.aggregates || [];
+      } catch {}
+      const aggById = new Map(aggregates.map(a => [String(a._id), a]));
+      const withPerf = demoEmployees.map((e) => {
+        const a = aggById.get(e.toastGuid);
+        return {
+          ...e,
+          avgRating: (a && typeof a.avg === 'number') ? Number(a.avg.toFixed(2)) : null,
+          ratingCount: a?.count || 0,
+          flags: { red: a?.red || 0, yellow: a?.yellow || 0, blue: a?.blue || 0 },
+        } as any;
+      });
+      const total = withPerf.length;
+      const offset = (page - 1) * pageSize;
+      const slice = withPerf.slice(offset, offset + pageSize);
+      return NextResponse.json({
+        success: true,
+        data: slice,
+        pagination: { page, pageSize, total, hasMore: offset + slice.length < total },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // Epoch cutoff for Toast placeholder dates
     const epochEnd = new Date('1970-01-02T00:00:00.000Z');
 
@@ -34,7 +85,8 @@ export async function GET(request: NextRequest) {
       console.warn('Normalization (string->date) failed:', normErr);
     }
 
-    if (syncFromToast) {
+    // In demo mode, never pull live from Toast
+    if (syncFromToast && !isDemoMode()) {
       // Sync employees from Toast API - ONE WAY ONLY (Toast → Varuni)
       const toastClient = new ToastAPIClient();
       const toastEmployees = await toastClient.getEmployees(restaurantGuid, page, pageSize);

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import ToastErrorHandler from './toast-error-handler';
+import { isDemoMode } from '@/lib/config/demo';
 
 // Global cache for the auth service instance
 let authServiceInstance: ToastAuthService | null = null;
@@ -37,6 +38,9 @@ export class ToastAuthService {
    * Get a valid access token, refreshing if necessary
    */
   public async getAccessToken(): Promise<string> {
+    if (isDemoMode()) {
+      return 'demo-token';
+    }
     // Check if current token is still valid (with 5-minute buffer)
     if (this.accessToken && this.tokenExpiry) {
       const now = new Date();
@@ -65,6 +69,7 @@ export class ToastAuthService {
    * Initial authentication to get access token
    */
   private async authenticate(): Promise<string> {
+    if (isDemoMode()) return 'demo-token';
     const authUrl = `${this.apiHostname}/authentication/v1/authentication/login`;
     
     const payload = {
@@ -148,6 +153,7 @@ export class ToastAuthService {
    * Refresh access token using refresh token
    */
   private async refreshAccessToken(): Promise<string> {
+    if (isDemoMode()) return 'demo-token';
     if (!this.refreshToken) {
       throw new Error('No refresh token available');
     }

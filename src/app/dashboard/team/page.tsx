@@ -204,10 +204,12 @@ export default function TeamPage() {
 
   const reloadPerfSummary = useCallback(async () => {
     try {
-      if (!selectedRestaurant) return;
+      // Use demo restaurant GUID for seeded data
+      const restaurantGuid = selectedRestaurant || 'rest-1';
+      if (!restaurantGuid) return;
       setPerfLoading(true);
       const { start, end } = getWindowDates(perfWindow);
-      const qs = new URLSearchParams({ restaurantGuid: String(selectedRestaurant), start: start.toISOString(), end: end.toISOString() }).toString();
+      const qs = new URLSearchParams({ restaurantGuid: restaurantGuid, start: start.toISOString(), end: end.toISOString() }).toString();
       const res = await fetch(`/api/performance?${qs}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
@@ -232,7 +234,7 @@ export default function TeamPage() {
       const prevStart = new Date(prevEnd);
       prevStart.setDate(prevStart.getDate() - days);
       prevStart.setHours(0,0,0,0);
-      const qsPrev = new URLSearchParams({ restaurantGuid: String(selectedRestaurant), start: prevStart.toISOString(), end: prevEnd.toISOString() }).toString();
+      const qsPrev = new URLSearchParams({ restaurantGuid: restaurantGuid, start: prevStart.toISOString(), end: prevEnd.toISOString() }).toString();
       const resPrev = await fetch(`/api/performance?${qsPrev}`, { cache: 'no-store' });
       const dataPrev = await resPrev.json();
       if (dataPrev.success) {
@@ -240,7 +242,7 @@ export default function TeamPage() {
         setPerfAggregatesPrev(prevAggregates);
       }
     } finally { setPerfLoading(false); }
-  }, [selectedRestaurant, perfWindow]);
+  }, [perfWindow]);
 
   useEffect(() => { reloadPerfSummary(); }, [reloadPerfSummary]);
   useEffect(() => {
@@ -692,7 +694,7 @@ export default function TeamPage() {
               </div>
               <textarea className="w-full border rounded p-2 bg-background text-foreground" rows={4} placeholder="Details (optional)" value={details} onChange={(e)=> setDetails(e.target.value)} />
               <div className="flex gap-2 justify-end">
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={()=> submit(false)} type="button">Save Rating</Button>
+                <Button className="bg-teal-600 hover:bg-teal-700 text-white" onClick={()=> submit(false)} type="button">Save Rating</Button>
               </div>
             </div>
           </DialogContent>
@@ -714,7 +716,7 @@ export default function TeamPage() {
               <textarea className="w-full border rounded p-2 bg-background text-foreground" rows={4} placeholder="Details (optional)" value={details} onChange={(e)=> setDetails(e.target.value)} />
               <div className="flex gap-2 justify-end">
                 <Button variant="outline" onClick={()=> setFlagOpen(false)} type="button">Cancel</Button>
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={async ()=>{ await submit(true); setFlagOpen(false); }} type="button">Save Flag</Button>
+                <Button className="bg-teal-600 hover:bg-teal-700 text-white" onClick={async ()=>{ await submit(true); setFlagOpen(false); }} type="button">Save Flag</Button>
               </div>
             </div>
           </DialogContent>
@@ -937,6 +939,11 @@ export default function TeamPage() {
   }, [hudEmployees, aggregateById, prevAggregateById]);
 
   const criticalMembersList = useMemo(() => {
+    // Only calculate if we have performance data loaded
+    if (perfLoading || perfAggregates.length === 0) {
+      return [];
+    }
+
     const items: { id: string; name: string; role: string; red: number }[] = [];
     const active = hudEmployees.filter((e:any)=> e?.isActive === true);
     active.forEach((emp:any)=>{
@@ -945,7 +952,7 @@ export default function TeamPage() {
       if (red >= 2) items.push({ id: emp.toastGuid, name: `${emp.firstName} ${emp.lastName}`.trim(), role: emp.jobTitles?.[0]?.title || 'Employee', red });
     });
     return items.sort((a,b)=> b.red - a.red).slice(0,10);
-  }, [hudEmployees, aggregateById]);
+  }, [hudEmployees, aggregateById, perfLoading, perfAggregates.length]);
 
   return (
     <DashboardLayout>
@@ -971,7 +978,7 @@ export default function TeamPage() {
             </Button>
             <Dialog open={isAddMemberOpen} onOpenChange={setIsAddMemberOpen}>
               <DialogTrigger asChild>
-                                  <Button className="bg-orange-600 hover:bg-orange-700 text-white">
+                                  <Button className="bg-teal-600 hover:bg-teal-700 text-white">
                     <Plus className="mr-2 h-4 w-4" />
                     Add Member
                   </Button>
@@ -1052,7 +1059,7 @@ export default function TeamPage() {
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setIsAddMemberOpen(false)}>Cancel</Button>
-                  <Button className="bg-orange-600 hover:bg-orange-700 text-white">Add Member</Button>
+                  <Button className="bg-teal-600 hover:bg-teal-700 text-white">Add Member</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -1060,11 +1067,11 @@ export default function TeamPage() {
         </div>
 
         {/* Toast Sync Status */}
-        <Card className="bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border-orange-200 dark:border-orange-800">
+        <Card className="bg-gradient-to-r from-teal-50 to-teal-100 dark:from-teal-950/20 dark:to-teal-900/20 border-teal-200 dark:border-teal-800">
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
-                <div className="bg-orange-600 rounded-full p-2">
+                <div className="bg-teal-600 rounded-full p-2">
                   <Smartphone className="h-6 w-6 text-white" />
                 </div>
                 <div>
@@ -1100,7 +1107,7 @@ export default function TeamPage() {
                     +2 this month
                   </p>
                 </div>
-                <Users className="h-8 w-8 text-orange-600 dark:text-orange-400" />
+                <Users className="h-8 w-8 text-teal-600 dark:text-teal-400" />
               </div>
             </CardContent>
           </Card>
@@ -1175,7 +1182,7 @@ export default function TeamPage() {
                         </div>
                         <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
                           <div
-                            className="bg-orange-500 h-2 rounded-full"
+                            className="bg-teal-500 h-2 rounded-full"
                             style={{ width: `${(dept.members / maxDeptMembers) * 100}%` }}
                           />
                         </div>
@@ -1202,7 +1209,7 @@ export default function TeamPage() {
                     {leaderboardTop.map((row, index) => (
                       <div key={row.id} className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
-                          <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-sm font-semibold">
+                          <div className="bg-teal-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-sm font-semibold">
                             {index + 1}
                           </div>
                           <div>
@@ -1522,7 +1529,7 @@ export default function TeamPage() {
                   <CardDescription>Ratings and flags</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-32 w-full rounded mb-2 overflow-auto border border-orange-900/20 bg-background/50">
+                  <div className="h-32 w-full rounded mb-2 overflow-auto border border-teal-900/20 bg-background/50">
                     <ul className="divide-y divide-border/60">
                       {recentPerfEntries
                         .filter((e:any)=> (showRatingFeed && typeof e.rating==='number') || (showFlagFeed && e.isFlag))
@@ -1530,7 +1537,7 @@ export default function TeamPage() {
                         .map((e:any, i:number)=> (
                           <li key={i} className="px-3 py-2 text-[11px] flex items-start justify-between">
                             <div className="flex items-center gap-2">
-                              <span className={`inline-block w-2 h-2 rounded-full ${e.isFlag ? (e.flagType==='red'?'bg-red-500': e.flagType==='yellow'?'bg-amber-500':'bg-sky-500') : 'bg-orange-500'}`}></span>
+                              <span className={`inline-block w-2 h-2 rounded-full ${e.isFlag ? (e.flagType==='red'?'bg-red-500': e.flagType==='yellow'?'bg-amber-500':'bg-sky-500') : 'bg-teal-500'}`}></span>
                               <div className="text-foreground/90">
                                 {e.isFlag ? (
                                   <span className="font-medium capitalize">{e.flagType} flag</span>
@@ -1767,7 +1774,7 @@ export default function TeamPage() {
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSelectedMember(null)}>Close</Button>
-                <Button className="bg-orange-600 hover:bg-orange-700 text-white" disabled>
+                <Button className="bg-teal-600 hover:bg-teal-700 text-white" disabled>
                   Sync from Toast
                 </Button>
               </DialogFooter>

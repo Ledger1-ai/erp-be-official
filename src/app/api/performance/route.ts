@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
 import PerformanceEntry from '@/lib/models/PerformanceEntry';
+import { isDemoMode } from '@/lib/config/demo';
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,11 +11,17 @@ export async function GET(request: NextRequest) {
     const start = searchParams.get('start');
     const end = searchParams.get('end');
 
-    if (!restaurantGuid) return NextResponse.json({ success: false, error: 'restaurantGuid required' }, { status: 400 });
+    if (!restaurantGuid && !isDemoMode()) return NextResponse.json({ success: false, error: 'restaurantGuid required' }, { status: 400 });
 
     await connectDB();
 
-    const filter: any = { restaurantGuid };
+    const filter: any = {} as any;
+    if (isDemoMode()) {
+      // Always use demo restaurant to avoid mismatches from persisted selection
+      filter.restaurantGuid = 'rest-1';
+    } else if (restaurantGuid) {
+      filter.restaurantGuid = restaurantGuid;
+    }
     if (employeeToastGuid) filter.employeeToastGuid = employeeToastGuid;
     if (start || end) {
       filter.createdAt = {} as any;

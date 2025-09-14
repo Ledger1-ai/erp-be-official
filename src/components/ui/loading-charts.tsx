@@ -26,15 +26,23 @@ export function LoadingBarChart({ numBars = 7 }: { numBars?: number }) {
     return () => clearInterval(id);
   }, [numBars]);
 
-  // 7 distinct orange shades (light → dark)
-  const shades = ['#ffedd5', '#fed7aa', '#fdba74', '#fb923c', '#f97316', '#ea580c', '#c2410c'];
+  // 7 distinct teal shades (light → dark)
+  const shades = [
+    'hsl(171 65% 95%)', // lightest
+    'hsl(171 65% 88%)',
+    'hsl(171 65% 78%)',
+    'hsl(171 65% 68%)',
+    'hsl(171 65% 58%)', // primary
+    'hsl(171 70% 48%)',
+    'hsl(171 75% 38%)'  // darkest
+  ];
 
   return (
     <ResponsiveContainer width="100%" height={300}>
       <BarChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-        <XAxis dataKey="name" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={{ stroke: "#e2e8f0" }} />
-        <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={{ stroke: "#e2e8f0" }} domain={[0, maxDomain]} />
+        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+        <XAxis dataKey="name" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} axisLine={{ stroke: "hsl(var(--border))" }} />
+        <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} axisLine={{ stroke: "hsl(var(--border))" }} domain={[0, maxDomain]} />
         <Bar dataKey="value">
           {data.map((entry, index) => {
             const ratio = Math.min(1, entry.value / Math.max(1, maxDomain));
@@ -49,7 +57,13 @@ export function LoadingBarChart({ numBars = 7 }: { numBars?: number }) {
 
 export function LoadingDonutPie({ segments = 5 }: { segments?: number }) {
   const [data, setData] = React.useState<Array<{ name: string; value: number; color: string }>>([]);
-  const palette = ['#ffedd5', '#fed7aa', '#fdba74', '#fb923c', '#f97316'];
+  const palette = [
+    'hsl(171 65% 95%)', // lightest
+    'hsl(171 65% 88%)',
+    'hsl(171 65% 78%)',
+    'hsl(171 65% 68%)',
+    'hsl(171 65% 58%)'  // primary
+  ];
 
   React.useEffect(() => {
     const tick = () => {

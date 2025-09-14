@@ -12,6 +12,8 @@
     "setup-auth": "tsx src/lib/db/create-admin.ts",
     "test:backend": "node test-backend.js",
     "test:connection": "tsx scripts/test-connection.ts",
+    "test:container": "tsx scripts/container-test.ts",
+    "test:connection-string": "tsx scripts/test-connection-string.ts",
     "deploy:azure": "tsx scripts/deploy-azure.ts",
     "backfill:transactions": "tsx scripts/backfill-transactions.ts",
     "repair:po-receipts": "tsx scripts/repair-po-receipts.ts"
@@ -51,6 +53,7 @@
     "cmdk": "^1.1.1",
     "crypto-js": "^4.2.0",
     "date-fns": "^4.1.0",
+    "dotenv": "^16.4.5",
     "google-protobuf": "^3.21.4",
     "graphql": "^16.11.0",
     "jsonwebtoken": "^9.0.2",

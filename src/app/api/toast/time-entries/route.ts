@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { isDemoMode } from '@/lib/config/demo';
 import { getDefaultTimeZone, formatYMDInTimeZone, getDayRangeForYmdInTz } from '@/lib/timezone';
 
 export async function GET(request: NextRequest) {
@@ -22,6 +23,14 @@ export async function GET(request: NextRequest) {
       const { start, end } = getDayRangeForYmdInTz(tz, ymd);
       if (!startDate) startDate = start.toISOString();
       if (!endDate) endDate = new Date().toISOString();
+    }
+
+    if (isDemoMode()) {
+      const now = new Date().toISOString();
+      return NextResponse.json([
+        { id: 'te1', employeeId: 'tm2', clockIn: now, clockOut: null, role: 'Server' },
+        { id: 'te2', employeeId: 'tm1', clockIn: now, clockOut: null, role: 'Head Chef' },
+      ]);
     }
 
     const toastClient = new ToastAPIClient();

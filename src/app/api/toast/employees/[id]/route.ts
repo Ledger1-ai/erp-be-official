@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 import { connectDB } from '@/lib/db/connection';
+import { isDemoMode } from '@/lib/config/demo';
 
 export async function GET(
   request: NextRequest,
@@ -9,29 +10,33 @@ export async function GET(
 ) {
   try {
     const { searchParams } = new URL(request.url);
-    const restaurantGuid = searchParams.get('restaurantGuid');
+    // const restaurantGuid = searchParams.get('restaurantGuid');
     const employeeGuid = params.id;
 
-    if (!restaurantGuid) {
-      return NextResponse.json({
-        error: 'restaurantGuid parameter is required',
-      }, { status: 400 });
-    }
+    // if (!restaurantGuid) {
+    //   return NextResponse.json({
+    //     error: 'restaurantGuid parameter is required',
+    //   }, { status: 400 });
+    // }
 
     await connectDB();
 
     // Try to get from local database first
-    let employee = await ToastEmployee.findByToastGuid(employeeGuid);
+    let employee = await ToastEmployee.findOne({ toastGuid: employeeGuid });
 
     if (!employee) {
-      // If not found locally, fetch from Toast API
+      // In demo mode, do not call Toast; return not found
+      if (isDemoMode()) {
+        return NextResponse.json({ success: false, error: 'Not found (demo mode: no live fetch)' }, { status: 404 });
+      }
+      // If not found locally, fetch from Toast API (non-demo only)
       const toastClient = new ToastAPIClient();
+      const { searchParams } = new URL(request.url);
+      const restaurantGuid = searchParams.get('restaurantGuid') || '';
       const toastEmployee = await toastClient.getEmployee(restaurantGuid, employeeGuid);
-
-      // Save to local database
       employee = new ToastEmployee({
         toastGuid: toastEmployee.guid,
-        restaurantGuid,
+        restaurantGuid: restaurantGuid,
         entityType: toastEmployee.entityType,
         firstName: toastEmployee.firstName,
         lastName: toastEmployee.lastName,
@@ -45,7 +50,6 @@ export async function GET(
         syncStatus: 'synced',
         isActive: !toastEmployee.deletedDate,
       });
-
       await employee.save();
     }
 
@@ -70,6 +74,9 @@ export async function PUT(
   { params }: any
 ) {
   try {
+    if (isDemoMode()) {
+      return NextResponse.json({ success: true, message: 'Demo mode: update disabled' });
+    }
     const body = await request.json();
     const { restaurantGuid, employeeData } = body;
     const employeeGuid = params.id;
@@ -87,7 +94,7 @@ export async function PUT(
 
     // Update in local database
     await connectDB();
-    const localEmployee = await ToastEmployee.findByToastGuid(employeeGuid);
+    const localEmployee = await ToastEmployee.findOne({ toastGuid: employeeGuid });
 
     if (localEmployee) {
       Object.assign(localEmployee, {
@@ -132,6 +139,7 @@ export async function DELETE(
   { params }: any
 ) {
   try {
+    // In demo mode, only perform local soft delete (already the case below)
     const { searchParams } = new URL(request.url);
     const restaurantGuid = searchParams.get('restaurantGuid');
     const employeeGuid = params.id;
@@ -145,7 +153,7 @@ export async function DELETE(
     await connectDB();
 
     // Soft delete in local database
-    const localEmployee = await ToastEmployee.findByToastGuid(employeeGuid);
+    const localEmployee = await ToastEmployee.findOne({ toastGuid: employeeGuid });
 
     if (localEmployee) {
       localEmployee.isActive = false;

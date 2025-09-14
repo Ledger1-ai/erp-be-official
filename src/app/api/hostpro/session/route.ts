@@ -7,19 +7,12 @@ export async function GET() {
   await connectDB();
   const live = await HostSession.findOne({ status: 'live' }).sort({ startedAt: -1 });
   if (!live) return NextResponse.json({ success: true, data: null });
-  // Sanitize rotation to exclude ineligible servers (non-Servers or inactive)
+  // Keep rotation stable in demo; only clamp pointer if needed
   try {
-    const eligible = new Set(
-      (live.servers || [])
-        .filter((s: any) => String(s.role) === 'Server' && s.isActive)
-        .map((s: any) => String(s.id))
-    );
     const currentOrder: string[] = Array.isArray(live.rotation?.order) ? (live.rotation.order as any).map(String) : [];
-    const filteredOrder = currentOrder.filter(id => eligible.has(String(id)));
-    let pointer = Math.max(0, Math.min(Number(live.rotation?.pointer || 0), Math.max(0, filteredOrder.length - 1)));
-    // If order changed or pointer out of range, persist the sanitized rotation
-    if (filteredOrder.length !== currentOrder.length || pointer !== (live.rotation?.pointer || 0)) {
-      live.rotation = { isLive: Boolean(live.rotation?.isLive), order: filteredOrder, pointer } as any;
+    let pointer = Math.max(0, Math.min(Number(live.rotation?.pointer || 0), Math.max(0, currentOrder.length - 1)));
+    if (pointer !== (live.rotation?.pointer || 0)) {
+      live.rotation = { isLive: Boolean(live.rotation?.isLive), order: currentOrder, pointer } as any;
       await live.save();
     }
   } catch {}
@@ -65,8 +58,14 @@ export async function PUT(req: NextRequest) {
   return NextResponse.json({ success: true, data: live });
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
   await connectDB();
+  const url = new URL(req.url);
+  const wipe = url.searchParams.get('wipe');
+  if (String(wipe).toLowerCase() === 'true') {
+    await HostSession.deleteMany({});
+    return NextResponse.json({ success: true, data: null });
+  }
   const live = await HostSession.findOne({ status: 'live' });
   if (!live) return NextResponse.json({ success: true, data: null });
   live.status = 'ended';

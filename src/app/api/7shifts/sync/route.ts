@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/db/connection';
 import { User } from '@/lib/models/User';
 import SevenShiftsShift from '@/lib/models/SevenShiftsShift';
 import SevenShiftsApiClient from '@/lib/services/seven-shifts-api-client';
+import { isDemoMode } from '@/lib/config/demo';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 
 async function sync7ShiftsData() {
@@ -182,6 +183,10 @@ async function sync7ShiftsData() {
 export async function POST(req: NextRequest) {
   try {
     console.log('Starting 7shifts sync...');
+    if (isDemoMode()) {
+      console.log('Demo mode: skipping 7shifts sync');
+      return NextResponse.json({ success: true, message: 'Demo mode: 7shifts sync disabled' });
+    }
     await connectDB();
     console.log('Database connected, calling sync7ShiftsData...');
     await sync7ShiftsData();

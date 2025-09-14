@@ -179,39 +179,54 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden">
-      {/* Smooth Orange Gradient Background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-orange-400 via-orange-500 to-amber-500 dark:from-orange-600 dark:via-orange-700 dark:to-amber-700"></div>
-      <div className="absolute inset-0 bg-gradient-to-tr from-orange-300/40 via-transparent to-amber-400/30 dark:from-orange-500/30 dark:via-transparent dark:to-amber-600/20 animate-gradient-drift"></div>
-      <div className="absolute inset-0 bg-gradient-to-bl from-transparent via-orange-400/20 to-yellow-400/25 dark:from-transparent dark:via-orange-600/15 dark:to-yellow-600/15 animate-gradient-drift-slow"></div>
-      {/* Floating Orange Elements */}
+      {/* Artistic Teal Gradient Background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-teal-400 via-teal-500 to-cyan-500 dark:from-teal-600 dark:via-teal-700 dark:to-cyan-700"></div>
+
+      {/* Moving Teal Orbs */}
       <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-orange-200/20 rounded-full blur-3xl animate-float-slow"></div>
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-amber-300/15 rounded-full blur-3xl animate-float-reverse"></div>
-        <div className="absolute top-1/3 left-1/4 w-64 h-64 bg-yellow-400/10 rounded-full blur-3xl animate-float-diagonal"></div>
-        <div className="absolute bottom-1/4 right-1/3 w-72 h-72 bg-orange-400/12 rounded-full blur-3xl animate-float-up"></div>
+        <div
+          className="absolute w-96 h-96 animate-orb-drift"
+          style={{
+            background: 'radial-gradient(circle, rgba(20, 184, 166, 0.15), transparent 60%)',
+            top: '30%',
+            left: '20%'
+          }}
+        ></div>
+        <div
+          className="absolute w-80 h-80 animate-orb-drift-reverse"
+          style={{
+            background: 'radial-gradient(circle, rgba(6, 182, 212, 0.12), transparent 55%)',
+            top: '50%',
+            right: '25%',
+            animationDelay: '15s'
+          }}
+        ></div>
+        <div
+          className="absolute w-72 h-72 animate-orb-drift"
+          style={{
+            background: 'radial-gradient(circle, rgba(16, 185, 129, 0.14), transparent 58%)',
+            bottom: '40%',
+            left: '40%',
+            animationDelay: '30s'
+          }}
+        ></div>
       </div>
       
       <div className="w-full max-w-md relative z-10">
         {/* Logo and Branding */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">
-            <div className="mr-3">
-              <Image 
-                src="/tgl.png" 
-                alt="The Graine Ledger" 
-                width={48} 
-                height={48} 
-                className="h-12 w-12 rounded-full"
-              />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold text-white drop-shadow-lg">The Graine Ledger</h1>
-              <p className="text-white/80 text-sm drop-shadow">Powered by Varuni AI</p>
-            </div>
+            <Image
+              src="/l1logows.png"
+              alt="ledger1"
+              width={160}
+              height={50}
+              className="h-16 w-auto"
+            />
           </div>
-          <div className="flex items-center justify-center text-sm text-white/70 mb-2 drop-shadow">
+          <div className="flex items-center justify-center text-sm text-white/70 mb-2 -mt-2 drop-shadow">
             <Brain className="h-4 w-4 mr-1" />
-            <span>AI-Powered Restaurant Management</span>
+            <span>AI-Assisted Backoffice</span>
           </div>
         </div>
 
@@ -260,7 +275,7 @@ export default function LoginPage() {
                       <FormLabel>Email Address</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="admin@thegraineledger.com"
+                          placeholder="admin@ledger1.ai"
                           type="email"
                           disabled={isLoading}
                           {...field}
@@ -310,7 +325,7 @@ export default function LoginPage() {
 
                 <Button
                   type="submit"
-                  className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white font-medium shadow-lg backdrop-blur-sm"
+                  className="w-full h-11 bg-teal-600 hover:bg-teal-700 text-white font-medium shadow-lg backdrop-blur-sm"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -338,8 +353,9 @@ export default function LoginPage() {
 
         {/* Footer */}
         <div className="text-center mt-8 text-xs text-white/50 drop-shadow">
-          <p>© 2025 The Graine Ledger. All rights reserved.</p>
-          <p className="mt-1">Built with Varuni AI Technology</p>
+          <p>© 2025 ledger1. All rights reserved.</p>
+          <p className="mt-1">Visit <a href="https://ledger1.ai" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">ledger1.ai</a> for more information</p>
+          <p className="mt-3 text-[10px] text-white/30">An Endeavor of The Utility Co.</p>
         </div>
       </div>
     </div>

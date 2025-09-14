@@ -78,17 +78,17 @@ function OrdersTodayWidget() {
       </CardHeader>
       <CardContent className="pt-0">
         <div className="grid grid-cols-2 gap-4">
-          <div className="p-3 rounded-lg bg-orange-50 dark:bg-orange-950/20">
+          <div className="p-3 rounded-lg bg-orange/10 dark:bg-orange/5">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Revenue</span>
-              <DollarSign className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              <DollarSign className="h-4 w-4 text-orange dark:text-orange" />
             </div>
             <div className="text-2xl font-semibold mt-1">${revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           </div>
-          <div className="p-3 rounded-lg bg-orange-50 dark:bg-orange-950/20">
+          <div className="p-3 rounded-lg bg-orange/10 dark:bg-orange/5">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Orders</span>
-              <Package className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              <Package className="h-4 w-4 text-orange dark:text-orange" />
             </div>
             <div className="text-2xl font-semibold mt-1">{orders}</div>
           </div>
@@ -107,7 +107,7 @@ function LowStockWidget() {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2">
-          <AlertTriangle className="h-5 w-5 text-yellow-600" />
+          <AlertTriangle className="h-5 w-5 text-warning" />
           Low Stock
         </CardTitle>
         <CardDescription>Items approaching reorder levels</CardDescription>
@@ -160,7 +160,7 @@ function ActiveStaffWidget() {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2">
-          <Users className="h-5 w-5 text-green-600" />
+          <Users className="h-5 w-5 text-success" />
           Active Staff
         </CardTitle>
         <CardDescription>Currently on shift</CardDescription>
@@ -273,7 +273,7 @@ export default function WidgetsGrid() {
               onDragStart={(e) => onDragStart(e, id)}
               onDragOver={onDragOver}
               onDrop={(e) => onDrop(e, id)}
-              className={`group rounded-lg border transition-shadow ${draggingId === id ? "ring-2 ring-orange-500" : ""}`}
+              className={`group rounded-lg border transition-shadow ${draggingId === id ? "ring-2 ring-ring" : ""}`}
             >
               <div className={cardPadClass}>
                 {W.render()}

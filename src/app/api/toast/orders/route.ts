@@ -5,9 +5,13 @@ import { connectDB } from '@/lib/db/connection';
 import HostSession from '@/lib/models/HostSession';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 import { ToastTablesClient } from '@/lib/services/toast-tables-client';
+import { isDemoMode, isDemoStubsEnabled } from '@/lib/config/demo';
+import { loadEnv } from '@/lib/config/load-env';
 
 export async function GET(request: NextRequest) {
   try {
+    // Ensure environment variables are loaded for runtime demo mode detection
+    loadEnv();
     const { searchParams } = new URL(request.url);
     const restaurantGuid = searchParams.get('restaurantGuid') || process.env.TOAST_RESTAURANT_ID || '';
     const startDate = searchParams.get('startDate') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -17,6 +21,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         error: 'restaurantGuid is required',
       }, { status: 400 });
+    }
+
+    // In demo mode, reflect occupancy from HostSession instead of Toast
+    if (isDemoMode() && isDemoStubsEnabled()) {
+      await connectDB();
+      const live = await HostSession.findOne({ status: 'live' }).lean();
+      const seatings: Array<{ id: string; serverId: string; tableId: string; startedAt: Date; status: string }>
+        = Array.isArray(live?.seatings) ? (live!.seatings as any) : [];
+      const open = seatings.filter(s => String(s.status) === 'seated');
+      const demoOrders = open.map((s) => ({
+        guid: s.id,
+        orderNumber: s.id,
+        totalAmount: 0,
+        amount: 0,
+        orderStatus: 'OPEN',
+        createdDate: (s.startedAt ? new Date(s.startedAt) : new Date()).toISOString(),
+        table: { externalId: String(s.tableId) },
+        server: { externalId: String(s.serverId) },
+        checks: [{}],
+      }));
+      return NextResponse.json({ success: true, data: demoOrders, count: demoOrders.length, timestamp: new Date().toISOString() });
     }
 
     const toastAPI = new ToastCompleteAPI();
@@ -43,6 +68,8 @@ export async function GET(request: NextRequest) {
 // Create a new Toast order and attach it to a server and table
 export async function POST(request: NextRequest) {
   try {
+    // Ensure environment variables are loaded for runtime demo mode detection
+    loadEnv();
     await connectDB();
     const body = await request.json().catch(() => ({}));
     const {
@@ -107,9 +134,13 @@ export async function POST(request: NextRequest) {
     if (serverGuid) payload.server = { guid: serverGuid, entityType: 'RestaurantUser' };
     if (toastTableGuid) payload.table = { guid: toastTableGuid, entityType: 'Table' };
 
-    const client = new ToastAPIClient();
-    const headers = { 'Toast-Restaurant-External-ID': restaurantGuid } as Record<string, string>;
-    const resp = await client.makeRequest<any>('/orders/v2/orders', 'POST', JSON.stringify(payload), undefined, headers);
+    // In demo mode, don't call Toast. Simulate a successful order creation.
+    let resp: any = { guid: orderGuid };
+    if (!isDemoMode() || isDemoStubsEnabled()) {
+      const client = new ToastAPIClient();
+      const headers = { 'Toast-Restaurant-External-ID': restaurantGuid } as Record<string, string>;
+      resp = await client.makeRequest<any>('/orders/v2/orders', 'POST', JSON.stringify(payload), undefined, headers);
+    }
 
     // Persist the order guid on the latest seating for this server/table if available
     try {

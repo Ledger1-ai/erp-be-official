@@ -205,15 +205,15 @@ export default function AnalyticsPage() {
         </div>
 
         {/* AI Insights */}
-        <Card className="bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border-orange-200 dark:border-orange-800">
+        <Card className="bg-gradient-to-r from-primary/10 to-primary/5 dark:from-primary/5 dark:to-primary/10 border-primary/20 dark:border-primary/30">
           <CardContent className="p-6">
             <div className="flex items-start space-x-4">
-              <div className="bg-orange-600 rounded-full p-2">
-                <Brain className="h-6 w-6 text-white" />
+              <div className="bg-primary rounded-full p-2">
+                <Brain className="h-6 w-6 text-primary-foreground" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-3">
-                  <h3 className="font-semibold text-foreground">Varuni's Strategic Insights</h3>
+                  <h3 className="font-semibold text-foreground">Varuni Insights</h3>
                   <Badge variant="warning">Coming Soon</Badge>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -257,13 +257,13 @@ export default function AnalyticsPage() {
                     <p className="text-2xl font-bold text-foreground mt-1">{metric.value}</p>
                     <div className="flex items-center mt-2">
                       {metric.changeType === "positive" ? (
-                        <TrendingUp className="h-4 w-4 text-green-600 mr-1" />
+                        <TrendingUp className="h-4 w-4 text-success mr-1" />
                       ) : (
-                        <TrendingDown className="h-4 w-4 text-red-600 mr-1" />
+                        <TrendingDown className="h-4 w-4 text-red mr-1" />
                       )}
                       <span
                         className={`text-sm ${
-                          metric.changeType === "positive" ? "text-green-600" : "text-red-600"
+                          metric.changeType === "positive" ? "text-success" : "text-red"
                         }`}
                       >
                         {metric.change}
@@ -271,8 +271,8 @@ export default function AnalyticsPage() {
                       <span className="text-sm text-muted-foreground ml-1">{metric.description}</span>
                     </div>
                   </div>
-                  <div className="bg-orange-50 dark:bg-orange-950/20 rounded-lg p-3">
-                    <metric.icon className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+                  <div className="bg-primary/10 dark:bg-primary/5 rounded-lg p-3">
+                    <metric.icon className="h-6 w-6 text-primary" />
                   </div>
                 </div>
               </CardContent>
@@ -302,21 +302,21 @@ export default function AnalyticsPage() {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
                     <AreaChart data={revenueData.slice(-6)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                      <XAxis 
-                        dataKey="month" 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                      <XAxis
+                        dataKey="month"
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        axisLine={{ stroke: "hsl(var(--border))" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
-                      <YAxis 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
+                      <YAxis
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        axisLine={{ stroke: "hsl(var(--border))" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
                       <Tooltip content={<CustomChartTooltip formatter={(value) => [`$${Number(value).toLocaleString()}`, '']} />} />
-                      <Area type="monotone" dataKey="revenue" stroke="#ea580c" fill="#ea580c" fillOpacity={0.3} strokeWidth={2} />
-                      <Line type="monotone" dataKey="target" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 5" />
+                      <Area type="monotone" dataKey="revenue" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.3} strokeWidth={2} />
+                      <Line type="monotone" dataKey="target" stroke="hsl(var(--red))" strokeWidth={2} strokeDasharray="5 5" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -332,20 +332,20 @@ export default function AnalyticsPage() {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={dailyMetrics}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                      <XAxis 
-                        dataKey="day" 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                      <XAxis
+                        dataKey="day"
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        axisLine={{ stroke: "hsl(var(--border))" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
-                      <YAxis 
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        axisLine={{ stroke: "#e2e8f0" }}
+                      <YAxis
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        axisLine={{ stroke: "hsl(var(--border))" }}
                         className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                       />
                       <Tooltip content={<CustomChartTooltip formatter={(value) => [`$${Number(value).toLocaleString()}`, 'Sales']} />} />
-                      <Bar dataKey="sales" fill="#ea580c" />
+                      <Bar dataKey="sales" fill="hsl(var(--primary))" />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -365,9 +365,9 @@ export default function AnalyticsPage() {
                                                                                   <span className="font-medium text-foreground">{category.category}</span>
                             <span className="text-sm text-muted-foreground">${category.revenue.toLocaleString()}</span>
                         </div>
-                                                  <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                                                  <div className="w-full bg-muted rounded-full h-2">
                           <div
-                            className="bg-orange-500 h-2 rounded-full"
+                            className="bg-primary h-2 rounded-full"
                             style={{ width: `${(category.revenue / 45200) * 100}%` }}
                           />
                         </div>
@@ -422,21 +422,21 @@ export default function AnalyticsPage() {
               <CardContent>
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={revenueData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                    <XAxis 
-                      dataKey="month" 
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                      axisLine={{ stroke: "#e2e8f0" }}
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                    <XAxis
+                      dataKey="month"
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      axisLine={{ stroke: "hsl(var(--border))" }}
                       className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                     />
-                    <YAxis 
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                      axisLine={{ stroke: "#e2e8f0" }}
+                    <YAxis
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      axisLine={{ stroke: "hsl(var(--border))" }}
                       className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                     />
                     <Tooltip content={<CustomChartTooltip formatter={(value) => [`$${Number(value).toLocaleString()}`, '']} />} />
-                    <Line type="monotone" dataKey="revenue" stroke="#ea580c" strokeWidth={3} />
-                    <Line type="monotone" dataKey="target" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 5" />
+                    <Line type="monotone" dataKey="revenue" stroke="hsl(var(--primary))" strokeWidth={3} />
+                    <Line type="monotone" dataKey="target" stroke="hsl(var(--red))" strokeWidth={2} strokeDasharray="5 5" />
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -456,7 +456,7 @@ export default function AnalyticsPage() {
                   {staffPerformance.map((staff, index) => (
                     <div key={index} className="flex items-center justify-between p-4 border rounded-lg">
                       <div className="flex items-center space-x-4">
-                        <div className="bg-orange-600 rounded-full w-10 h-10 flex items-center justify-center text-white font-semibold">
+                        <div className="bg-primary rounded-full w-10 h-10 flex items-center justify-center text-primary-foreground font-semibold">
                           {staff.name.split(" ")[0][0]}{staff.name.split(" ")[1][0]}
                         </div>
                         <div>
@@ -496,16 +496,16 @@ export default function AnalyticsPage() {
                 <CardContent>
                   <div className="space-y-4">
                                           <div className="text-center">
-                        <div className="text-4xl font-bold text-orange-600 dark:text-orange-400">4.8</div>
+                        <div className="text-4xl font-bold text-primary">4.8</div>
                         <div className="text-sm text-muted-foreground">out of 5 stars</div>
                       </div>
                     <div className="space-y-2">
                       {[5, 4, 3, 2, 1].map((rating) => (
                         <div key={rating} className="flex items-center space-x-2">
                           <span className="text-sm w-6 text-foreground">{rating}★</span>
-                          <div className="flex-1 bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                          <div className="flex-1 bg-muted rounded-full h-2">
                             <div
-                              className="bg-orange-500 h-2 rounded-full"
+                              className="bg-primary h-2 rounded-full"
                               style={{ width: `${rating === 5 ? 65 : rating === 4 ? 25 : rating === 3 ? 8 : rating === 2 ? 2 : 0}%` }}
                             />
                           </div>
@@ -528,7 +528,7 @@ export default function AnalyticsPage() {
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
                       <span>Repeat Customer Rate</span>
-                      <span className="font-semibold text-orange-600 dark:text-orange-400">68%</span>
+                      <span className="font-semibold text-primary">68%</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span>Average Visit Frequency</span>

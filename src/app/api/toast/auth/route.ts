@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAuthService from '@/lib/services/toast-auth';
+import { isDemoMode } from '@/lib/config/demo';
 
 export async function POST(request: NextRequest) {
   try {
+    if (isDemoMode()) {
+      return NextResponse.json({ success: true, authenticated: true, message: 'Demo mode: auth bypassed', timestamp: new Date().toISOString() });
+    }
     const authService = ToastAuthService.getInstance();
     
     // Test authentication
@@ -28,9 +32,10 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    if (isDemoMode()) {
+      return NextResponse.json({ authenticated: true, demo: true, timestamp: new Date().toISOString() });
+    }
     const authService = ToastAuthService.getInstance();
-    
-    // Check if currently authenticated
     const isAuthenticated = authService.isAuthenticated();
     
     return NextResponse.json({
@@ -50,6 +55,9 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    if (isDemoMode()) {
+      return NextResponse.json({ success: true, message: 'Demo mode: logout noop', timestamp: new Date().toISOString() });
+    }
     const authService = ToastAuthService.getInstance();
     
     // Logout and clear tokens

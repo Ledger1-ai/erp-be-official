@@ -238,7 +238,7 @@ export default function APITest() {
               onClick={exploreServiceMethods}
               disabled={isExploring}
               variant="outline"
-              className="border-purple-200 text-purple-700 hover:bg-purple-50"
+              className="border-purple text-purple hover:bg-purple/10"
             >
               {isExploring ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -251,7 +251,7 @@ export default function APITest() {
             <Button 
               onClick={runAllTests}
               disabled={isTestingAuth || isTestingRobots}
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-blue hover:bg-blue text-blue-foreground"
             >
               {(isTestingAuth || isTestingRobots) ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -301,12 +301,12 @@ export default function APITest() {
             </Card>
 
             {/* Service Account Exploration Result */}
-            <Card className="border-2 border-purple-200">
+            <Card className="border-2 border-purple">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     {getStatusIcon(exploreStatus, isExploring)}
-                    <h4 className="font-semibold text-purple-700">Service Account Exploration</h4>
+                    <h4 className="font-semibold text-purple">Service Account Exploration</h4>
                   </div>
                   {getStatusBadge(exploreStatus)}
                 </div>
@@ -320,11 +320,11 @@ export default function APITest() {
           </div>
 
           {/* Instructions */}
-          <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg">
-            <h4 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">
+          <div className="bg-info/10 dark:bg-info/5 p-4 rounded-lg">
+            <h4 className="font-semibold text-info dark:text-info mb-2">
               🔍 Testing Instructions
             </h4>
-            <div className="text-sm text-blue-700 dark:text-blue-300 space-y-2">
+            <div className="text-sm text-info/80 dark:text-info/70 space-y-2">
               <p>1. <strong>Test Authentication</strong> - Verifies API key and secret with Bear Cloud</p>
               <p>2. <strong>Test Robot Fetch</strong> - Attempts to retrieve robot data from your fleet</p>
               <p>3. <strong>Run All Tests</strong> - Executes both tests in sequence</p>

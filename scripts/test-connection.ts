@@ -1,6 +1,8 @@
+import { loadEnv } from '../src/lib/config/load-env';
 import { testConnection } from '../src/lib/db/connection';
 
 async function main() {
+  loadEnv();
   console.log('🧪 Testing database connection...\n');
   
   try {

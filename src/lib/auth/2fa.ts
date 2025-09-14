@@ -5,7 +5,7 @@ import CryptoJS from 'crypto-js';
 
 // Environment variables for encryption
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'varuni-2fa-secret-key-change-in-production';
-const APP_NAME = 'The Graine Ledger';
+const APP_NAME = 'Ledger1';
 
 /**
  * Generate a new TOTP secret for a user
@@ -127,7 +127,7 @@ export function verifyBackupCode(code: string, hashedCode: string): boolean {
  */
 export async function setup2FA(userEmail: string) {
   const { secret, otpauthUrl } = generateTOTPSecret(userEmail);
-  const qrCodeDataURL = await generateQRCode(otpauthUrl);
+  const qrCodeDataURL = await generateQRCode(otpauthUrl!) as string;
   const backupCodes = generateBackupCodes();
   
   return {

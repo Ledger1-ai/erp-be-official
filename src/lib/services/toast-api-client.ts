@@ -1,5 +1,6 @@
 import ToastAuthService from './toast-auth';
 import ToastErrorHandler from './toast-error-handler';
+import { isDemoMode, isDemoStubsEnabled } from '@/lib/config/demo';
 import { z } from 'zod';
 
 // Toast API data schemas
@@ -123,6 +124,26 @@ export class ToastAPIClient {
     extraHeaders?: Record<string, string>
   ): Promise<T> {
     try {
+      if (isDemoMode() && isDemoStubsEnabled()) {
+        // Return minimal plausible shapes for common Toast endpoints
+        const path = String(endpoint || '').toLowerCase();
+        const nowIso = new Date().toISOString();
+        if (path.includes('/menus')) {
+          return { menus: [{ name: 'Demo Menu', menuGroups: [{ name: 'Entrees', menuItems: [{ guid: 'demo-item-1', name: 'Margherita Pizza', description: 'Fresh basil, tomatoes, mozzarella', pricing: { basePrice: 12.0 }, disabled: false }] }] }] } as any as T;
+        }
+        if (path.includes('/orders')) {
+          return [
+            { guid: 'ord1', orderNumber: '1001', totalAmount: 48.5, orderStatus: 'PAID', createdDate: nowIso, selections: [{ item: { name: 'Margherita Pizza' }, quantity: 2, price: 24.5 }] },
+          ] as any as T;
+        }
+        if (path.includes('/labor') || path.includes('/timeentries')) {
+          return [{ id: 'te1', employeeId: 'tm2', clockIn: nowIso }] as any as T;
+        }
+        if (path.includes('/stock')) {
+          return [{ sku: 'SYS-1001', quantity: 25, status: 'LOW' }] as any as T;
+        }
+        return {} as T;
+      }
       const baseHeaders = await this.authService.getAuthHeaders();
       const headers = { ...baseHeaders, ...extraHeaders };
       

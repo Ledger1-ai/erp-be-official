@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const toastItemGuid = searchParams.get('toastItemGuid');
     if (!restaurantGuid) return NextResponse.json({ success: false, error: 'restaurantGuid required' }, { status: 400 });
 
-    const index = await MenuIndex.findOne({ restaurantGuid }).lean();
+    const index = await MenuIndex.findOne({ restaurantGuid }).lean() as any;
     if (!index) return NextResponse.json({ success: false, error: 'No menus indexed' }, { status: 404 });
 
     const menusArr = index.menus || [];
@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
     for (const e of entries) {
       const it = e.item;
       const cat = (e.categoryPath || []).join(' > ');
-      const map = await MenuMapping.findOne({ restaurantGuid, toastItemGuid: it.guid }).lean();
+      const map = await MenuMapping.findOne({ restaurantGuid, toastItemGuid: it.guid }).lean() as any;
       if (map && ((((map.components || []).filter((c: any) => c && (c.kind || c.inventoryItem || c.nestedToastItemGuid)).length) || ((map.recipeSteps || []).filter((s: any) => s && (s.instruction || s.step)).length)))) {
         recipes.push({ name: it.name, components: map.components || [], steps: map.recipeSteps || [], category: cat });
       }
@@ -134,7 +134,7 @@ export async function GET(request: NextRequest) {
         doc.setFontSize(16);
         // Align text midline with medallion
         const textY = topY + imgSize / 2 + 5;
-        doc.text('The Graine Ledger Recipes', x + imgSize + 14, textY);
+        doc.text('Ledger1 Recipes', x + imgSize + 14, textY);
       }
       y = topY + 48 + 28; // push content below header
     };

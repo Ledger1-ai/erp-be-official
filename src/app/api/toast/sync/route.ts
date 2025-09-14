@@ -3,6 +3,7 @@ import ToastAPIClient from '@/lib/services/toast-api-client';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 import ToastOrder from '@/lib/models/ToastOrder';
 import { connectDB } from '@/lib/db/connection';
+import { isDemoMode } from '@/lib/config/demo';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -16,11 +17,17 @@ export async function GET(request: NextRequest) {
     }, { status: 400 });
   }
 
+  if (isDemoMode()) {
+    return NextResponse.json({ success: true, message: 'Demo mode: Toast sync disabled' });
+  }
   return handleSync({ restaurantGuid, syncType, force });
 }
 
 export async function POST(request: NextRequest) {
   try {
+    if (isDemoMode()) {
+      return NextResponse.json({ success: true, message: 'Demo mode: Toast sync disabled' });
+    }
     const body = await request.json();
     const { 
       restaurantGuid, 

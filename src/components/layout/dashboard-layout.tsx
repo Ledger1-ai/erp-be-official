@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { marked } from "marked";
-import { usePermissions } from "@/lib/hooks/use-permissions";
+import { usePermissions, ROLE_PERMISSIONS, Role } from "@/lib/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -33,8 +33,11 @@ import {
   Plus,
   Maximize2,
   Minimize2,
+  Mic,
+  Keyboard,
 } from "lucide-react";
 import Image from "next/image";
+import { VoiceChat } from "../varuni/chat/voice-chat";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -44,6 +47,7 @@ interface User {
   email: string;
   name: string;
   role: string;
+  permissions?: string[];
 }
 
 const sidebarItems = [
@@ -119,6 +123,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isVaruniOpen, setIsVaruniOpen] = useState(false);
   const [isVaruniLarge, setIsVaruniLarge] = useState(false);
+  const [chatMode, setChatMode] = useState<'text' | 'voice'>('text');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [recentSessions, setRecentSessions] = useState<Array<{ id: string; title?: string; updatedAt?: string }>>([]);
   const [tokenTotal, setTokenTotal] = useState<number>(0);
@@ -397,6 +402,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     };
 
     if (!requiresAccess(pathname || "")) {
+      // Debug: Log permission info
+      console.log('Permission denied for path:', pathname);
+      console.log('User role:', user?.role);
+      console.log('User permissions:', user?.permissions);
+      console.log('Available permissions for role:', user?.permissions || ROLE_PERMISSIONS[user?.role as Role] || []);
+
       // Compute first allowed landing route
       const order: Array<{ perm: Parameters<typeof permissions.hasPermission>[0]; route: string }> = [
         { perm: "dashboard", route: "/dashboard" },
@@ -429,6 +440,29 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     try {
       if (sessionStorage.getItem("permissionDenied") === "1") {
         sessionStorage.removeItem("permissionDenied");
+
+        // Auto-fix common permission issues
+        const userData = localStorage.getItem("user");
+        if (userData) {
+          try {
+            const user = JSON.parse(userData);
+            // If user is Staff role and doesn't have inventory permission, add it
+            if (user.role === 'Staff' && (!user.permissions || !user.permissions.includes('inventory'))) {
+              user.permissions = user.permissions || [];
+              if (!user.permissions.includes('inventory')) {
+                user.permissions.push('inventory');
+                localStorage.setItem("user", JSON.stringify(user));
+                console.log('Auto-fixed: Added inventory permission to Staff user');
+                // Reload the page to apply the fix
+                window.location.reload();
+                return;
+              }
+            }
+          } catch (e) {
+            console.error('Error auto-fixing permissions:', e);
+          }
+        }
+
         setDeniedOpen(true);
       }
     } catch {}
@@ -443,18 +477,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="flex items-center h-16 px-6 border-b">
-        <div className="mr-3">
-          <Image 
-            src="/tgl.png" 
-            alt="The Graine Ledger" 
-            width={40} 
-            height={40} 
-            className="h-10 w-10 rounded-full"
-          />
-        </div>
-        <div>
-          <h2 className="text-lg font-bold text-foreground">The Graine Ledger</h2>
-          <p className="text-xs text-muted-foreground">Backoffice</p>
+        <Image
+          src="/l1logows.png"
+          alt="ledger1"
+          width={120}
+          height={40}
+          className="h-8 w-auto"
+        />
+        <div className="ml-4">
+          <p className="text-xs text-muted-foreground">AI-Assisted Backoffice</p>
         </div>
       </div>
 
@@ -474,7 +505,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               <span className="flex items-center">
                 <item.icon className="mr-3 h-4 w-4" />
-                {item.title}
+                <span className={isActive ? "dark:text-white text-foreground" : ""}>{item.title}</span>
               </span>
               {item.tag && (
                 <Badge variant="secondary" className="ml-2">{item.tag}</Badge>
@@ -645,9 +676,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center">
               <Brain className="h-5 w-5 text-primary mr-2" />
-              <h3 className="font-semibold text-card-foreground">Varuni AI Assistant</h3>
+              <h3 className="font-semibold text-card-foreground">Varuni Assistant</h3>
             </div>
             <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" title="Voice Mode" onClick={() => setChatMode('voice')}>
+                <Mic className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" title="Text Mode" onClick={() => setChatMode('text')}>
+                <Keyboard className="h-4 w-4" />
+              </Button>
               <Button variant="ghost" size="sm" title="New chat" onClick={() => {
                 setSessionId(null);
                 setChatMessages([]);
@@ -706,112 +743,118 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               </Button>
             </div>
           </div>
-          <div className="p-4 flex-1 overflow-y-auto bg-gradient-to-b from-background/10 to-background/0">
-            <div className="bg-primary/10 rounded-lg p-3 mb-3">
-              <p className="text-sm text-primary">
-                {(() => {
-                  const name = (user?.name && user.name.split(' ')[0]) || (user?.email ? user.email.split('@')[0] : 'there');
-                  const h = new Date().getHours();
-                  const tod = h < 12 ? 'morning' : (h < 17 ? 'afternoon' : 'evening');
-                  return `Good ${tod}, ${name}! I\'m Varuni. Ask me anything, or choose a suggestion below.`;
-                })()}
-              </p>
-            </div>
-            <div className="space-y-2 mb-3">
-              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
-                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
-                if (input) { input.value = "Show me today's analytics"; input.focus(); }
-              }}>
-                <BarChart3 className="mr-2 h-4 w-4" /> Show me today&apos;s analytics
-              </Button>
-              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
-                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
-                if (input) { input.value = 'Check inventory levels and low stock'; input.focus(); }
-              }}>
-                <Package className="mr-2 h-4 w-4" /> Check inventory levels
-              </Button>
-              <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
-                const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
-                if (input) { input.value = 'Help with staff scheduling for tomorrow'; input.focus(); }
-              }}>
-                <Users className="mr-2 h-4 w-4" /> Help with staff scheduling
-              </Button>
-            </div>
-            <div id="varuni-chat-log" ref={chatLogRef} className="space-y-2 overflow-x-hidden">
-              {chatMessages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className="max-w-[85%]">
-                    <div className={`text-[10px] mb-1 ${m.role === 'user' ? 'text-primary' : 'text-muted-foreground'}`}>
-                      {m.role === 'user' ? (user?.name?.split(' ')?.[0] || 'You') : 'Varuni'}
-                    </div>
-                    <div className={`${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'} rounded-2xl px-3 py-2 shadow-sm break-words`}>
-                      {m.html ? (
-                        <div className="text-sm leading-5 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 [&>ul:first-child]:mt-0 [&>ul:last-child]:mb-0 [&>ol:first-child]:mt-0 [&>ol:last-child]:mb-0" dangerouslySetInnerHTML={{ __html: m.html }} />
-                      ) : (
-                        <div className="text-sm whitespace-pre-wrap break-words leading-5">{m.text}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {chatStatus && (
-                <div className="flex justify-start">
-                  <div className="text-xs text-muted-foreground">
+          {chatMode === 'text' ? (
+            <>
+              <div className="p-4 flex-1 overflow-y-auto bg-gradient-to-b from-background/10 to-background/0">
+                <div className="bg-primary/10 rounded-lg p-3 mb-3">
+                  <p className="text-sm text-primary">
                     {(() => {
-                      const base = String(chatStatus || 'Thinking');
-                      // Animated ellipsis: one-by-one appear/disappear
-                      const dots = Math.floor((Date.now() / 500) % 6); // 0..5
-                      const shown = dots <= 3 ? dots : 6 - dots; // 0..3..0
-                      return base + '.'.repeat(shown);
+                      const name = (user?.name && user.name.split(' ')[0]) || (user?.email ? user.email.split('@')[0] : 'there');
+                      const h = new Date().getHours();
+                      const tod = h < 12 ? 'morning' : (h < 17 ? 'afternoon' : 'evening');
+                      return `Good ${tod}, ${name}! Welcome to ledger1. Ask me anything, or choose a suggestion below.`;
                     })()}
-                  </div>
+                  </p>
                 </div>
-              )}
-            </div>
-          </div>
-          <div className="p-4 border-t">
-            <div className="flex space-x-2">
-              <input
-                id="varuni-chat-input"
-                ref={chatInputRef}
-                type="text"
-                placeholder="Ask Varuni anything..."
-                className="flex-1 px-3 py-2 text-sm border border-input bg-background text-foreground rounded-md focus:ring-2 focus:ring-ring focus:border-ring"
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    await sendMessage();
-                  }
-                }}
-              />
-              <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={sendMessage}>
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-            </div>
-            <div className="mt-2 text-[10px] text-muted-foreground flex items-center justify-between">
-              <span>Tokens used this chat: {tokenTotal || 0}</span>
-              {(() => {
-                const max = 272000; // 272k
-                const baseTokens = (typeof contextTokens === 'number' && contextTokens > 0) ? contextTokens : (typeof tokenTotal === 'number' ? tokenTotal : 0);
-                const pctFloat = baseTokens > 0 ? Math.min(100, (baseTokens / max) * 100) : 0;
-                const r = 16;
-                const C = 2 * Math.PI * r;
-                const dash = baseTokens > 0 ? Math.max(0.75, Math.min(C, (pctFloat / 100) * C)) : 0;
-                const warn = pctFloat >= 90;
-                return (
-                  <div className="flex items-center gap-2">
-                    <div className="relative w-4 h-4">
-                      <svg viewBox="0 0 36 36" className="w-4 h-4">
-                        <path className="text-muted-foreground/30" strokeWidth="4" stroke="currentColor" fill="none" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32" />
-                        <circle cx="18" cy="18" r="16" className={warn ? 'text-red-500' : 'text-primary'} strokeWidth="4" stroke="currentColor" fill="none" strokeLinecap="round" strokeDasharray={`${dash} ${C}`} transform="rotate(-90 18 18)" />
-                      </svg>
+                <div className="space-y-2 mb-3">
+                  <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                    const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                    if (input) { input.value = "Show me today's analytics"; input.focus(); }
+                  }}>
+                    <BarChart3 className="mr-2 h-4 w-4" /> Show me today&apos;s analytics
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                    const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                    if (input) { input.value = 'Check inventory levels and low stock'; input.focus(); }
+                  }}>
+                    <Package className="mr-2 h-4 w-4" /> Check inventory levels
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-full text-left justify-start" onClick={() => {
+                    const input = document.getElementById('varuni-chat-input') as HTMLInputElement | null;
+                    if (input) { input.value = 'Help with staff scheduling for tomorrow'; input.focus(); }
+                  }}>
+                    <Users className="mr-2 h-4 w-4" /> Help with staff scheduling
+                  </Button>
+                </div>
+                <div id="varuni-chat-log" ref={chatLogRef} className="space-y-2 overflow-x-hidden">
+                  {chatMessages.map((m, i) => (
+                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className="max-w-[85%]">
+                        <div className={`text-[10px] mb-1 ${m.role === 'user' ? 'text-primary' : 'text-muted-foreground'}`}>
+                          {m.role === 'user' ? (user?.name?.split(' ')?.[0] || 'You') : 'Varuni'}
+                        </div>
+                        <div className={`${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'} rounded-2xl px-3 py-2 shadow-sm break-words`}>
+                          {m.html ? (
+                            <div className="text-sm leading-5 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 [&>ul:first-child]:mt-0 [&>ul:last-child]:mb-0 [&>ol:first-child]:mt-0 [&>ol:last-child]:mb-0" dangerouslySetInnerHTML={{ __html: m.html }} />
+                          ) : (
+                            <div className="text-sm whitespace-pre-wrap break-words leading-5">{m.text}</div>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <span className={warn ? 'text-red-500' : ''}>Context: {pctFloat.toFixed(1)}%</span>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
+                  ))}
+                  {chatStatus && (
+                    <div className="flex justify-start">
+                      <div className="text-xs text-muted-foreground">
+                        {(() => {
+                          const base = String(chatStatus || 'Thinking');
+                          // Animated ellipsis: one-by-one appear/disappear
+                          const dots = Math.floor((Date.now() / 500) % 6); // 0..5
+                          const shown = dots <= 3 ? dots : 6 - dots; // 0..3..0
+                          return base + '.'.repeat(shown);
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t">
+                <div className="flex space-x-2">
+                  <input
+                    id="varuni-chat-input"
+                    ref={chatInputRef}
+                    type="text"
+                    placeholder="Ask Varuni anything..."
+                    className="flex-1 px-3 py-2 text-sm border border-input bg-background text-foreground rounded-md focus:ring-2 focus:ring-ring focus:border-ring"
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        await sendMessage();
+                      }
+                    }}
+                  />
+                  <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={sendMessage}>
+                    <MessageSquare className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="mt-2 text-[10px] text-muted-foreground flex items-center justify-between">
+                  <span>Tokens used this chat: {tokenTotal || 0}</span>
+                  {(() => {
+                    const max = 272000; // 272k
+                    const baseTokens = (typeof contextTokens === 'number' && contextTokens > 0) ? contextTokens : (typeof tokenTotal === 'number' ? tokenTotal : 0);
+                    const pctFloat = baseTokens > 0 ? Math.min(100, (baseTokens / max) * 100) : 0;
+                    const r = 16;
+                    const C = 2 * Math.PI * r;
+                    const dash = baseTokens > 0 ? Math.max(0.75, Math.min(C, (pctFloat / 100) * C)) : 0;
+                    const warn = pctFloat >= 90;
+                    return (
+                      <div className="flex items-center gap-2">
+                        <div className="relative w-4 h-4">
+                          <svg viewBox="0 0 36 36" className="w-4 h-4">
+                            <path className="text-muted-foreground/30" strokeWidth="4" stroke="currentColor" fill="none" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32" />
+                            <circle cx="18" cy="18" r="16" className={warn ? 'text-red-500' : 'text-primary'} strokeWidth="4" stroke="currentColor" fill="none" strokeLinecap="round" strokeDasharray={`${dash} ${C}`} transform="rotate(-90 18 18)" />
+                          </svg>
+                        </div>
+                        <span className={warn ? 'text-red-500' : ''}>Context: {pctFloat.toFixed(1)}%</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </>
+          ) : (
+            <VoiceChat />
+          )}
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { isDemoMode, isDemoStubsEnabled, getDemoNow } from '@/lib/config/demo';
 
 // Wraps Toast Orders Bulk: GET /orders/v2/ordersBulk
 export async function GET(request: NextRequest) {
@@ -14,6 +15,12 @@ export async function GET(request: NextRequest) {
 
     if (!restaurantGuid) {
       return NextResponse.json({ success: false, error: 'restaurantGuid required' }, { status: 400 });
+    }
+
+    // Demo stub: return stable sample orders only if DEMO_STUBS=true
+    if (isDemoMode() && isDemoStubsEnabled()) {
+      const when = getDemoNow().toISOString();
+      return NextResponse.json({ success: true, data: [{ guid: 'demo-order-1', number: '1001', createdDate: when, checks: [{ guid: 'chk1', openedDate: when, selections: [] }] }] });
     }
 
     const client = new ToastAPIClient();

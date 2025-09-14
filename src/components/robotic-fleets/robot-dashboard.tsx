@@ -333,7 +333,7 @@ export default function RobotDashboard() {
                         <Clock className="h-3 w-3" />
                         <span>Uptime: {robot.uptime}</span>
                       </div>
-                      <span>Pos: ({robot.position.x}, {robot.position.y})</span>
+                      <span>Pos: ({robot.position?.x ?? '—'}, {robot.position?.y ?? '—'})</span>
                     </div>
                   </div>
 

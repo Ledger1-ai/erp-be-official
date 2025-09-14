@@ -1,4 +1,4 @@
-# Varuni Backoffice - The Graine Ledger
+# Varuni Backoffice
 
 A comprehensive AI-powered restaurant management system built with Next.js, featuring advanced scheduling, inventory management, invoicing, and analytics capabilities.
 
@@ -158,7 +158,7 @@ varuni-backoffice/
 ## Customization
 
 ### Branding
-The application is white-labeled for "The Graine Ledger" but can be easily customized:
+The application is white-labeled for "Varuni" but can be easily customized:
 - Update branding in `src/app/login/page.tsx`
 - Modify colors in `tailwind.config.js`
 - Update logos and assets in `public/`

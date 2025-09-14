@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/db/connection';
 import { Analytics } from '@/lib/models/Analytics';
 import ToastAPIClient from '@/lib/services/toast-api-client';
 import { getDefaultTimeZone, formatYMDInTimeZone, getDayRangeForYmdInTz } from '@/lib/timezone';
+import { isDemoMode, getDemoNow } from '@/lib/config/demo';
 
 let cachedTimeZone: string | null = null;
 
@@ -41,6 +42,40 @@ function formatBusinessDateCompact(tz: string, d = new Date()): string {
 
 export async function GET(request: NextRequest) {
   try {
+    // In demo mode, short-circuit with fresh, current-day metrics and upsert cache
+    if (isDemoMode()) {
+      const tz = getDefaultTimeZone();
+      const now = getDemoNow();
+      const ymd = formatYMDInTimeZone(tz, now);
+      const { start: dayStartLocal, end: dayEndLocal } = getDayRangeForYmdInTz(tz, ymd);
+      const revenue = 6842;
+      const ordersCompleted = 142;
+      const avgOrderValue = ordersCompleted > 0 ? revenue / ordersCompleted : 0;
+      const avgTurnoverMinutes = 12.8;
+      try {
+        await connectDB();
+        await Analytics.updateOne(
+          { period: 'daily', date: { $gte: dayStartLocal, $lte: dayEndLocal } },
+          { $set: { period: 'daily', date: dayStartLocal, revenue, orders: ordersCompleted, avgOrderValue } },
+          { upsert: true }
+        );
+      } catch {}
+      return NextResponse.json({
+        success: true,
+        data: {
+          date: ymd,
+          ordersCompleted,
+          revenue,
+          avgOrderValue,
+          avgTurnoverMinutes,
+        },
+        lastUpdatedAt: new Date().toISOString(),
+        nextSuggestedRefreshAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+        cached: false,
+        timeZone: tz,
+      });
+    }
+
     await connectDB();
 
     const { searchParams } = new URL(request.url);

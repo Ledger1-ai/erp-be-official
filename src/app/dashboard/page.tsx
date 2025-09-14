@@ -45,6 +45,7 @@ import {
 import { useTeamMembers, useInventoryItems, useAnalytics, useLowStockItems } from "@/lib/hooks/use-graphql";
 import WidgetsGrid from "@/components/dashboard/WidgetsGrid";
 import Link from "next/link";
+import { isDemoMode, getDemoNow } from "@/lib/config/demo";
 
 interface TeamMember {
   name: string;
@@ -64,11 +65,11 @@ const salesData = [
 ];
 
 const inventoryData = [
-  { name: "Proteins", value: 35, color: "#ea580c" },
-  { name: "Vegetables", value: 25, color: "#f97316" },
-  { name: "Dairy", value: 20, color: "#fb923c" },
-  { name: "Pantry", value: 15, color: "#fed7aa" },
-  { name: "Beverages", value: 5, color: "#ffedd5" },
+  { name: "Proteins", value: 35, color: "hsl(171, 65%, 95%)" },
+  { name: "Vegetables", value: 25, color: "hsl(171, 65%, 78%)" },
+  { name: "Dairy", value: 20, color: "hsl(171, 65%, 61%)" },
+  { name: "Pantry", value: 15, color: "hsl(171, 65%, 44%)" },
+  { name: "Beverages", value: 5, color: "hsl(171, 65%, 27%)" },
 ];
 
 function timeAgo(iso: string | number | Date | undefined) {
@@ -277,8 +278,8 @@ export default function DashboardPage() {
           const mapped = list.map((s: any) => {
             const startMs = Number.isFinite(Number(s.startMs)) ? Number(s.startMs) : (s.start ? Date.parse(String(s.start)) : NaN);
             const endMs = Number.isFinite(Number(s.endMs)) ? Number(s.endMs) : (s.end ? Date.parse(String(s.end)) : NaN);
-            const now = Date.now();
-            const isActive = Boolean(Number.isFinite(startMs) && Number.isFinite(endMs) && now >= (startMs as number) && now <= (endMs as number));
+            // Use the isActive flag from API response (already calculated with demo time)
+            const isActive = Boolean(s.isActive);
             const localRange = (typeof s.range === 'string' && s.range.trim().length > 0)
               ? s.range
               : (Number.isFinite(startMs) && Number.isFinite(endMs)
@@ -314,8 +315,10 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Recompute active/inactive status every minute without refetching
+  // Recompute active/inactive status every minute without refetching (only for non-demo mode)
   useEffect(() => {
+    if (isDemoMode()) return; // In demo mode, trust the API's isActive flag
+
     const id = setInterval(() => {
       setStaffSchedule(prev => {
         const now = Date.now();
@@ -354,7 +357,7 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
             <p className="text-muted-foreground mt-1">Welcome back! Here&apos;s what&apos;s happening at your restaurant today.</p>
           </div>
-          <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={() => {
+          <Button className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => {
             const evt = new CustomEvent('open-varuni');
             window.dispatchEvent(evt);
           }}>
@@ -364,16 +367,16 @@ export default function DashboardPage() {
         </div>
 
         {/* AI Insights Banner */}
-                <Card className="bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-950/20 dark:to-orange-900/20 border-orange-200 dark:border-orange-800">
+                <Card className="bg-gradient-to-r from-teal-50 to-teal-100 dark:from-teal-950/20 dark:to-teal-900/20 border-teal-200 dark:border-teal-800">
           <CardContent className="p-6">
             <div className="flex items-start space-x-4">
-              <div className="bg-orange-600 rounded-full p-2">
+              <div className="bg-teal-600 rounded-full p-2">
                 <Brain className="h-6 w-6 text-white" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-2">
-                  <h3 className="font-semibold text-foreground">Varuni AI Insights</h3>
-                  <Badge variant="warning">Coming Soon</Badge>
+                  <h3 className="font-semibold text-foreground">Varuni Insights</h3>
+                  <Badge className="bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-200">Coming Soon</Badge>
                 </div>
                 <p className="text-muted-foreground text-sm mb-3">
                   Based on current trends, I recommend increasing staff for tomorrow&apos;s dinner rush. 
@@ -416,17 +419,17 @@ export default function DashboardPage() {
                     )}
                     <div className="flex items-center mt-2">
                       {metric.changeType === "positive" && (
-                        <TrendingUp className="h-4 w-4 text-green-600 mr-1" />
+                        <TrendingUp className="h-4 w-4 text-success mr-1" />
                       )}
                       {metric.changeType === "negative" && (
-                        <TrendingDown className="h-4 w-4 text-red-600 mr-1" />
+                        <TrendingDown className="h-4 w-4 text-red mr-1" />
                       )}
                       <span
                         className={`text-sm ${
                           metric.changeType === "positive"
-                            ? "text-green-600"
+                            ? "text-success"
                             : metric.changeType === "negative"
-                            ? "text-red-600"
+                            ? "text-red"
                             : "text-muted-foreground"
                         }`}
                       >
@@ -434,8 +437,8 @@ export default function DashboardPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="bg-orange-50 dark:bg-orange-950/20 rounded-lg p-3">
-                    <metric.icon className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+                  <div className="bg-primary/10 dark:bg-primary/5 rounded-lg p-3">
+                    <metric.icon className="h-6 w-6 text-primary" />
                   </div>
                 </div>
               </CardContent>
@@ -467,16 +470,16 @@ export default function DashboardPage() {
                     ) : (
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                        <XAxis 
-                          dataKey="name" 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                         />
-                        <YAxis 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <YAxis
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                         />
                         <Tooltip content={<CustomChartTooltip formatter={(v) => [
@@ -487,15 +490,15 @@ export default function DashboardPage() {
                           (() => {
                             const values = chartData.map((d: any) => Number(d.sales || 0));
                             const max = Math.max(1, ...values);
-                            // Stepped solid orange palette (light -> dark)
+                            // Stepped solid teal palette (light -> dark)
                             const shades = [
-                              '#ffedd5', // 100 - lightest
-                              '#fed7aa', // 200
-                              '#fdba74', // 300
-                              '#fb923c', // 400
-                              '#f97316', // 500
-                              '#ea580c', // 600
-                              '#c2410c'  // 700 - darkest
+                              'hsl(171 65% 95%)', // lightest
+                              'hsl(171 65% 88%)',
+                              'hsl(171 65% 78%)',
+                              'hsl(171 65% 68%)',
+                              'hsl(171 65% 58%)', // primary
+                              'hsl(171 70% 48%)',
+                              'hsl(171 75% 38%)'  // darkest
                             ];
                             return (
                               <Bar dataKey="sales">
@@ -519,29 +522,29 @@ export default function DashboardPage() {
                     ) : (
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                        <XAxis 
-                          dataKey="name" 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                         />
-                        <YAxis 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <YAxis
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700 dark:[&_.recharts-text]:fill-slate-400"
                         />
                         <Tooltip content={<CustomChartTooltip formatter={(v, name) => [
                           typeof v === 'number' ? v.toFixed(0) : String(v),
                           name
                         ]} />} />
-                        <Line 
-                          type="monotone" 
-                          dataKey="orders" 
-                          stroke="#ea580c" 
+                        <Line
+                          type="monotone"
+                          dataKey="orders"
+                          stroke="#4dd9cf"
                           strokeWidth={2}
-                          dot={{ fill: "#ea580c", strokeWidth: 2, r: 4 }}
-                          activeDot={{ r: 6, fill: "#ea580c" }}
+                          dot={{ fill: "#4dd9cf", strokeWidth: 2, r: 4 }}
+                          activeDot={{ r: 6, fill: "#4dd9cf" }}
                         />
                       </LineChart>
                     </ResponsiveContainer>
@@ -553,16 +556,16 @@ export default function DashboardPage() {
                     ) : (
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" />
-                        <XAxis 
-                          dataKey="name" 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" className="dark:stroke-slate-700" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-text]:fill-slate-400 dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700"
                         />
-                        <YAxis 
-                          tick={{ fill: "#64748b", fontSize: 12 }}
-                          axisLine={{ stroke: "#e2e8f0" }}
+                        <YAxis
+                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                          axisLine={{ stroke: "hsl(var(--border))" }}
                           className="dark:[&_.recharts-cartesian-axis-line]:stroke-slate-700 dark:[&_.recharts-text]:fill-slate-400"
                         />
                         <Tooltip content={<CustomChartTooltip formatter={(v) => {
@@ -572,13 +575,13 @@ export default function DashboardPage() {
                           const label = `${mins}m ${secs.toString().padStart(2,'0')}s`;
                           return [label, 'Avg Table Time'];
                         }} />} />
-                        <Line 
-                          type="monotone" 
-                          dataKey="turnover" 
-                          stroke="#0ea5e9" 
+                        <Line
+                          type="monotone"
+                          dataKey="turnover"
+                          stroke="#3b82f6"
                           strokeWidth={2}
-                          dot={{ fill: "#0ea5e9", strokeWidth: 2, r: 4 }}
-                          activeDot={{ r: 6, fill: "#0ea5e9" }}
+                          dot={{ fill: "#3b82f6", strokeWidth: 2, r: 4 }}
+                          activeDot={{ r: 6, fill: "#3b82f6" }}
                         />
                       </LineChart>
                     </ResponsiveContainer>
@@ -606,8 +609,8 @@ export default function DashboardPage() {
                   </TabsList>
 
                   {/* All Departments */}
-                  <TabsContent value="all" className="mt-4">
-                    <div className="max-h-[700px] overflow-y-auto pr-1 space-y-6">
+                  <TabsContent value="all" className="mt-4 flex-1 flex flex-col">
+                    <div className="flex-1 overflow-y-auto pr-1 space-y-6">
                       {departments.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No shifts found for today.</p>
                       ) : (
@@ -620,7 +623,7 @@ export default function DashboardPage() {
                                 {members.map((staff, index) => (
                                   <div key={`${dept}-${index}`} className={`flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border ${staff.status === 'active' ? '' : 'opacity-60'}`}>
                                     <div className="flex items-center space-x-3">
-                                      <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
+                                      <div className="bg-primary rounded-full w-8 h-8 flex items-center justify-center text-primary-foreground text-xs font-semibold">
                                         {staff.name.split(" ").map((n: string) => n[0]).join("")}
                                       </div>
                                       <div>
@@ -656,12 +659,12 @@ export default function DashboardPage() {
 
                   {/* Per-Department */}
                   {departments.map((dept) => (
-                    <TabsContent key={dept} value={`dept:${dept}`} className="mt-4">
-                      <div className="max-h-[700px] overflow-y-auto pr-1 space-y-3">
+                    <TabsContent key={dept} value={`dept:${dept}`} className="mt-4 flex-1 flex flex-col">
+                      <div className="flex-1 overflow-y-auto pr-1 space-y-3">
                         {(scheduleGroups[dept] || []).map((staff, index) => (
                           <div key={`${dept}-${index}`} className={`flex items-center justify-between p-3 bg-card rounded-lg border-2 border-border ${staff.status === 'active' ? '' : 'opacity-60'}`}>
                             <div className="flex items-center space-x-3">
-                              <div className="bg-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-white text-xs font-semibold">
+                              <div className="bg-primary rounded-full w-8 h-8 flex items-center justify-center text-primary-foreground text-xs font-semibold">
                                 {staff.name.split(" ").map((n: string) => n[0]).join("")}
                               </div>
                               <div>
@@ -695,8 +698,8 @@ export default function DashboardPage() {
                   ))}
 
                   {/* Calendar / Gantt */}
-                  <TabsContent value="gantt" className="mt-4">
-                    <div className="max-h-[700px] overflow-y-auto pr-1">
+                  <TabsContent value="gantt" className="mt-4 flex-1 flex flex-col">
+                    <div className="flex-1 overflow-y-auto pr-1">
                       {(() => {
                         const items = (staffSchedule as any[]).filter(s => s.start && s.end);
                         if (items.length === 0) return <p className="text-sm text-muted-foreground">No timed shifts available for calendar view.</p>;
@@ -760,14 +763,24 @@ export default function DashboardPage() {
                               byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
                             }
                             const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
-                            const palette = {
-                              Proteins: '#ea580c',
-                              Vegetables: '#f97316',
-                              Dairy: '#fb923c',
-                              Pantry: '#fed7aa',
-                              Beverages: '#ffedd5'
-                            } as Record<string, string>;
-                            return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                            const categories = Object.keys(byCat);
+                            // Generate dynamic teal shades based on number of categories
+                            const generateTealShades = (count: number) => {
+                              const baseHue = 171; // Teal hue
+                              const saturation = 65; // Teal saturation
+                              const shades = [];
+                              for (let i = 0; i < count; i++) {
+                                const lightness = 95 - (i * (60 / Math.max(1, count - 1))); // From 95% to 35% lightness
+                                shades.push(`hsl(${baseHue}, ${saturation}%, ${Math.max(35, Math.min(95, lightness))}%)`);
+                              }
+                              return shades;
+                            };
+                            const tealShades = generateTealShades(categories.length);
+                            return categories.map((name, index) => ({
+                              name,
+                              value: Math.round((byCat[name] / total) * 100),
+                              color: tealShades[index] || '#4dd9cf'
+                            }));
                           })()
                         : inventoryData}
                       cx="50%"
@@ -784,14 +797,24 @@ export default function DashboardPage() {
                               byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
                             }
                             const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
-                            const palette = {
-                              Proteins: '#ea580c',
-                              Vegetables: '#f97316',
-                              Dairy: '#fb923c',
-                              Pantry: '#fed7aa',
-                              Beverages: '#ffedd5'
-                            } as Record<string, string>;
-                            return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                            const categories = Object.keys(byCat);
+                            // Generate dynamic teal shades based on number of categories
+                            const generateTealShades = (count: number) => {
+                              const baseHue = 171; // Teal hue
+                              const saturation = 65; // Teal saturation
+                              const shades = [];
+                              for (let i = 0; i < count; i++) {
+                                const lightness = 95 - (i * (60 / Math.max(1, count - 1))); // From 95% to 35% lightness
+                                shades.push(`hsl(${baseHue}, ${saturation}%, ${Math.max(35, Math.min(95, lightness))}%)`);
+                              }
+                              return shades;
+                            };
+                            const tealShades = generateTealShades(categories.length);
+                            return categories.map((name, index) => ({
+                              name,
+                              value: Math.round((byCat[name] / total) * 100),
+                              color: tealShades[index] || '#4dd9cf'
+                            }));
                           })()
                         : inventoryData).map((entry: { color: string | undefined }, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
@@ -810,14 +833,24 @@ export default function DashboardPage() {
                           byCat[cat] = (byCat[cat] || 0) + Number(it.currentStock || 0);
                         }
                         const total = Object.values(byCat).reduce((s, v) => s + v, 0) || 1;
-                        const palette = {
-                          Proteins: '#ea580c',
-                          Vegetables: '#f97316',
-                          Dairy: '#fb923c',
-                          Pantry: '#fed7aa',
-                          Beverages: '#ffedd5'
-                        } as Record<string, string>;
-                        return Object.entries(byCat).map(([name, val]) => ({ name, value: Math.round((val / total) * 100), color: palette[name] || '#fbbf24' }));
+                        const categories = Object.keys(byCat);
+                        // Generate dynamic teal shades based on number of categories
+                        const generateTealShades = (count: number) => {
+                          const baseHue = 171; // Teal hue
+                          const saturation = 65; // Teal saturation
+                          const shades = [];
+                          for (let i = 0; i < count; i++) {
+                            const lightness = 95 - (i * (60 / Math.max(1, count - 1))); // From 95% to 35% lightness
+                            shades.push(`hsl(${baseHue}, ${saturation}%, ${Math.max(35, Math.min(95, lightness))}%)`);
+                          }
+                          return shades;
+                        };
+                        const tealShades = generateTealShades(categories.length);
+                        return categories.map((name, index) => ({
+                          name,
+                          value: Math.round((byCat[name] / total) * 100),
+                          color: tealShades[index] || '#4dd9cf'
+                        }));
                       })()
                     : inventoryData).map((item: { color: string | undefined; name: string; value: number }, index: number) => (
                     <div key={index} className="flex items-center justify-between">

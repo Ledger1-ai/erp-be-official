@@ -1,9 +1,9 @@
-import jwt from 'jsonwebtoken';
+import jwt, { type SignOptions, type Secret } from 'jsonwebtoken';
 import { User } from '../models/User';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
+const JWT_SECRET: Secret = (process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production') as Secret;
+const JWT_EXPIRES_IN: SignOptions['expiresIn'] = (process.env.JWT_EXPIRES_IN || '7d') as any;
+const JWT_REFRESH_EXPIRES_IN: SignOptions['expiresIn'] = (process.env.JWT_REFRESH_EXPIRES_IN || '30d') as any;
 
 export interface JWTPayload {
   userId: string;
@@ -62,11 +62,25 @@ export async function generateTokens(userId: string): Promise<AuthTokens> {
       throw new Error('User not found');
     }
 
+    // Merge explicit permissions with role-derived defaults using the model's helper if available
+    let effectivePermissions: string[] = [];
+    try {
+      // If we fetched via .lean(), methods are not present; refetch doc to access getPermissions
+      const doc = await User.findById(userId);
+      if (doc && typeof (doc as any).getPermissions === 'function') {
+        effectivePermissions = (doc as any).getPermissions();
+      } else {
+        effectivePermissions = user.permissions || [];
+      }
+    } catch {
+      effectivePermissions = user.permissions || [];
+    }
+
     const payload: Omit<JWTPayload, 'iat' | 'exp'> = {
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
-      permissions: user.permissions || [],
+      permissions: effectivePermissions,
     };
 
     const accessToken = generateAccessToken(payload);
@@ -80,7 +94,7 @@ export async function generateTokens(userId: string): Promise<AuthTokens> {
         email: user.email,
         name: user.name,
         role: user.role,
-        permissions: user.permissions || [],
+        permissions: effectivePermissions,
       },
     };
   } catch (error) {

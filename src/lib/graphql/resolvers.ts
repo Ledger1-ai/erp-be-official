@@ -2239,7 +2239,10 @@ export const resolvers = {
       const update: any = { restaurantGuid };
       if (hiddenMenus) update.hiddenMenus = Array.from(new Set(hiddenMenus));
       if (hiddenGroups) update.hiddenGroups = Array.from(new Set(hiddenGroups));
-      update.updatedBy = context.user?.userId;
+      const candidateUserId = context.user?.userId;
+      if (candidateUserId && mongoose.Types.ObjectId.isValid(candidateUserId)) {
+        update.updatedBy = new mongoose.Types.ObjectId(candidateUserId);
+      }
       const doc = await MenuVisibility.findOneAndUpdate(
         { restaurantGuid },
         update,

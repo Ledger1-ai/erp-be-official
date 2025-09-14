@@ -68,7 +68,23 @@ export class VaruniAgent {
 		}));
 	}
 
-	private async callTool(toolName: string, args: Record<string, any>, context: AgentContext): Promise<any> {
+	getToolDefinitions(toolsetName?: string): any[] {
+		const activeToolsetName = (toolsetName && this.toolsets.has(toolsetName)) ? (toolsetName as string) : 'main';
+		// Scope tools to the active toolset plus the main navigator to reduce confusion
+		const active = this.toolsets.get(activeToolsetName);
+		const sets = active ? [active, this.toolsets.get('main') as AgentToolSet].filter(Boolean) as AgentToolSet[] : (this.toolsets.has('main') ? [this.toolsets.get('main') as AgentToolSet] : []);
+		const defs = sets.flatMap(ts => ts.tools).map(t => ({
+			type: 'function' as const,
+			function: {
+				name: t.name,
+				description: t.description,
+				parameters: t.parameters || { type: 'object', properties: {}, additionalProperties: true },
+			},
+		}));
+		return defs.length > 128 ? defs.slice(0, 128) : defs;
+	}
+
+	async callTool(toolName: string, args: Record<string, any>, context: AgentContext): Promise<any> {
 		for (const ts of this.toolsets.values()) {
 			const tool = ts.tools.find(t => t.name === toolName);
 			if (tool) {
@@ -104,10 +120,10 @@ export class VaruniAgent {
 			? context.systemPromptOverride
 			: `You are Varuni, an AI operations strategist.
 
-Context: You are assisting a restaurant backoffice operator inside The Graine Ledger platform. Prioritize accurate, actionable advice. When helpful, you may ground your guidance in the following industry references: The Cornell School of Hotel Administration on Hospitality, Restaurant Manager’s Handbook (Kotas), The Food Service Professional Guide series, and ServSafe standards. Use these as guiding standards—not to quote—when forming recommendations.
+Context: You are assisting a restaurant backoffice operator inside ledger1. Prioritize accurate, actionable advice. When helpful, you may ground your guidance in the following industry references: The Cornell School of Hotel Administration on Hospitality, Restaurant Manager’s Handbook (Kotas), The Food Service Professional Guide series, and ServSafe standards. Use these as guiding standards—not to quote—when forming recommendations.
 
-About The Graine Ledger:
-The Graine Ledger is a web3-enabled, automated distilling cooperative. It mints membership tokens, each representing a share of a 5000-barrel allocation of whiskey, giving token holders access to customizable barrels, private-label branding, and exclusive product or revenue rights. This tokenized model turns passive enthusiasts into active stakeholders, with each decision powered by smart contracts and provenance tracking.
+About ledger1:
+ledger1 is a unified backoffice demo platform for hospitality operations.
 
 Core Operating Principles (inherited from The Utility Company):
 - Decentralized Ownership: Enable stakeholders to own, not just participate.
@@ -120,7 +136,7 @@ Your Capabilities as Varuni:
 - Offer short, actionable insights and concrete next steps grounded in live data where possible.
 - Use specialized tools and systems for each module; when tools are available, prioritize their use over manual reasoning.
 - Maintain operational harmony between tokenized ownership mechanics and real-world distillery workflows.
-- Act as a strategic assistant to restaurant and hospitality operators managing Graine Ledger-affiliated menus, products, and experiences.
+- Act as a strategic assistant to restaurant and hospitality operators managing ledger1-affiliated menus, products, and experiences.
 
 System Behavior:
 - Always default to the most relevant module toolset when responding.
@@ -285,7 +301,32 @@ export function createGraphQLTool(name: string, description: string, query: stri
 			additionalProperties: false,
 		},
 		handler: async (args, context) => {
-			const variables = (args && args.variables) || {};
+			// Accept variables from args.variables or top-level args for compatibility with voice runtime
+			const variables: Record<string, any> = { ...(args && args.variables ? args.variables : {}) };
+			try {
+				if (args && typeof args === 'object') {
+					for (const [k, v] of Object.entries(args)) {
+						if (k === 'variables') continue;
+						if (variables[k] === undefined) variables[k] = v;
+					}
+				}
+			} catch {}
+			// Auto-fill sensible defaults for common required variables if omitted
+			try {
+				const needs = (v: string) => new RegExp(`\\$${v}\\s*:`, 'i').test(query);
+				const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
+				if (needs('period') && (variables.period === undefined || variables.period === null || variables.period === '')) {
+					variables.period = 'weekly';
+				}
+				if ((needs('startDate') || needs('endDate'))) {
+					const now = new Date();
+					const end = variables.endDate ? new Date(String(variables.endDate)) : now;
+					const start = variables.startDate ? new Date(String(variables.startDate)) : new Date(end);
+					if (!variables.startDate) start.setDate(end.getDate() - 13);
+					if (!variables.endDate) variables.endDate = toDateStr(end);
+					variables.startDate = toDateStr(start);
+				}
+			} catch {}
 			return await context.callGraphQL(query, variables);
 		},
 	};

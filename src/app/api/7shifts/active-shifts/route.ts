@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import SevenShiftsApiClient from '@/lib/services/seven-shifts-api-client';
 import { getDefaultTimeZone, formatYMDInTimeZone } from '@/lib/timezone';
 import { connectDB } from '@/lib/db/connection';
+import { TeamMember } from '@/lib/models/TeamMember';
 import ToastEmployee from '@/lib/models/ToastEmployee';
+import { isDemoMode, getDemoNow } from '@/lib/config/demo';
 
 function formatLocalRange(startIso: string, endIso: string): string {
   try {
@@ -18,6 +20,66 @@ function formatLocalRange(startIso: string, endIso: string): string {
 
 export async function GET(_req: NextRequest) {
   try {
+    // Demo fallback: synthesize active shifts around the frozen demo time to light up the dashboard
+    if (isDemoMode()) {
+      const tz = getDefaultTimeZone();
+      const now = getDemoNow();
+      const start1 = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+      const end1 = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+      const start2 = new Date(now.getTime() - 1 * 60 * 60 * 1000);
+      const end2 = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+      const fmt = new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+      let items: any[] = [
+        { userId: 101, name: 'Sarah Johnson', start: start1.toISOString(), end: end1.toISOString(), range: `${fmt.format(start1)} - ${fmt.format(end1)}`, role: 'Head Chef', department: 'Kitchen', isActive: true, startMs: start1.getTime(), endMs: end1.getTime() },
+        { userId: 201, name: 'Alex Rivera', start: start1.toISOString(), end: end1.toISOString(), range: `${fmt.format(start1)} - ${fmt.format(end1)}`, role: 'Bartender', department: 'Front of House', isActive: true, startMs: start1.getTime(), endMs: end1.getTime() },
+        { userId: 202, name: 'Bianca Torres', start: start2.toISOString(), end: end2.toISOString(), range: `${fmt.format(start2)} - ${fmt.format(end2)}`, role: 'Bartender', department: 'Front of House', isActive: false, startMs: start2.getTime(), endMs: end2.getTime() },
+        { userId: 203, name: 'Diana Prince', start: start2.toISOString(), end: end2.toISOString(), range: `${fmt.format(start2)} - ${fmt.format(end2)}`, role: 'Host', department: 'Front of House', isActive: true, startMs: start2.getTime(), endMs: end2.getTime() },
+        { userId: 103, name: 'Mike Chen', start: start1.toISOString(), end: end1.toISOString(), range: `${fmt.format(start1)} - ${fmt.format(end1)}`, role: 'Sous Chef', department: 'Kitchen', isActive: false, startMs: start1.getTime(), endMs: end1.getTime() },
+        { userId: 301, name: 'Kevin O\'Neil', start: start2.toISOString(), end: end2.toISOString(), range: `${fmt.format(start2)} - ${fmt.format(end2)}`, role: 'Line Cook', department: 'Kitchen', isActive: true, startMs: start2.getTime(), endMs: end2.getTime() },
+      ];
+
+      // Add a few active servers from TeamMember DB for rotation
+      try {
+        await connectDB();
+        let servers = await TeamMember.find({ department: 'Front of House', status: 'active', role: /server/i })
+          .lean()
+          .limit(6); // Limit to 6 servers total
+        if (!servers.length) {
+          // Fallback: include servers regardless of status for demo stability
+          servers = await TeamMember.find({ department: 'Front of House', role: /server/i })
+            .lean()
+            .limit(6);
+        }
+        let uid = 500;
+        // Only make the first 2 servers active, rest are scheduled but not active
+        for (let i = 0; i < servers.length; i++) {
+          const s = servers[i] as any;
+          const st = i % 2 === 0 ? start1 : start2;
+          const en = i % 2 === 0 ? end1 : end2;
+          const isActive = i < 2; // Only first 2 servers are active
+          items.push({
+            userId: s._id ? String(s._id) : (++uid),
+            name: s.name || 'Server',
+            start: st.toISOString(),
+            end: en.toISOString(),
+            range: `${fmt.format(st)} - ${fmt.format(en)}`,
+            role: 'Server',
+            department: 'Front of House',
+            isActive: isActive,
+            startMs: st.getTime(),
+            endMs: en.getTime(),
+          });
+        }
+      } catch {}
+      const grouped: Record<string, typeof items> = {} as any;
+      for (const it of items) {
+        const key = (it.department || 'Other') as string;
+        if (!grouped[key]) grouped[key] = [] as any;
+        grouped[key].push(it as any);
+      }
+      return NextResponse.json({ success: true, data: items, grouped });
+    }
+
     const token = process.env['SEVENSHIFTS_ACCESS_TOKEN'];
     if (!token) return NextResponse.json({ success: false, error: '7shifts token missing' }, { status: 500 });
 

@@ -8,41 +8,37 @@ import { initVaruniScheduler } from "@/lib/services/varuni-scheduler";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: "Varuni",
-  description: "Complete restaurant management solution with inventory, scheduling, invoicing, and robotic fleet management",
-  applicationName: 'Varuni',
+  title: "Ledger1 Demo",
+  description: "Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics",
+  applicationName: 'Ledger1 Demo',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
-      { url: '/tgl.png', type: 'image/png', sizes: '512x512' }
+      { url: '/l1logows.png', type: 'image/png', sizes: '512x512' }
     ],
     apple: [
-      { url: '/tgl.png', sizes: '180x180', type: 'image/png' }
+      { url: '/l1logows.png', sizes: '180x180', type: 'image/png' }
     ],
-    shortcut: ['/tgl.png']
+    shortcut: ['/l1logows.png']
   },
   themeColor: '#0f172a',
-  appleWebApp: {
-    capable: true,
-    title: 'Varuni',
-    statusBarStyle: 'default'
-  },
+  appleWebApp: { capable: true, title: 'Ledger1 Demo', statusBarStyle: 'default' },
   openGraph: {
-    title: 'Varuni',
-    description: 'Complete restaurant management solution with inventory, scheduling, invoicing, and robotic fleet management',
-    url: 'https://varuni.thegraineledger.com',
-    siteName: 'Varuni',
+    title: 'Ledger1 Demo',
+    description: 'Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics',
+    url: 'https://ledger1.ai',
+    siteName: 'Ledger1 Demo',
     images: [
-      { url: 'https://engram1.blob.core.windows.net/varuni/socialbanner.jpg', width: 1200, height: 630, alt: 'Varuni Backoffice' }
+      { url: 'https://engram1.blob.core.windows.net/varuni/socialbanner.png', width: 1536, height: 1024, alt: 'Ledger1 Backoffice' }
     ],
     type: 'website'
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Varuni',
-    description: 'Complete restaurant management solution with inventory, scheduling, invoicing, and robotic fleet management',
-    images: ['https://engram1.blob.core.windows.net/varuni/socialbanner.jpg']
+    title: 'Ledger1 Demo',
+    description: 'Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics',
+    images: ['https://engram1.blob.core.windows.net/varuni/socialbanner.png']
   }
 };
 

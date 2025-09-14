@@ -9,7 +9,7 @@ import AssignSplitPane from './AssignSplitPane';
 import FloorDesigner, { Tool as DesignerTool } from './FloorDesigner';
 import { getPreset } from '@/lib/host/presets';
 import { FloorPreset } from '@/lib/host/types';
-import { Play, Pause, RotateCcw, MousePointer2, BoxSelect, LassoSelect, Ruler, Move, Eraser, Type } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, BoxSelect, LassoSelect, Ruler, Move, Eraser, Type, Maximize2, Minimize2 } from 'lucide-react';
 
 export default function HostProPanel() {
   const [presets, setPresets] = useState<FloorPreset[]>([]);
@@ -28,6 +28,17 @@ export default function HostProPanel() {
   const [manualTableId, setManualTableId] = useState<string>('');
   const [manualServerId, setManualServerId] = useState<string>('');
   const [manualPartySize, setManualPartySize] = useState<number>(2);
+  const [seatModalOpen, setSeatModalOpen] = useState(false);
+  const [pendingServerId, setPendingServerId] = useState<string>('');
+  const [pendingAvailableTables, setPendingAvailableTables] = useState<string[]>([]);
+  const [pendingTableId, setPendingTableId] = useState<string>('');
+  const [pendingPartySize, setPendingPartySize] = useState<number>(2);
+  const [modalAdvancePointer, setModalAdvancePointer] = useState<boolean>(true);
+  const [temporaryOverlayHidden, setTemporaryOverlayHidden] = useState<boolean>(false);
+  const [flashTableId, setFlashTableId] = useState<string | undefined>(undefined);
+  const [quickSeatMode, setQuickSeatMode] = useState<boolean>(false);
+  const [selectedQuickSeatTable, setSelectedQuickSeatTable] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
   // Load presets and active servers
   useEffect(() => {
@@ -42,23 +53,11 @@ export default function HostProPanel() {
     let active = true;
     async function load() {
       try {
-        const now = new Date();
-        const start = new Date(now.getTime() - 30 * 60 * 1000).toISOString();
-        const end = now.toISOString();
-        const res = await fetch(`/api/toast/orders?startDate=${encodeURIComponent(start)}&endDate=${encodeURIComponent(end)}`);
-        const js = await res.json();
-        if (!js?.success) return;
-        const map: Record<string, boolean> = {};
-        const byTable: Record<string, { serverName?: string; checks: number; total?: number }> = {};
-        for (const o of (js.data || [])) {
-          const tid = o?.table?.externalId || '';
-          if (!tid) continue;
-          map[tid] = true;
-          if (!byTable[tid]) byTable[tid] = { serverName: o?.server?.externalId || undefined, checks: 0, total: 0 } as any;
-          byTable[tid].checks += (Array.isArray(o.checks) ? o.checks.length : 1);
-          byTable[tid].total = (byTable[tid].total || 0) + (o.totalAmount || o.amount || 0);
+        const s = await fetch('/api/hostpro/session').then(r => r.json());
+        if (s?.success && active) {
+          const occ = s.data?.tableOccupied || {};
+          setOpenTables(occ);
         }
-        if (active) { setOpenTables(map); setOrdersByTable(byTable); }
       } catch {}
     }
     load();
@@ -277,7 +276,28 @@ export default function HostProPanel() {
           </div>
         </div>
       </div>
-      <div className="hidden md:block">
+      <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-background' : 'hidden md:block'}`}>
+        <div className="flex items-center justify-between mb-4">
+          <div></div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="flex items-center gap-2"
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Exit Fullscreen</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Fullscreen</span>
+              </>
+            )}
+          </Button>
+        </div>
         <Tabs defaultValue="servers">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="servers">Active Servers</TabsTrigger>
@@ -328,6 +348,24 @@ export default function HostProPanel() {
                 <Button size="sm" variant="outline" onClick={() => { try { localStorage.removeItem('hostpro:regions'); } catch {} }}>Reset Regions</Button>
                 <Button size="sm" onClick={async () => {
                   try {
+                    // Ensure there is a live session before locking domains
+                    if (!session) {
+                      try {
+                        const chosenPreset = preset || getPreset('3-plus-2-bar');
+                        const eligibleServersBase = servers.filter(s => String(s.role) === 'Server' && s.isActive);
+                        const seen = new Set<string>();
+                        const eligibleServers = eligibleServersBase.filter(s => {
+                          const key = String(s.id).split('::')[0];
+                          if (seen.has(key)) return false;
+                          seen.add(key);
+                          return true;
+                        }).map(s => ({ ...s, id: String(s.id).split('::')[0] }));
+                        const r0 = await fetch('/api/hostpro/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ presetSlug: chosenPreset?.slug || '3-plus-2-bar', servers: eligibleServers }) });
+                        const j0 = await r0.json();
+                        if (j0?.success) setSession(j0.data);
+                      } catch {}
+                    }
+
                     const raw = typeof window !== 'undefined' ? localStorage.getItem('hostpro:regions') : null;
                     const regions = raw ? JSON.parse(raw) : [];
                     const payload = { domains: Array.isArray(regions) ? regions.map((r: any, idx: number) => ({ id: r.id || `D${idx+1}`, name: r.name || `Region ${idx+1}`, color: r.color || '#22c55e', tableIds: r.tableIds || [] })) : [], layoutSlug };
@@ -424,7 +462,23 @@ export default function HostProPanel() {
                 <Button size="sm" variant={manualMode ? 'default' : 'outline'} onClick={() => setManualMode((v) => !v)}>
                   {manualMode ? 'Manual ✓' : 'Manual'}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={async () => { await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: { ...(session?.rotation || {}), pointer: 0 } }) }); setSession((s: any) => ({ ...s, rotation: { ...(s.rotation || {}), pointer: 0 } })); }}><RotateCcw className="h-4 w-4" /> Reset</Button>
+                <Button size="sm" variant="ghost" onClick={async () => {
+                  const nextRotation = { ...(session?.rotation || {}), pointer: 0 };
+                  await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: nextRotation, tableOccupied: {} }) });
+                  setOpenTables({});
+                  setFlashTableId(undefined);
+                  setTemporaryOverlayHidden(false);
+                  setSession((s: any) => ({ ...s, rotation: nextRotation, tableOccupied: {} }));
+                }}><RotateCcw className="h-4 w-4" /> Reset</Button>
+                <Button size="sm" variant="outline" onClick={async () => {
+                  try {
+                    await fetch('/api/hostpro/session?wipe=true', { method: 'DELETE' });
+                  } catch {}
+                  setOpenTables({});
+                  setFlashTableId(undefined);
+                  setTemporaryOverlayHidden(false);
+                  setSession(null);
+                }}>Reset All</Button>
               </div>
             </CardHeader>
             <CardContent>
@@ -465,8 +519,141 @@ export default function HostProPanel() {
               })()}
               {(Boolean(session?.domainsLocked) && Boolean(session?.assignmentsLocked) && servers.some(s => String(s.role) === 'Server' && s.isActive)) && preset && (
                 <div className="relative">
-                  {session?.rotation?.isLive && (
-                    <div className="absolute inset-0 z-10 backdrop-blur-md bg-black/20 rounded-xl flex">
+                  {/* Always render the FloorMap */}
+                  {(() => {
+                    const combined: Record<string, boolean> = { ...(session?.tableOccupied || {}) };
+                    for (const [tid, val] of Object.entries(openTables)) if (val) combined[tid] = true;
+                    return (
+                      <FloorMap
+                        preset={livePreset}
+                        occupied={combined}
+                        showDomains={true}
+                        assignments={session?.assignments || []}
+                        servers={servers}
+                        walls={layoutData?.walls}
+                        labels={layoutData?.labels}
+                        flashTableId={flashTableId}
+                        manualMode={manualMode}
+                        quickSeatMode={quickSeatMode}
+                        selectedQuickSeatTable={selectedQuickSeatTable}
+                        onManualPick={(tid: string) => {
+                          if (!manualMode) return;
+                          setManualTableId(String(tid));
+                          const inferred = inferAssignedServerIdForTable(String(tid));
+                          setManualServerId(inferred || (activeAssignableStaff[0]?.id ? String(activeAssignableStaff[0].id) : ''));
+                        }}
+                        onQuickSeatPick={(tid: string) => {
+                          if (!quickSeatMode) return;
+                          if (selectedQuickSeatTable === tid) {
+                            // Same table clicked - proceed to modal
+                            setPendingAvailableTables([]);
+                            setPendingTableId(tid);
+                            setPendingServerId('');
+                            setPendingPartySize(2);
+                            setSeatModalOpen(true);
+                          } else {
+                            // Different table clicked - select it
+                            setSelectedQuickSeatTable(tid);
+                          }
+                        }}
+                      />
+                    );
+                  })()}
+
+                  {/* Shared Legend */}
+                  {(() => {
+                    const domains: Array<{ id: string; name: string; color: string }> = (livePreset?.domains || []) as any;
+                    const colorByServer = new Map<string, string>();
+                    for (const a of (session?.assignments || []) as Array<{ serverId: string; domainIds: string[] }>) {
+                      const first = (a.domainIds || [])[0];
+                      const d = domains.find((x: any) => String(x.id) === String(first));
+                      if (d) colorByServer.set(String(a.serverId), String(d.color));
+                    }
+                    const order: string[] = Array.isArray(session?.rotation?.order) ? (session!.rotation.order as any).map(String) : [];
+                    const uniqueOrder = Array.from(new Set(order));
+                    const bartMap = new Map<string, any>();
+                    for (const s of servers) if (String(s.role || '').toLowerCase().includes('bart')) bartMap.set(String(s.id), s);
+                    const bartenders = Array.from(bartMap.values());
+
+                    return (
+                      <div className={`absolute left-3 top-3 w-60 rounded-xl border backdrop-blur-md bg-white/60 dark:bg-slate-900/40 border-white/30 dark:border-slate-800/40 shadow p-3 ${session?.rotation?.isLive && !temporaryOverlayHidden ? 'z-30' : 'z-10'}`}>
+                        <details open>
+                          <summary className="cursor-pointer text-xs font-medium">Legend</summary>
+                          <div className="mt-2 space-y-1">
+                            {uniqueOrder.length === 0 && bartenders.length === 0 && (
+                              <div className="text-xs text-muted-foreground">No rotation set</div>
+                            )}
+                            {uniqueOrder.map((sid) => {
+                              const sv = servers.find(s => String(s.id) === String(sid)) || (Array.isArray(session?.servers) ? (session!.servers as any[]).find((s: any) => String(s.id) === String(sid)) : undefined);
+                              const name = (sv as any)?.name || sid;
+                              const dot = colorByServer.get(String(sid)) || '#64748b';
+                              return (
+                                <div key={`leg-${sid}`} className="flex items-center gap-2 text-xs">
+                                  <span className="inline-block w-2.5 h-2.5 rounded-full border" style={{ backgroundColor: dot, borderColor: dot }} />
+                                  <span className="truncate">{name}</span>
+                                </div>
+                              );
+                            })}
+                            {bartenders.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                <div className="text-[10px] font-medium text-muted-foreground">Bartenders</div>
+                                {bartenders.map((b: any) => {
+                                  const dot = colorByServer.get(String(b.id)) || '#64748b';
+                                  return (
+                                    <div key={`leg-b-${b.id}`} className="flex items-center gap-2 text-xs">
+                                      <span className="inline-block w-2.5 h-2.5 rounded-full border" style={{ backgroundColor: dot, borderColor: dot }} />
+                                      <span className="truncate">{b.name || b.id}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Quick Seat Button */}
+                  <button
+                    type="button"
+                    className={`absolute right-3 bottom-3 text-white shadow-lg flex items-center justify-center transition-all duration-200 ${session?.rotation?.isLive && !temporaryOverlayHidden ? 'z-30' : 'z-10'} ${
+                      quickSeatMode
+                        ? 'bg-red hover:bg-red px-4 py-2 rounded-lg min-w-[200px] text-red-foreground'
+                        : 'w-10 h-10 rounded-full bg-orange hover:bg-orange'
+                    }`}
+                    title={quickSeatMode ? "Cancel Quick Seat" : "Quick Seat"}
+                    onClick={() => {
+                      if (quickSeatMode) {
+                        // Cancel quick seat mode
+                        setQuickSeatMode(false);
+                        setSelectedQuickSeatTable(null);
+                      } else {
+                        // Enter quick seat mode
+                        setQuickSeatMode(true);
+                        setSelectedQuickSeatTable(null);
+                      }
+                    }}
+                  >
+                    {quickSeatMode ? (
+                      <>
+                        <span className="text-sm mr-2">✕</span>
+                        <span className="text-sm">Cancel</span>
+                      </>
+                    ) : (
+                      <span>+</span>
+                    )}
+                  </button>
+
+                  {/* Quick Seat Instruction Text */}
+                  {quickSeatMode && (
+                    <div className="absolute right-3 bottom-16 bg-background/90 backdrop-blur-md rounded-lg px-3 py-2 shadow-lg border">
+                      <span className="text-sm font-medium">Pick the table you would like to seat</span>
+                    </div>
+                  )}
+
+                  {session?.rotation?.isLive && !temporaryOverlayHidden && (
+                    <div className="absolute inset-0 z-20 backdrop-blur-md bg-black/20 rounded-xl flex">
                       <div className="m-auto w-full max-w-3xl rounded-lg border bg-background/80 p-4">
                         <div className="flex items-center justify-between">
                           <div className="text-sm text-muted-foreground">Auto-rotation running</div>
@@ -498,12 +685,22 @@ export default function HostProPanel() {
                               const suggestedTable = availableTables[0];
                               return (
                                 <div className="text-center">
-                                  <div className="text-5xl font-bold leading-tight">{domain?.name || '—'}</div>
-                                  <div className="text-xs text-muted-foreground">Domain</div>
+                                  <div
+                                    className="text-5xl font-bold leading-tight relative pb-1"
+                                    style={{
+                                      borderBottom: `3px solid ${domain?.color || '#64748b'}`,
+                                      display: 'inline-block'
+                                    }}
+                                  >
+                                    {domain?.name || '—'}
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground/70 mt-1">
+                                    {domain ? `${availableTables.length}/${domain.tableIds?.length || 0} tables available` : 'No domain assigned'}
+                                  </div>
                                   <div className="mt-3">
-                                    <select className="rounded-md border bg-background px-2 py-1 text-sm">
+                                    <select className="rounded-md border bg-background px-2 py-1 text-sm" defaultValue={suggestedTable}>
                                       {availableTables.map((tid: string) => (
-                                        <option key={tid} value={tid} selected={tid===suggestedTable}>{tid}</option>
+                                        <option key={tid} value={tid}>{tid}</option>
                                       ))}
                                     </select>
                                     {suggestedTable && (<span className="ml-2 text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 align-middle">auto-selected</span>)}
@@ -511,43 +708,36 @@ export default function HostProPanel() {
                                   <div className="mt-3 flex items-center justify-center gap-2">
                                     <Button size="sm" onClick={async (e) => {
                                       const sel = (e.currentTarget.parentElement?.previousElementSibling?.querySelector('select') as HTMLSelectElement | null);
-                                      const tableId = sel?.value || suggestedTable;
-                                      const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
-                                      const partySize = Math.max(1, parseInt(String(sizeStr || '2'), 10) || 2);
-                                      const payload = { partySize } as any;
-                                      if (String(nextId)) payload.preferredServerId = String(nextId);
-                                      const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                                      const j = await r.json();
-                                      if (j?.data?.serverId && (tableId || j?.data?.tableId)) {
-                                        await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: tableId || j.data.tableId, partySize, advancePointer: true }) });
-                                        // Create a Toast order and link it
-                                        try {
-                                          await fetch('/api/toast/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: tableId || j.data.tableId, partySize }) });
-                                        } catch {}
-                                        const s = await fetch('/api/hostpro/session').then(r => r.json());
-                                        if (s?.success) setSession(s.data);
-                                      }
+                                      const tableId = (sel?.value || (availableTables[0] || '')) as string;
+                                      setPendingAvailableTables(availableTables);
+                                      setPendingTableId(tableId);
+                                      setPendingServerId(String(nextId || ''));
+                                      setPendingPartySize(2);
+                                      setModalAdvancePointer(true);
+                                      setSeatModalOpen(true);
                                     }}>Seat</Button>
                                     <Button size="sm" variant="outline" onClick={async () => {
-                                      const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
-                                      const partySize = Math.max(1, parseInt(String(sizeStr || '2'), 10) || 2);
                                       const nextOrder = session?.rotation?.order || [];
                                       const nextIdx = ((session?.rotation?.pointer || 0) + 1) % (nextOrder.length || 1);
                                       const nextServerId = nextOrder[nextIdx];
                                       if (!nextServerId) return;
-                                      const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize, preferredServerId: nextServerId }) });
-                                      const j = await r.json();
-                                      if (j?.data?.serverId && j.data.serverId === nextServerId && j.data.tableId) {
-                                        await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize, advancePointer: false }) });
-                                        const order: string[] = Array.from(session.rotation.order as any);
-                                        const idx = order.findIndex((id) => String(id) === String(nextServerId));
-                                        if (idx >= 0) order.splice(idx, 1);
-                                        order.push(String(nextServerId));
-                                        const rot = { ...session.rotation, order, pointer: session.rotation.pointer };
-                                        await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: rot }) });
-                                        const s = await fetch('/api/hostpro/session').then(r => r.json());
-                                        if (s?.success) setSession(s.data);
-                                      }
+                                      setPendingAvailableTables(availableTables);
+                                      setPendingTableId(availableTables[0] || '');
+                                      setPendingServerId(String(nextServerId));
+                                      setPendingPartySize(2);
+                                      setModalAdvancePointer(false);
+                                      setSeatModalOpen(true);
+                                    }}>Seat Next</Button>
+                                    <Button size="sm" variant="outline" onClick={async () => {
+                                      const nextOrder = session?.rotation?.order || [];
+                                      const nextIdx = ((session?.rotation?.pointer || 0) + 1) % (nextOrder.length || 1);
+                                      const nextServerId = nextOrder[nextIdx];
+                                      if (!nextServerId) return;
+                                      setPendingAvailableTables(availableTables);
+                                      setPendingTableId(availableTables[0] || '');
+                                      setPendingServerId(String(nextServerId));
+                                      setPendingPartySize(2);
+                                      setSeatModalOpen(true);
                                     }}>Skip</Button>
                                   </div>
                                 </div>
@@ -558,28 +748,81 @@ export default function HostProPanel() {
                       </div>
                     </div>
                   )}
-                  {(() => {
-                    const combined: Record<string, boolean> = { ...(session?.tableOccupied || {}) };
-                    for (const [tid, val] of Object.entries(openTables)) if (val) combined[tid] = true;
-                    return (
-                      <FloorMap
-                        preset={livePreset}
-                        occupied={combined}
-                        showDomains={true}
-                        assignments={session?.assignments || []}
-                        servers={servers}
-                        walls={layoutData?.walls}
-                        labels={layoutData?.labels}
-                        manualMode={manualMode}
-                        onManualPick={(tid: string) => {
-                          if (!manualMode) return;
-                          setManualTableId(String(tid));
-                          const inferred = inferAssignedServerIdForTable(String(tid));
-                          setManualServerId(inferred || (activeAssignableStaff[0]?.id ? String(activeAssignableStaff[0].id) : ''));
-                        }}
-                      />
-                    );
-                  })()}
+
+                  {/* Compact in-module Seat modal */}
+                  {seatModalOpen && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+                      <div className="pointer-events-auto w-[260px] rounded-xl border bg-background/95 shadow-xl p-3">
+                        <div className="text-center text-sm font-medium mb-2">Enter Guest Count</div>
+                        <div className="text-center text-3xl font-bold mb-2 select-none">{pendingPartySize}</div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[1,2,3,4,5,6,7,8,9].map(n => (
+                            <Button key={n} variant="outline" onClick={()=> setPendingPartySize(ps => Math.min(20, Number(`${ps===0? '' : ps}${n}`)))}>{n}</Button>
+                          ))}
+                          <Button variant="outline" onClick={()=> setPendingPartySize(0)}>C</Button>
+                          <Button variant="outline" onClick={()=> setPendingPartySize(ps => Math.min(20, Number(`${ps===0? '' : ps}0`)))}>0</Button>
+                          <Button variant="outline" onClick={()=> setPendingPartySize(ps => Math.max(0, Math.floor(ps/10)))}>⌫</Button>
+                        </div>
+                        <div className="flex items-center justify-between mt-3">
+                          <Button variant="ghost" onClick={()=>{
+                            setSeatModalOpen(false);
+                            if (quickSeatMode) {
+                              // Return to table selection mode
+                              setSelectedQuickSeatTable(null);
+                            }
+                          }}>Cancel</Button>
+                          <div className="flex items-center gap-2">
+                            <Button variant="outline" onClick={()=> setPendingPartySize(ps => Math.min(20, ps + 1))}>+1</Button>
+                            <Button className="bg-orange hover:bg-orange text-orange-foreground" onClick={async ()=>{
+                              const partySize = Math.max(1, pendingPartySize || 1);
+                              try {
+                                const payload: any = { partySize };
+                                if (pendingServerId) payload.preferredServerId = pendingServerId;
+                                const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                                const j = await r.json();
+                                const serverId = j?.data?.serverId || pendingServerId;
+                                const tableId = pendingTableId || j?.data?.tableId;
+                                if (serverId && tableId) {
+                                  // Local rotation fallback update for smoother UX
+                                  setSession((prev: any) => {
+                                    if (!prev?.rotation?.order?.length) return prev;
+                                    const order: string[] = Array.from(prev.rotation.order as any).map(String);
+                                    let pointer = Number(prev.rotation.pointer || 0);
+                                    if (modalAdvancePointer) {
+                                      pointer = (pointer + 1) % Math.max(order.length, 1);
+                                    } else if (pendingServerId) {
+                                      const idx = order.findIndex(id => String(id) === String(pendingServerId));
+                                      if (idx >= 0) {
+                                        order.splice(idx, 1);
+                                        order.push(String(pendingServerId));
+                                      }
+                                    }
+                                    return { ...prev, rotation: { ...prev.rotation, order, pointer } };
+                                  });
+                                  await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId, tableId, partySize, advancePointer: modalAdvancePointer }) });
+                                  setFlashTableId(tableId);
+                                  setTemporaryOverlayHidden(true);
+                                  setTimeout(async ()=>{
+                                    setFlashTableId(undefined);
+                                    setTemporaryOverlayHidden(false);
+                                    const s = await fetch('/api/hostpro/session').then(r => r.json());
+                                    if (s?.success) setSession(s.data);
+                                  }, 1200);
+                                }
+                              } finally {
+                                setSeatModalOpen(false);
+                                if (quickSeatMode) {
+                                  // Exit quick seat mode after successful seating
+                                  setQuickSeatMode(false);
+                                  setSelectedQuickSeatTable(null);
+                                }
+                              }
+                            }}>Submit</Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {/* Next up card */}
                   {session?.rotation?.order?.length ? (
                     <div className="absolute top-3 right-3 rounded-xl border shadow p-3 bg-card/90 backdrop-blur">
@@ -593,56 +836,21 @@ export default function HostProPanel() {
                       )}</div>
                         </div>
                         <Button size="sm" onClick={async () => {
-                          const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
-                          const partySize = Math.max(1, parseInt(String(sizeStr || '2'), 10) || 2);
-                          const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize }) });
-                          const j = await r.json();
-                          if (j?.data?.serverId && j?.data?.tableId) {
-                            await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize, advancePointer: true }) });
-                            const s = await fetch('/api/hostpro/session').then(r => r.json());
-                            if (s?.success) setSession(s.data);
-                          } else if (Array.isArray(j?.data?.suggestions)) {
-                            // No table for next-up. Offer to try the next server in rotation.
-                            const nextOrder = session?.rotation?.order || [];
-                            const nextIdx = ((session?.rotation?.pointer || 0) + 1) % (nextOrder.length || 1);
-                            const nextServerId = nextOrder[nextIdx];
-                            const nextName = (
-                              servers.find(s => String(s.id) === String(nextServerId))?.name ||
-                              (Array.isArray(session?.servers) ? (session.servers as any[]).find((s: any) => String(s.id) === String(nextServerId))?.name : undefined) ||
-                              'Next server'
-                            );
-                            const ok = typeof window !== 'undefined' ? window.confirm(`No table available for the current next-up. Try ${nextName}?`) : true;
-                            if (ok && nextServerId) {
-                              const r2 = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize, preferredServerId: nextServerId }) });
-                              const j2 = await r2.json();
-                              if (j2?.data?.serverId && j2.data.serverId === nextServerId && j2.data.tableId) {
-                                await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j2.data.serverId, tableId: j2.data.tableId, partySize, advancePointer: false }) });
-                                // Move next server to end; keep pointer same so skipped remains at front
-                                const order: string[] = Array.from(session.rotation.order as any);
-                                const idx = order.findIndex((id) => String(id) === String(nextServerId));
-                                if (idx >= 0) order.splice(idx, 1);
-                                order.push(String(nextServerId));
-                                const rot = { ...session.rotation, order, pointer: session.rotation.pointer };
-                                await fetch('/api/hostpro/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rotation: rot }) });
-                                const s = await fetch('/api/hostpro/session').then(r => r.json());
-                                if (s?.success) setSession(s.data);
-                              } else if (typeof window !== 'undefined') {
-                                window.alert('No table available for the next server either.');
-                              }
-                            }
-                          }
+                          setPendingAvailableTables([]);
+                          setPendingTableId('');
+                          setPendingServerId('');
+                          setPendingPartySize(2);
+                          setSeatModalOpen(true);
                         }}>Seat</Button>
                         <Button size="sm" variant="outline" onClick={async () => {
-                          const sizeStr = typeof window !== 'undefined' ? window.prompt('Party size?', '2') : '2';
-                          const partySize = Math.max(1, parseInt(String(sizeStr || '2'), 10) || 2);
                           const nextOrder = session?.rotation?.order || [];
                           const nextIdx = ((session?.rotation?.pointer || 0) + 1) % (nextOrder.length || 1);
                           const nextServerId = nextOrder[nextIdx];
                           if (!nextServerId) return;
-                          const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize, preferredServerId: nextServerId }) });
+                          const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize: 2, preferredServerId: nextServerId }) });
                           const j = await r.json();
                           if (j?.data?.serverId && j.data.serverId === nextServerId && j.data.tableId) {
-                            await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize, advancePointer: false }) });
+                            await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize: 2, advancePointer: false }) });
                             const order: string[] = Array.from(session.rotation.order as any);
                             const idx = order.findIndex((id) => String(id) === String(nextServerId));
                             if (idx >= 0) order.splice(idx, 1);
@@ -706,88 +914,25 @@ export default function HostProPanel() {
                   )}
                 </div>
               )}
-              {/* Legend & quick counts */}
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="rounded-lg border p-3">
-                  <div className="font-medium mb-2">Assignments</div>
-                  <div className="space-y-2">
-                    {(() => {
-                      // Merge duplicates by serverId to avoid duplicate keys and ensure unique view
-                      const merged = mergeAssignments(session?.assignments || []);
-                      const activeOnly = merged.filter((a: any) => (a.domainIds || []).length > 0);
-                      return activeOnly.map((a: any) => {
-                      const sv = servers.find(s => String(s.id) === String(a.serverId));
-                      const domains = (livePreset?.domains || []).filter((d: any) => (a.domainIds || []).includes(d.id));
-                      const tableCount = domains.reduce((acc: number, d: any) => acc + (d.tableIds?.length || 0), 0);
-                      // Count active tables as union of host session seatings and Toast open orders belonging to this server within assigned domains
-                      const hostActiveSet = new Set((session?.seatings || []).filter((x: any) => x.serverId === a.serverId && x.status === 'seated').map((x: any) => x.tableId));
-                      const assignedTableIds = new Set<string>();
-                      for (const d of domains) for (const tid of (d.tableIds || [])) assignedTableIds.add(String(tid));
-                      const assignedName = sv?.name ? String(sv.name).toLowerCase() : undefined;
-                      for (const tid of Array.from(assignedTableIds)) {
-                        const info = ordersByTable[tid];
-                        if (!info) continue;
-                        const posServer = info.serverName ? String(info.serverName).toLowerCase() : undefined;
-                        if (!posServer || !assignedName) continue;
-                        if (posServer === assignedName || posServer === String(a.serverId).toLowerCase()) {
-                          hostActiveSet.add(String(tid));
-                        }
-                      }
-                      const activeTables = hostActiveSet.size;
-                      return (
-                        <div key={`assign-${a.serverId}`} className={`flex items-center justify-between rounded-md border p-2 ${sv?.isActive ? 'bg-background/60' : 'bg-amber-500/10'}`}>
-                          <div>
-                            <div className="font-medium leading-tight">{sv?.name || a.serverId}</div>
-                            {!sv?.isActive && (
-                              <div className="text-[10px] text-amber-700 mt-0.5">Inactive - reassign domains</div>
-                            )}
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {domains.map((d: any) => (
-                                <span key={`tag-${a.serverId}-${d.id}`} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border" style={{ background: d.color + '22' }}>
-                                  <span className="inline-block size-2 rounded-full" style={{ backgroundColor: d.color }} /> {d.name}
-                                </span>
-                              ))}
+              {/* Inline legend and quick seat floating button */}
+              {/* <div className="relative mt-4">
+                <details className="absolute right-3 top-0 z-10 w-56 rounded-lg border bg-card/90 backdrop-blur p-3" open>
+                  <summary className="cursor-pointer text-sm font-medium">Legend</summary>
+                  <div className="mt-2 space-y-1 text-xs">
+                    <div className="flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full bg-emerald-500/40 border border-emerald-600" /> Available</div>
+                    <div className="flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full bg-red-500/30 border border-red-600" /> Occupied</div>
+                    <div className="flex items-center gap-2"><span className="inline-block w-3 h-3 rounded-full bg-primary/30 border border-primary" /> Assigned Domain</div>
                             </div>
-                          </div>
-                          <div className="text-xs text-muted-foreground whitespace-nowrap">
-                            {domains.length} domains • {tableCount} tables • {activeTables} active
-                          </div>
-                        </div>
-                      );
-                    }); })()}
-                    {(session?.assignments || []).length === 0 && (
-                      <div className="text-xs text-muted-foreground">No assignments yet</div>
-                    )}
-                  </div>
-                  {(() => {
-                    const merged = mergeAssignments(session?.assignments || []);
-                    const anyInactive = merged.some((a: any) => {
-                      const sv = servers.find(s => String(s.id) === String(a.serverId));
-                      return (a.domainIds || []).length > 0 && !sv?.isActive;
-                    });
-                    if (!anyInactive) return null;
-                    return (
-                      <div className="mt-3 flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/10 p-2">
-                        <div className="text-xs text-amber-700">Some assigned staff are inactive. Reassign domains.</div>
-                        <a href="#assign" onClick={(e) => { e.preventDefault(); try { document.querySelector('button[value="assign"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch {} }} className="text-xs underline">Go to Assign</a>
-                      </div>
-                    );
-                  })()}
-                </div>
-                {/* Quick seat by party (manual) */}
-                <div className="rounded-lg border p-3">
-                  <div className="font-medium mb-2">Quick Seat</div>
-                <SeatGuestForm onSeat={async (partySize: number) => {
-                  const r = await fetch('/api/hostpro/seat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ partySize }) });
-                  const j = await r.json();
-                  if (j?.data?.serverId && j?.data?.tableId) {
-                    await fetch('/api/hostpro/assign-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serverId: j.data.serverId, tableId: j.data.tableId, partySize }) });
-                    const s = await fetch('/api/hostpro/session').then(r => r.json());
-                    if (s?.success) setSession(s.data);
-                  }
-                }} />
-                </div>
-              </div>
+                </details>
+                <button
+                  type="button"
+                  className="absolute right-3 bottom-3 z-30 w-10 h-10 rounded-full bg-orange-600 hover:bg-orange-700 text-white shadow-lg flex items-center justify-center"
+                  title="Quick Seat"
+                  onClick={() => { setPendingAvailableTables([]); setPendingTableId(''); setPendingServerId(''); setPendingPartySize(2); setSeatModalOpen(true); }}
+                >
+                  +
+                </button>
+              </div> */}
             </CardContent>
           </Card>
         </TabsContent>
@@ -797,15 +942,7 @@ export default function HostProPanel() {
   );
 }
 
-function SeatGuestForm({ onSeat }: { onSeat: (partySize: number) => void }) {
-  const [size, setSize] = useState(2);
-  return (
-    <div className="flex items-center gap-2">
-      <input type="number" min={1} max={12} value={size} onChange={(e) => setSize(parseInt(e.target.value || '2', 10))} className="w-24 rounded-md border bg-background px-2 py-1 text-sm" />
-      <Button size="sm" onClick={() => onSeat(size)}>Seat party</Button>
-    </div>
-  );
-}
+// Legacy Quick Seat form removed; using floating quick seat button + keypad modal in Live panel
 
 function ActiveStaff({ servers }: { servers: Array<{ id: string; name: string; role?: string; isActive?: boolean; range?: string; start?: string; end?: string; shiftIndex?: number; shiftCount?: number }> }) {
   const groups: Record<string, typeof servers> = { Server: [], Bartender: [], Host: [] };

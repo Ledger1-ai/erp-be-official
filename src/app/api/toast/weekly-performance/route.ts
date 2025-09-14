@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastAPIClient from '@/lib/services/toast-api-client';
 import { getDefaultTimeZone, formatYMDInTimeZone } from '@/lib/timezone';
+import { isDemoMode, getDemoNow } from '@/lib/config/demo';
 
 function daysAgo(d: Date, n: number): Date {
   const x = new Date(d);
@@ -33,6 +34,22 @@ function formatYMDCompact(ymd: string): string {
 
 export async function GET(_req: NextRequest) {
   try {
+    if (isDemoMode()) {
+      const tz = getDefaultTimeZone();
+      const today = getDemoNow();
+      const series: Array<{ date: string; sales: number; orders: number; avgTurnoverMinutes: number }> = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = daysAgo(today, i);
+        const ymd = formatYMD(tz, d);
+        const base = 4200 + (6 - i) * 400;
+        const sales = Math.round(base + Math.sin(i) * 200);
+        const orders = 20 + (6 - i) * 4 + (i % 3);
+        const avgTurnoverMinutes = 10 + ((6 - i) % 4);
+        series.push({ date: ymd, sales, orders, avgTurnoverMinutes });
+      }
+      return NextResponse.json({ success: true, data: series, timeZone: tz });
+    }
+
     const restaurantGuid = process.env.TOAST_RESTAURANT_ID || '';
     if (!restaurantGuid) return NextResponse.json({ success: false, error: 'Missing TOAST_RESTAURANT_ID' }, { status: 400 });
 

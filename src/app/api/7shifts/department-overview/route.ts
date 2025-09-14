@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db/connection';
+import { isDemoMode } from '@/lib/config/demo';
 import SevenShiftsApiClient from '@/lib/services/seven-shifts-api-client';
 import ToastEmployee from '@/lib/models/ToastEmployee';
 import type { IToastEmployee } from '@/lib/models/ToastEmployee';
@@ -34,10 +35,16 @@ function inferDepartment(roleName: string): string {
 export async function GET(_req: NextRequest) {
   try {
     await connectDB();
-    const accessToken = process.env['SEVENSHIFTS_ACCESS_TOKEN'];
-    if (!accessToken) {
-      return NextResponse.json({ success: false, error: '7shifts Access Token is not configured' }, { status: 500 });
+    if (isDemoMode()) {
+      // Demo departments summary (Kitchen/Front/Admin/Other)
+      return NextResponse.json({ success: true, data: [
+        { name: 'Front of House', members: 8, toastGuids: [] },
+        { name: 'Back of House', members: 7, toastGuids: [] },
+        { name: 'Admin', members: 2, toastGuids: [] },
+      ] });
     }
+    const accessToken = process.env['SEVENSHIFTS_ACCESS_TOKEN'];
+    if (!accessToken) return NextResponse.json({ success: false, error: '7shifts Access Token is not configured' }, { status: 500 });
 
     const client = new SevenShiftsApiClient(accessToken);
     const { companyId, companyGuid, locationIds } = await client.getCompanyAndLocations();

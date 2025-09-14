@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ToastCompleteAPI from '@/lib/services/toast-complete-api';
+import { isDemoMode, isDemoStubsEnabled } from '@/lib/config/demo';
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,6 +15,10 @@ export async function GET(request: NextRequest) {
       }, { status: 400 });
     }
 
+    if (isDemoMode() && isDemoStubsEnabled()) {
+      const analytics = { revenue: 45680, orders: 892, averageCheck: 51.21, period: `${startDate} to ${endDate}`, laborHours: 320, timeEntriesCount: 210 };
+      return NextResponse.json({ success: true, data: analytics, timestamp: new Date().toISOString() });
+    }
     const toastAPI = new ToastCompleteAPI();
     const analytics = await toastAPI.getAnalytics(restaurantGuid, startDate, endDate);
 

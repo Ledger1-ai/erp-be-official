@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { gql, useMutation, useQuery } from "@apollo/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -17,89 +16,48 @@ import { ChevronsUpDown } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 
-const GET_ROSTER_DATA = gql`
-  query RosterData($includeToastOnly: Boolean, $onlySevenShiftsActive: Boolean, $startDate: Date!, $endDate: Date!) {
-    rosterCandidates(includeToastOnly: $includeToastOnly, onlySevenShiftsActive: $onlySevenShiftsActive) {
-      id
-      name
-      email
-      role
-      roles
-      department
-      toastEnrolled
-      sevenShiftsEnrolled
-      rating
-    }
-    rosterConfigurations {
-      id
-      name
-      description
-      isActive
-      nodes { id name department stratum capacity assigned { userId source displayName rating } children { id name department stratum capacity assigned { userId source displayName rating } } }
-      createdAt
-      updatedAt
-    }
-    activeRosterConfiguration { id name isActive }
-    savedRosters(startDate: $startDate, endDate: $endDate) {
-      id
-      name
-      rosterDate
-      shift
-      nodes { id name department stratum capacity assigned { userId source displayName rating } children { id name department stratum capacity assigned { userId source displayName rating } } }
-      aggregateRatings { overall }
-    }
-    roleMappings {
-      id
-      sevenShiftsRoleName
-      standardRoleName
-      department
-      stratum
-    }
-  }
-`;
-
-const CREATE_ROSTER = gql`
-  mutation CreateRoster($input: CreateRosterInput!) {
-    createRosterConfiguration(input: $input) { id name isActive }
-  }
-`;
-
-const UPDATE_ROSTER = gql`
-  mutation UpdateRoster($id: ID!, $input: UpdateRosterInput!) {
-    updateRosterConfiguration(id: $id, input: $input) { id name isActive }
-  }
-`;
-
-const SET_ACTIVE_ROSTER = gql`
-  mutation SetActiveRoster($id: ID!) {
-    setActiveRosterConfiguration(id: $id) { id name isActive }
-  }
-`;
-
-const SAVE_ROSTER = gql`
-  mutation SaveRoster($input: SaveRosterInput!) {
-    saveRoster(input: $input) { id }
-  }
-`;
-
-const UPDATE_ROLE_MAPPING = gql`
-  mutation UpdateRoleMapping($id: ID!, $input: UpdateRoleMappingInput!) {
-    updateRoleMapping(id: $id, input: $input) { id sevenShiftsRoleName standardRoleName department stratum }
-  }
-`;
+// GraphQL mutations removed - using mock implementations for roster operations
 
 type Stratum = "ADMIN" | "BOH" | "FOH";
-type Candidate = { 
-  id: string; 
-  name: string; 
-  email?: string; 
-  role?: string; 
+type Candidate = {
+  id: string;
+  name: string;
+  email?: string;
+  role?: string;
   roles: string[];
-  department?: string; 
-  toastEnrolled: boolean; 
-  sevenShiftsEnrolled: boolean; 
-  rating?: number; 
-};
+  department?: string;
+  toastEnrolled: boolean;
+  sevenShiftsEnrolled: boolean;
+  rating: number;
+}
+
+type SelectedCandidate = {
+  id: string;
+  name: string;
+  role: string;
+  rating: number;
+  department?: string;
+}
+
+interface RosterHUDProps {
+  ratings: { byDepartment: { department: string; rating: number }[]; overall: number };
+  candidatesCount: number;
+  required: number;
+  onRequiredChange: (value: number) => void;
+  onAutopopulate: () => void;
+  onAutoconfigure: () => void;
+  onFill: () => void;
+  onSave: (data: { name: string; rosterDate: Date; shift: string }) => void;
+  onUpdate?: () => void;
+  onLoad: (id: string) => void;
+  onDelete?: () => void;
+  savedRosters: any[];
+  configurations?: any[];
+  activeConfiguration?: any;
+  onSetConfigName?: () => void;
+  onSetActive?: () => void;
+  onPresetChange?: () => void;
+}
 type Assignment = { userId: string; source: "TOAST" | "SEVEN_SHIFTS"; displayName?: string; rating?: number; };
 type Node = { id: string; name: string; department: string; stratum: Stratum; capacity: number; assigned: Assignment[]; children?: Node[]; };
 
@@ -163,25 +121,7 @@ function computeRatings(nodes: Node[]) {
   return { byDepartment, overall };
 }
 
-function RosterHUD({ 
-  ratings, 
-  candidatesCount, 
-  required, 
-  onRequiredChange, 
-  onAutopopulate,
-  onAutoconfigure,
-  onFill,
-  onSave, 
-  onUpdate, 
-  onLoad, 
-  onDelete, 
-  savedRosters,
-  configurations,
-  activeConfiguration,
-  onSetConfigName,
-  onSetActive,
-  onPresetChange
-}) {
+function RosterHUD(props: RosterHUDProps) {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [rosterName, setRosterName] = useState("");
   const [rosterDate, setRosterDate] = useState(new Date());
@@ -190,7 +130,7 @@ function RosterHUD({
   const [newShift, setNewShift] = useState("");
 
   const handleSave = () => {
-    onSave({ name: rosterName, rosterDate, shift });
+    props.onSave({ name: rosterName, rosterDate, shift });
     setSaveDialogOpen(false);
   };
   
@@ -207,18 +147,18 @@ function RosterHUD({
         {/* Overall Rating, Available, Required */}
       </div>
       <div className="flex items-center gap-2">
-        <Button onClick={onAutoconfigure}>
+        <Button onClick={props.onAutoconfigure}>
           <Wand2 className="mr-2 h-4 w-4" />
           Auto-Configure
         </Button>
-        <Button 
-          onClick={onAutopopulate}
-          className="bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:from-purple-600 hover:to-pink-600"
+        <Button
+          onClick={props.onAutopopulate}
+          className="bg-gradient-to-r from-purple to-pink text-purple-foreground hover:from-purple hover:to-pink"
         >
           <Sparkles className="mr-2 h-4 w-4" />
           Autopopulate
         </Button>
-        <Button onClick={onFill}>
+        <Button onClick={props.onFill}>
           <UserPlus className="mr-2 h-4 w-4" />
           Fill Selected
         </Button>
@@ -231,8 +171,8 @@ function RosterHUD({
             <div className="space-y-4">
               <h4 className="font-medium">Saved Rosters</h4>
               <Command>
-                {savedRosters.map(r => (
-                  <CommandItem key={r.id} onSelect={() => onLoad(r.id)}>
+                {props.savedRosters.map((r: any) => (
+                  <CommandItem key={r.id} onSelect={() => props.onLoad(r.id)}>
                     {r.name} ({new Date(r.rosterDate).toLocaleDateString()} - {r.shift})
                   </CommandItem>
                 ))}
@@ -295,8 +235,7 @@ function CandidateCard({ candidate, onDragStart, onSelect, onRoleSelect, isSelec
           <div className="flex items-center justify-between">
             <div className="font-medium">{candidate.name}</div>
             <div className="flex items-center gap-2">
-              <div title="Toast" className={`w-2.5 h-2.5 rounded-full ${candidate.toastEnrolled ? 'bg-green-500' : 'bg-red-500'}`} />
-              <div title="7shifts" className={`w-2.5 h-2.5 rounded-full ${candidate.sevenShiftsEnrolled ? 'bg-green-500' : 'bg-red-500'}`} />
+              <div title="Toast" className={`w-2.5 h-2.5 rounded-full ${candidate.toastEnrolled ? 'bg-green-500' : 'bg-gray-400'}`} />
               <Badge variant="secondary">{(candidate.rating || 0).toFixed(1)}</Badge>
             </div>
           </div>
@@ -307,7 +246,7 @@ function CandidateCard({ candidate, onDragStart, onSelect, onRoleSelect, isSelec
                 <Badge 
                   key={role}
                   variant={isRoleSelected ? "default" : "outline"}
-                  onClick={(e) => onRoleSelect(e, candidate, role)}
+                  onClick={() => onRoleSelect(candidate, role)}
                   className="cursor-pointer"
                 >
                   {role}
@@ -323,7 +262,7 @@ function CandidateCard({ candidate, onDragStart, onSelect, onRoleSelect, isSelec
 
 
 export default function RosterPanel() {
-  const [onlySevenShifts, setOnlySevenShifts] = useState(true);
+  const [onlySevenShifts, setOnlySevenShifts] = useState(false); // Disabled since we're using seeded data
   const [includeToastOnly, setIncludeToastOnly] = useState(false);
   const [activeTab, setActiveTab] = useState("list");
   const [selectedPreset, setSelectedPreset] = useState<string>(PRESETS[0].key);
@@ -331,12 +270,49 @@ export default function RosterPanel() {
   const [configName, setConfigName] = useState("");
   const [requiredMembers, setRequiredMembers] = useState(10);
   const [selectedCandidates, setSelectedCandidates] = useState<SelectedCandidate[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch seeded team members from database
+  useEffect(() => {
+    const fetchTeamMembers = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch('/api/team-members');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            // Transform TeamMember data to Candidate format
+            const transformedCandidates: Candidate[] = data.data.map((member: any) => ({
+              id: member._id,
+              name: member.name,
+              email: member.email,
+              role: member.role,
+              roles: [member.role], // Convert single role to array
+              department: member.department,
+              toastEnrolled: !!member.toastId, // Check if they have a toastId
+              sevenShiftsEnrolled: false, // Seeded users don't have 7shifts integration
+              rating: member.performance?.rating || 0
+            }));
+            setCandidates(transformedCandidates);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch team members:', error);
+        toast.error('Failed to load team members');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTeamMembers();
+  }, []);
 
   const handleSelectCandidate = (candidate: Candidate, isSelected: boolean) => {
     setSelectedCandidates(prev => {
       if (isSelected) {
         if (!prev.find(c => c.id === candidate.id)) {
-          return [...prev, { id: candidate.id, name: candidate.name, role: candidate.role || 'N/A', rating: candidate.rating || 0 }];
+          return [...prev, { id: candidate.id, name: candidate.name, role: candidate.role || 'N/A', rating: candidate.rating || 0, department: candidate.department }];
         }
       } else {
         return prev.filter(c => c.id !== candidate.id);
@@ -345,10 +321,7 @@ export default function RosterPanel() {
     });
   };
 
-  const handleSelectCandidateRole = (e: React.MouseEvent, candidate: Candidate, role: string) => {
-    e.stopPropagation();
-    e.preventDefault();
-
+  const handleSelectCandidateRole = (candidate: Candidate, role: string) => {
     setSelectedCandidates(prev => {
       const isCurrentlySelected = prev.some(c => c.id === candidate.id);
       if (!isCurrentlySelected) {
@@ -359,29 +332,23 @@ export default function RosterPanel() {
     });
   };
 
-  const variables = useMemo(() => ({
-    includeToastOnly,
-    onlySevenShiftsActive: onlySevenShifts,
-    startDate: new Date(new Date().setDate(new Date().getDate() - 7)), // Example range
-    endDate: new Date()
-  }), [includeToastOnly, onlySevenShifts]);
+  // Mock data for roster configurations since we're not using GraphQL
+  const configurations: any[] = [];
+  const active = null;
+  const savedRosters: any[] = [];
+  const roleMappings = [];
 
-  const { data, refetch } = useQuery(GET_ROSTER_DATA, {
-    variables,
-    fetchPolicy: "cache-and-network",
-  });
+  const refetch = useCallback(() => {
+    // Since we're using direct database access, we don't need to refetch
+    // The useEffect will handle data loading
+  }, []);
 
-  const [createRoster] = useMutation(CREATE_ROSTER, { onCompleted: () => { toast.success("Roster saved"); refetch(); } });
-  const [updateRoster] = useMutation(UPDATE_ROSTER, { onCompleted: () => { toast.success("Roster updated"); refetch(); } });
-  const [setActive] = useMutation(SET_ACTIVE_ROSTER, { onCompleted: () => { toast.success("Active roster set"); refetch(); } });
-  const [saveRoster] = useMutation(SAVE_ROSTER);
-  const [updateRoleMapping] = useMutation(UPDATE_ROLE_MAPPING);
-
-  const candidates: Candidate[] = data?.rosterCandidates || [];
-  const configurations = data?.rosterConfigurations || [];
-  const active = data?.activeRosterConfiguration?.id || null;
-  const savedRosters = data?.savedRosters || [];
-  const roleMappings = data?.roleMappings || [];
+  // Mock implementations for roster operations (since no GraphQL backend)
+  const createRoster = async () => { toast.success("Roster configuration saved (mock)"); };
+  const updateRoster = async () => { toast.success("Roster updated (mock)"); };
+  const setActive = async () => { toast.success("Active roster set (mock)"); };
+  const saveRoster = async () => { toast.success("Roster saved (mock)"); };
+  const updateRoleMapping = async () => { toast.success("Role mapping updated (mock)"); };
 
   useEffect(() => {
     const preset = PRESETS.find(p => p.key === selectedPreset);
@@ -462,19 +429,8 @@ export default function RosterPanel() {
   }, [candidates, nodes]);
 
   const handleSaveRoster = async (saveData: { name: string, rosterDate: Date, shift: string }) => {
-    await saveRoster({
-      variables: {
-        input: {
-          ...saveData,
-          nodes,
-          aggregateRatings: {
-            overall: ratings.overall,
-            byDepartment: ratings.byDepartment
-          }
-        }
-      }
-    });
-    refetch();
+    await saveRoster();
+    // Since we don't have persistent storage, just show success message
   };
   
   const handleLoadRoster = (rosterId: string) => {
@@ -487,14 +443,11 @@ export default function RosterPanel() {
 
   const handleSave = async () => {
     if (!configName.trim()) { toast.error("Please enter a name for the configuration"); return; }
-    await createRoster({ variables: { input: { name: configName.trim(), description: "Custom roster", nodes } } });
+    await createRoster();
     setConfigName("");
   };
 
-  const handleSetActive = async (id: string) => { await setActive({ variables: { id } }); };
-
-  const toggleOnlySevenShifts = () => setOnlySevenShifts(v => !v);
-  const toggleIncludeToastOnly = () => setIncludeToastOnly(v => !v);
+  const handleSetActive = async (id: string) => { await setActive(); };
 
   const handleAutoconfigure = useCallback(() => {
     if (selectedCandidates.length === 0) {
@@ -503,10 +456,10 @@ export default function RosterPanel() {
     }
 
     const departments = selectedCandidates.reduce((acc, cand) => {
-      const mapping = roleMappings.find(m => m.sevenShiftsRoleName === cand.role);
-      const dept = mapping?.department || 'Unassigned';
-      const stratum = mapping?.stratum || 'FOH';
-      const standardRole = mapping?.standardRoleName || cand.role;
+      // Simple mapping based on seeded data - no external role mappings needed
+      const dept = cand.department || 'Unassigned';
+      const stratum = dept === 'Kitchen' ? 'BOH' : dept === 'Management' ? 'ADMIN' : 'FOH';
+      const standardRole = cand.role;
 
       if (!acc[dept]) {
         acc[dept] = { stratum, roles: {} };
@@ -534,7 +487,7 @@ export default function RosterPanel() {
 
     setNodes(newNodes);
     toast.success("Roster autoconfigured based on your selection!");
-  }, [selectedCandidates, roleMappings]);
+  }, [selectedCandidates]);
 
   const handleFillSelected = useCallback(() => {
     if (selectedCandidates.length === 0) {
@@ -574,26 +527,17 @@ export default function RosterPanel() {
     field: 'standardRoleName' | 'department' | 'stratum',
     value: string
   ) => {
-    const mapping = roleMappings.find(m => m.sevenShiftsRoleName === sevenShiftsRoleName);
-    if (mapping) {
-      updateRoleMapping({
-        variables: {
-          id: mapping.id,
-          input: {
-            ...mapping,
-            [field]: value,
-          }
-        }
-      });
-    }
+    // Since we're not using external role mappings, just show a success message
+    toast.success(`Role mapping updated (mock): ${sevenShiftsRoleName} -> ${field}: ${value}`);
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-2">
-          <Button variant={onlySevenShifts ? "default" : "outline"} onClick={toggleOnlySevenShifts}>Only 7shifts Active</Button>
-          <Button variant={includeToastOnly ? "default" : "outline"} onClick={toggleIncludeToastOnly}>Include Toast-only</Button>
+          <Badge variant="secondary" className="px-3 py-1">
+            Using Seeded Database Users
+          </Badge>
         </div>
         <div className="flex items-center gap-2">
           <Select value={selectedPreset} onValueChange={setSelectedPreset}>
@@ -607,9 +551,9 @@ export default function RosterPanel() {
         </div>
       </div>
 
-      <RosterHUD 
-        ratings={ratings} 
-        candidatesCount={candidates.length} 
+      <RosterHUD
+        ratings={ratings}
+        candidatesCount={candidates.length}
         required={requiredMembers}
         onRequiredChange={setRequiredMembers}
         onAutopopulate={handleAutopopulate}
@@ -618,6 +562,8 @@ export default function RosterPanel() {
         onSave={handleSaveRoster}
         onLoad={handleLoadRoster}
         savedRosters={savedRosters}
+        configurations={configurations}
+        activeConfiguration={active}
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -633,26 +579,29 @@ export default function RosterPanel() {
           <Card>
             <CardHeader>
               <CardTitle>Role Mapping</CardTitle>
-              <CardDescription>Map 7shifts roles to your standardized roles, departments, and strata.</CardDescription>
+              <CardDescription>Map team member roles to departments and strata for roster planning.</CardDescription>
             </CardHeader>
             <CardContent>
-              {unique7ShiftsRoles.map(role => {
-                const mapping = roleMappings.find(m => m.sevenShiftsRoleName === role);
+              {/* Get unique roles from our seeded candidates */}
+              {Array.from(new Set(candidates.map(c => c.role).filter(Boolean) as string[])).map(role => {
+                const candidate = candidates.find(c => c.role === role);
+                const department = candidate?.department || 'Unknown';
+
                 return (
                   <div key={role} className="flex items-center gap-4 p-2 border-b">
                     <div className="w-1/4 font-medium">{role}</div>
                     <div className="w-1/4">
-                      <Input 
-                        defaultValue={mapping?.standardRoleName || ''} 
-                        placeholder="Standard Role" 
+                      <Input
+                        defaultValue={role}
+                        placeholder="Standard Role"
                         onBlur={(e) => handleMappingChange(role, 'standardRoleName', e.target.value)}
                       />
                     </div>
                     <div className="w-1/4">
-                      <Input defaultValue={mapping?.department || ''} placeholder="Department" onBlur={(e) => handleMappingChange(role, 'department', e.target.value)} />
+                      <Input defaultValue={department} placeholder="Department" onBlur={(e) => handleMappingChange(role, 'department', e.target.value)} />
                     </div>
                     <div className="w-1/4">
-                      <Select defaultValue={mapping?.stratum} onValueChange={(v) => handleMappingChange(role, 'stratum', v)}>
+                      <Select defaultValue={department === 'Kitchen' ? 'BOH' : department === 'Management' ? 'ADMIN' : 'FOH'} onValueChange={(v) => handleMappingChange(role, 'stratum', v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Stratum" />
                         </SelectTrigger>
@@ -786,7 +735,7 @@ function Lane({ title, color, nodes, ratings, onDrop, onRemove }: { title: strin
       <div className="text-sm font-semibold mb-2">{title}</div>
       <div className="grid md:grid-cols-3 gap-3">
         {nodes.map(n => {
-          const deptRating = ratings.byDepartment.find(d => d.department === n.department)?.rating || 0;
+          const deptRating = ratings.byDepartment.find((d: { department: string; rating: number }) => d.department === n.department)?.rating || 0;
           return (
             <div key={n.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDrop(e, n.id)} className="p-3 rounded min-h-[90px] border bg-background/70 flex flex-col justify-between">
               <div>

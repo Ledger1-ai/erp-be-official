@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ApolloServer } from '@apollo/server';
 import { typeDefs } from '@/lib/graphql/schema';
 import { resolvers } from '@/lib/graphql/resolvers';
+import { demoResolvers } from '@/lib/graphql/demo-resolvers';
+import { isDemoMode, isDemoStubsEnabled } from '@/lib/config/demo';
 import { connectDB } from '@/lib/db/connection';
 import { verifyToken, extractTokenFromHeader, JWTPayload } from '@/lib/auth/jwt';
 import { User } from '@/lib/models/User';
@@ -32,9 +34,34 @@ if (globalForApollo.apolloServer) {
 
 function createApolloServer() {
   console.log('🚀 Creating new Apollo Server instance');
+  // Compose resolvers. In demo with stubs enabled, only override specific Toast/menu resolvers,
+  // and keep DB-backed inventory resolvers intact to avoid reducing item counts.
+  const baseResolvers: any = resolvers as any;
+  let composedResolvers: any = baseResolvers;
+  if (isDemoMode() && isDemoStubsEnabled()) {
+    const demo: any = demoResolvers as any;
+    const selectiveDemo = {
+      Query: {
+        indexedMenus: demo?.Query?.indexedMenus,
+        menuItemStock: demo?.Query?.menuItemStock,
+        menuItemCost: demo?.Query?.menuItemCost,
+        menuItemCapacity: demo?.Query?.menuItemCapacity,
+      },
+      Mutation: {
+        // Safe to override; does not depend on live integrations
+        setMenuVisibility: demo?.Mutation?.setMenuVisibility,
+      },
+    };
+    composedResolvers = {
+      ...baseResolvers,
+      Query: { ...(baseResolvers?.Query || {}), ...(selectiveDemo.Query || {}) },
+      Mutation: { ...(baseResolvers?.Mutation || {}), ...(selectiveDemo.Mutation || {}) },
+    };
+  }
+
   return new ApolloServer<Context>({
     typeDefs,
-    resolvers,
+    resolvers: composedResolvers,
     introspection: !isProduction,
     // Production-grade error handling
     formatError: (error: any) => {
@@ -110,12 +137,17 @@ async function createContext(request: NextRequest): Promise<Context> {
     if (token) {
       // Verify token
       const decoded = verifyToken(token);
-      
-      // Verify user still exists and is active
-      const dbUser = await User.findById(decoded.userId);
-      if (dbUser && dbUser.isActive) {
+      if (isDemoMode()) {
+        // In demo mode, accept verified token without DB lookup
         user = decoded;
         isAuthenticated = true;
+      } else {
+        // Verify user still exists and is active
+        const dbUser = await User.findById(decoded.userId);
+        if (dbUser && dbUser.isActive) {
+          user = decoded;
+          isAuthenticated = true;
+        }
       }
     }
   } catch (error) {
@@ -142,8 +174,10 @@ async function createContext(request: NextRequest): Promise<Context> {
 
 async function handler(request: NextRequest) {
   try {
-    // Ensure database is connected first
-    await connectDB();
+    // Ensure database is connected (skip in demo mode)
+    if (!isDemoMode()) {
+      await connectDB();
+    }
 
     // Get Apollo Server instance
     const apolloServer = await getApolloServer();

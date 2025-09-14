@@ -31,6 +31,9 @@ RUN npm ci --omit=dev --legacy-peer-deps
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 
+# Copy environment file for proper configuration
+COPY --from=builder /app/envstandin ./envstandin
+
 # gRPC proto files are loaded from process.cwd()/src/lib/grpc/protos at runtime
 COPY --from=builder /app/src/lib/grpc/protos ./src/lib/grpc/protos
 

@@ -1,22 +1,26 @@
+import { loadEnv } from '../config/load-env';
 import { connectDB } from './connection';
 import { InventoryItem } from '../models/InventoryItem';
 import { TeamMember } from '../models/TeamMember';
 import { Analytics } from '../models/Analytics';
 import { User } from '../models/User';
+import PerformanceEntry from '../models/PerformanceEntry';
 
 export async function seedSampleData() {
   try {
+    loadEnv();
     console.log('🌱 Seeding sample data...');
     await connectDB();
 
     // Get admin user for createdBy field
-    const adminUser = await User.findOne({ email: 'admin@varuni.com' });
+    const adminUser = await User.findOne({ email: 'admin@ledgerone.demo' });
     const adminId = adminUser?._id;
 
     // Clear existing data
     await InventoryItem.deleteMany({});
     await TeamMember.deleteMany({});
     await Analytics.deleteMany({});
+    await PerformanceEntry.deleteMany({});
 
     // Sample Inventory Items
     const inventoryItems = [
@@ -103,51 +107,82 @@ export async function seedSampleData() {
       {
         name: 'Sarah Johnson',
         role: 'Head Chef',
-        email: 'sarah.johnson@thegraineledger.com',
+        email: 'sarah.johnson@ledgerone.demo',
         phone: '+1-555-0101',
         department: 'Kitchen',
         joinDate: new Date('2023-01-15'),
         hourlyRate: 28.50,
         status: 'active',
-        skills: ['French Cuisine', 'Menu Planning', 'Team Leadership']
+        skills: ['French Cuisine', 'Menu Planning', 'Team Leadership'],
+        toastId: 'toast-sarah-001'
       },
       {
         name: 'Mike Rodriguez',
         role: 'Sous Chef',
-        email: 'mike.rodriguez@thegraineledger.com',
+        email: 'mike.rodriguez@ledgerone.demo',
         phone: '+1-555-0102',
         department: 'Kitchen',
         joinDate: new Date('2023-03-10'),
         hourlyRate: 22.00,
         status: 'active',
-        skills: ['Prep Work', 'Grilling', 'Inventory Management']
+        skills: ['Prep Work', 'Grilling', 'Inventory Management'],
+        toastId: 'toast-mike-002'
       },
       {
         name: 'Emma Thompson',
         role: 'Server',
-        email: 'emma.thompson@thegraineledger.com',
+        email: 'emma.thompson@ledgerone.demo',
         phone: '+1-555-0103',
         department: 'Front of House',
         joinDate: new Date('2023-06-20'),
         hourlyRate: 15.00,
         status: 'active',
-        skills: ['Customer Service', 'Wine Knowledge', 'POS Systems']
+        skills: ['Customer Service', 'Wine Knowledge', 'POS Systems'],
+        toastId: 'toast-emma-003'
       },
       {
         name: 'David Kim',
         role: 'Bartender',
-        email: 'david.kim@thegraineledger.com',
+        email: 'david.kim@ledgerone.demo',
         phone: '+1-555-0104',
         department: 'Front of House',
         joinDate: new Date('2023-04-05'),
         hourlyRate: 18.50,
         status: 'active',
-        skills: ['Mixology', 'Inventory', 'Customer Service']
+        skills: ['Mixology', 'Inventory', 'Customer Service'],
+        toastId: 'toast-david-004'
       }
     ];
 
     await TeamMember.insertMany(teamMembers);
     console.log('✅ Sample team members created');
+
+    // Sample Performance Entries with red flags for critical members testing
+    const performanceEntries = [
+      // Sarah Johnson (Head Chef) - 3 red flags (should be critical)
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-sarah-001', rating: 4, isFlag: true, flagType: 'red', details: 'Late arrival', createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-sarah-001', rating: 3, isFlag: true, flagType: 'red', details: 'Poor communication', createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-sarah-001', rating: 4, isFlag: true, flagType: 'red', details: 'Inventory error', createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+
+      // Mike Rodriguez (Sous Chef) - 2 red flags (should be critical)
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-mike-002', rating: 4, isFlag: true, flagType: 'red', details: 'Equipment not cleaned', createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-mike-002', rating: 3, isFlag: true, flagType: 'red', details: 'Wrong order preparation', createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000) },
+
+      // Emma Thompson (Server) - 1 red flag (should NOT be critical)
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-emma-003', rating: 4, isFlag: true, flagType: 'red', details: 'Slow service', createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+
+      // David Kim (Bartender) - 1 yellow flag (should NOT be critical)
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-david-004', rating: 4, isFlag: true, flagType: 'yellow', details: 'Minor delay', createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) },
+
+      // Regular ratings for other employees
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-sarah-001', rating: 5, createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-mike-002', rating: 4, createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-emma-003', rating: 5, createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) },
+      { restaurantGuid: 'rest-1', employeeToastGuid: 'toast-david-004', rating: 5, createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) }
+    ];
+
+    await PerformanceEntry.insertMany(performanceEntries);
+    console.log('✅ Sample performance entries created');
 
     // Sample Analytics Data
     const analyticsData = [
@@ -206,7 +241,8 @@ export async function seedSampleData() {
     return {
       inventoryItems: inventoryItems.length,
       teamMembers: teamMembers.length,
-      analytics: analyticsData.length
+      analytics: analyticsData.length,
+      performanceEntries: performanceEntries.length
     };
 
   } catch (error) {
@@ -223,6 +259,7 @@ if (require.main === module) {
       console.log(`   • Inventory Items: ${result.inventoryItems}`);
       console.log(`   • Team Members: ${result.teamMembers}`);
       console.log(`   • Analytics Records: ${result.analytics}`);
+      console.log(`   • Performance Entries: ${result.performanceEntries}`);
       console.log('\n✅ Ready to test the dashboard!');
       process.exit(0);
     })

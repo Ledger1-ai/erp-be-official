@@ -40,23 +40,44 @@
   --card-foreground: hsl(240 10% 3.9%);
   --popover: hsl(0 0% 100%);
   --popover-foreground: hsl(240 10% 3.9%);
-  --primary: hsl(20 91% 48%); /* Orange primary */
+  --primary: hsl(171 65% 58%); /* Teal primary (#4dd9cf) */
   --primary-foreground: hsl(0 0% 98%);
   --secondary: hsl(240 4.8% 95.9%);
   --secondary-foreground: hsl(240 5.9% 10%);
   --muted: hsl(240 4.8% 95.9%);
   --muted-foreground: hsl(240 3.8% 46.1%);
-  --accent: hsl(24 70% 56%); /* Orange accent */
+  --accent: hsl(171 65% 58%); /* Teal accent (#4dd9cf) */
   --accent-foreground: hsl(240 5.9% 10%);
   --destructive: hsl(0 84.2% 60.2%);
   --border: hsl(240 5.9% 90%);
   --input: hsl(240 5.9% 90%);
-  --ring: hsl(20 91% 48%); /* Orange ring */
-  --chart-1: hsl(20 91% 48%); /* Orange chart colors */
-  --chart-2: hsl(24 70% 56%);
-  --chart-3: hsl(32 81% 61%);
+  --ring: hsl(171 65% 58%); /* Teal ring (#4dd9cf) */
+  --chart-1: hsl(171 65% 58%); /* Teal chart colors (#4dd9cf) */
+  --chart-2: hsl(180 65% 55%);
+  --chart-3: hsl(190 70% 52%);
   --chart-4: hsl(207 90% 54%);
   --chart-5: hsl(142 76% 36%);
+  /* Additional color variables for component consistency */
+  --success: hsl(142 76% 36%);
+  --success-foreground: hsl(0 0% 98%);
+  --warning: hsl(32 81% 61%);
+  --warning-foreground: hsl(240 5.9% 10%);
+  --info: hsl(207 90% 54%);
+  --info-foreground: hsl(0 0% 98%);
+  --orange: hsl(20 91% 48%);
+  --orange-foreground: hsl(0 0% 98%);
+  --yellow: hsl(48 96% 53%);
+  --yellow-foreground: hsl(240 5.9% 10%);
+  --red: hsl(0 84% 60%);
+  --red-foreground: hsl(0 0% 98%);
+  --green: hsl(142 76% 36%);
+  --green-foreground: hsl(0 0% 98%);
+  --blue: hsl(207 90% 54%);
+  --blue-foreground: hsl(0 0% 98%);
+  --purple: hsl(271 91% 65%);
+  --purple-foreground: hsl(0 0% 98%);
+  --pink: hsl(322 84% 60%);
+  --pink-foreground: hsl(0 0% 98%);
 }
 
 .dark {
@@ -66,23 +87,44 @@
   --card-foreground: hsl(210 40% 98%);
   --popover: hsl(222 84% 4.9%);
   --popover-foreground: hsl(210 40% 98%);
-  --primary: hsl(24 70% 56%); /* Lighter orange for dark mode */
+  --primary: hsl(171 65% 58%); /* Teal primary for dark mode (#4dd9cf) */
   --primary-foreground: hsl(222 84% 4.9%);
   --secondary: hsl(217 32% 17%);
   --secondary-foreground: hsl(210 40% 98%);
   --muted: hsl(217 32% 17%);
   --muted-foreground: hsl(215 20% 65%);
-  --accent: hsl(20 91% 48%); /* Orange accent for dark mode */
+  --accent: hsl(171 65% 58%); /* Teal accent for dark mode (#4dd9cf) */
   --accent-foreground: hsl(210 40% 98%);
   --destructive: hsl(0 62.8% 30.6%);
   --border: hsl(217 32% 17%);
   --input: hsl(217 32% 17%);
-  --ring: hsl(24 70% 56%); /* Orange ring for dark mode */
-  --chart-1: hsl(24 70% 56%); /* Orange chart colors for dark mode */
-  --chart-2: hsl(20 91% 48%);
-  --chart-3: hsl(32 81% 61%);
+  --ring: hsl(171 65% 58%); /* Teal ring for dark mode (#4dd9cf) */
+  --chart-1: hsl(171 65% 58%); /* Teal chart colors for dark mode (#4dd9cf) */
+  --chart-2: hsl(180 65% 55%);
+  --chart-3: hsl(190 70% 52%);
   --chart-4: hsl(271 91% 65%);
   --chart-5: hsl(0 72% 51%);
+  /* Dark mode colors for component consistency */
+  --success: hsl(142 76% 36%);
+  --success-foreground: hsl(0 0% 98%);
+  --warning: hsl(32 81% 61%);
+  --warning-foreground: hsl(240 5.9% 10%);
+  --info: hsl(207 90% 54%);
+  --info-foreground: hsl(0 0% 98%);
+  --orange: hsl(20 91% 48%);
+  --orange-foreground: hsl(0 0% 98%);
+  --yellow: hsl(48 96% 53%);
+  --yellow-foreground: hsl(240 5.9% 10%);
+  --red: hsl(0 84% 60%);
+  --red-foreground: hsl(0 0% 98%);
+  --green: hsl(142 76% 36%);
+  --green-foreground: hsl(0 0% 98%);
+  --blue: hsl(207 90% 54%);
+  --blue-foreground: hsl(0 0% 98%);
+  --purple: hsl(271 91% 65%);
+  --purple-foreground: hsl(0 0% 98%);
+  --pink: hsl(322 84% 60%);
+  --pink-foreground: hsl(0 0% 98%);
 }
 
 @layer base {
@@ -107,24 +149,24 @@
     box-shadow: 0 10px 28px hsl(220 50% 2% / 0.35);
   }
 
-  /* App-wide orange accent background (subtle, behind glass panels) */
+  /* App-wide teal accent background (subtle, behind glass panels) */
   .app-accent-bg {
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
     background:
-      radial-gradient(1200px 600px at 70% 10%, hsl(24 92% 52% / 0.28), transparent 60%),
-      radial-gradient(900px 450px at 40% 35%, hsl(24 95% 58% / 0.14), transparent 60%),
-      radial-gradient(800px 400px at 10% 80%, hsl(32 100% 60% / 0.18), transparent 60%),
-      linear-gradient(180deg, hsl(24 14% 96% / 0.25), transparent 40%);
+      radial-gradient(1200px 600px at 70% 10%, hsl(171 65% 58% / 0.28), transparent 60%),
+      radial-gradient(900px 450px at 40% 35%, hsl(180 65% 55% / 0.14), transparent 60%),
+      radial-gradient(800px 400px at 10% 80%, hsl(190 70% 52% / 0.18), transparent 60%),
+      linear-gradient(180deg, hsl(171 15% 96% / 0.25), transparent 40%);
     filter: saturate(1.2) hue-rotate(0deg);
     transform: translateZ(0);
   }
   .dark .app-accent-bg {
     background:
-      radial-gradient(1200px 600px at 65% 15%, hsl(24 90% 55% / 0.22), transparent 60%),
-      radial-gradient(900px 500px at 15% 85%, hsl(32 100% 60% / 0.14), transparent 60%),
+      radial-gradient(1200px 600px at 65% 15%, hsl(171 65% 58% / 0.22), transparent 60%),
+      radial-gradient(900px 500px at 15% 85%, hsl(180 65% 55% / 0.14), transparent 60%),
       linear-gradient(180deg, hsl(222 84% 5% / 0.65), transparent 40%);
     filter: contrast(1.05) brightness(1.05);
   }
@@ -143,14 +185,14 @@
     left: -10%;
     width: 55vh;
     height: 55vh;
-    background: radial-gradient(circle at 30% 30%, hsl(24 98% 55% / 0.12), transparent 60%);
+    background: radial-gradient(circle at 30% 30%, hsl(171 65% 58% / 0.12), transparent 60%);
   }
   .app-accent-bg::after {
     bottom: -10%;
     right: -10%;
     width: 70vh;
     height: 70vh;
-    background: radial-gradient(circle at 70% 70%, hsl(32 100% 60% / 0.10), transparent 60%);
+    background: radial-gradient(circle at 70% 70%, hsl(180 65% 55% / 0.10), transparent 60%);
   }
 
   /* Minimal, consistent scrollbars */
@@ -162,17 +204,17 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background-color: hsl(24 70% 56% / 0.35); /* orange, subtle */
+    background-color: hsl(171 65% 58% / 0.35); /* teal, subtle */
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
   .dark *::-webkit-scrollbar-thumb {
-    background-color: hsl(24 70% 56% / 0.45);
+    background-color: hsl(171 65% 58% / 0.45);
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(24 70% 56% / 0.45) transparent; /* Firefox */
+    scrollbar-color: hsl(171 65% 58% / 0.45) transparent; /* Firefox */
   }
 }
 
@@ -206,10 +248,10 @@
 }
 
 .tag-orange {
-  @apply bg-orange-100 text-orange-800 font-semibold;
+  @apply bg-primary/10 text-primary font-semibold;
 }
 .dark .tag-orange {
-  @apply bg-orange-900/30 text-orange-200;
+  @apply bg-primary/5 text-primary;
 }
 
 .tag-slate {
@@ -219,23 +261,39 @@
   @apply bg-slate-700 text-slate-300;
 }
 
-/* Orange Dynamic Background Animations */
+/* Artistic Subtle Background Animations */
 @keyframes gradient-drift {
   0%, 100% {
     transform: translateX(0%) translateY(0%) scale(1) rotate(0deg);
     opacity: 0.6;
   }
-  25% {
-    transform: translateX(2%) translateY(-1%) scale(1.05) rotate(1deg);
-    opacity: 0.4;
+  12% {
+    transform: translateX(1.5%) translateY(-0.8%) scale(1.03) rotate(0.6deg);
+    opacity: 0.45;
   }
-  50% {
-    transform: translateX(-1%) translateY(2%) scale(0.95) rotate(-1deg);
+  25% {
+    transform: translateX(2.5%) translateY(-1.5%) scale(1.06) rotate(1.2deg);
+    opacity: 0.35;
+  }
+  37% {
+    transform: translateX(1%) translateY(0.5%) scale(0.97) rotate(0.3deg);
     opacity: 0.7;
   }
-  75% {
-    transform: translateX(-2%) translateY(-1%) scale(1.02) rotate(0.5deg);
+  50% {
+    transform: translateX(-1.5%) translateY(2%) scale(0.94) rotate(-1.1deg);
+    opacity: 0.75;
+  }
+  62% {
+    transform: translateX(-2.5%) translateY(1%) scale(1.02) rotate(-0.8deg);
     opacity: 0.5;
+  }
+  75% {
+    transform: translateX(-1%) translateY(-1.2%) scale(1.04) rotate(0.4deg);
+    opacity: 0.55;
+  }
+  87% {
+    transform: translateX(0.5%) translateY(-0.3%) scale(0.99) rotate(0.2deg);
+    opacity: 0.65;
   }
 }
 
@@ -244,81 +302,153 @@
     transform: translateX(0%) translateY(0%) scale(1) rotate(0deg);
     opacity: 0.5;
   }
-  33% {
-    transform: translateX(-3%) translateY(2%) scale(1.08) rotate(-2deg);
+  16% {
+    transform: translateX(-2%) translateY(1.5%) scale(1.05) rotate(-1.5deg);
     opacity: 0.3;
   }
-  66% {
-    transform: translateX(2%) translateY(-2%) scale(0.92) rotate(1deg);
+  33% {
+    transform: translateX(-3.5%) translateY(2.5%) scale(1.08) rotate(-2.2deg);
+    opacity: 0.25;
+  }
+  50% {
+    transform: translateX(-1.5%) translateY(0.5%) scale(0.95) rotate(-0.8deg);
     opacity: 0.6;
+  }
+  66% {
+    transform: translateX(2.5%) translateY(-2%) scale(0.92) rotate(1.3deg);
+    opacity: 0.65;
+  }
+  83% {
+    transform: translateX(1.8%) translateY(-1%) scale(1.02) rotate(0.7deg);
+    opacity: 0.45;
   }
 }
 
 @keyframes float-slow {
   0%, 100% {
-    transform: translateX(0px) translateY(0px) scale(1);
+    transform: translateX(0px) translateY(0px) scale(1) rotate(0deg);
   }
-  33% {
-    transform: translateX(30px) translateY(-40px) scale(1.1);
+  20% {
+    transform: translateX(25px) translateY(-30px) scale(1.08) rotate(2deg);
   }
-  66% {
-    transform: translateX(-20px) translateY(-60px) scale(0.9);
+  40% {
+    transform: translateX(15px) translateY(-50px) scale(0.95) rotate(1deg);
+  }
+  60% {
+    transform: translateX(-15px) translateY(-35px) scale(1.12) rotate(-1deg);
+  }
+  80% {
+    transform: translateX(-25px) translateY(-15px) scale(0.98) rotate(-2deg);
   }
 }
 
 @keyframes float-reverse {
   0%, 100% {
-    transform: translateX(0px) translateY(0px) rotate(0deg);
+    transform: translateX(0px) translateY(0px) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateX(-30px) translateY(20px) rotate(3deg) scale(1.05);
   }
   50% {
-    transform: translateX(-40px) translateY(30px) rotate(5deg);
+    transform: translateX(-50px) translateY(35px) rotate(6deg) scale(0.92);
+  }
+  75% {
+    transform: translateX(-25px) translateY(15px) rotate(2deg) scale(1.08);
   }
 }
 
 @keyframes float-diagonal {
   0%, 100% {
-    transform: translateX(0px) translateY(0px) scale(1);
+    transform: translateX(0px) translateY(0px) scale(1) rotate(0deg);
   }
-  25% {
-    transform: translateX(40px) translateY(30px) scale(1.2);
+  20% {
+    transform: translateX(35px) translateY(25px) scale(1.15) rotate(3deg);
   }
-  50% {
-    transform: translateX(20px) translateY(-40px) scale(0.8);
+  40% {
+    transform: translateX(50px) translateY(-20px) scale(0.85) rotate(1deg);
   }
-  75% {
-    transform: translateX(-30px) translateY(20px) scale(1.1);
+  60% {
+    transform: translateX(15px) translateY(-45px) scale(1.08) rotate(-2deg);
+  }
+  80% {
+    transform: translateX(-20px) translateY(-10px) scale(0.95) rotate(-1deg);
   }
 }
 
 @keyframes float-up {
   0%, 100% {
-    transform: translateY(0px) scale(1);
+    transform: translateY(0px) scale(1) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-35px) scale(1.12) rotate(1deg);
   }
   50% {
-    transform: translateY(-50px) scale(1.15);
+    transform: translateY(-60px) scale(1.18) rotate(2deg);
+  }
+  75% {
+    transform: translateY(-40px) scale(1.05) rotate(0.5deg);
   }
 }
 
 .animate-gradient-drift {
-  animation: gradient-drift 25s ease-in-out infinite;
+  animation: gradient-drift 28s ease-in-out infinite;
 }
 
 .animate-gradient-drift-slow {
-  animation: gradient-drift-slow 35s ease-in-out infinite;
+  animation: gradient-drift-slow 38s ease-in-out infinite;
 }
 
 .animate-float-slow {
-  animation: float-slow 25s ease-in-out infinite;
+  animation: float-slow 32s ease-in-out infinite;
 }
 
 .animate-float-reverse {
-  animation: float-reverse 30s ease-in-out infinite reverse;
+  animation: float-reverse 35s ease-in-out infinite reverse;
 }
 
 .animate-float-diagonal {
-  animation: float-diagonal 22s ease-in-out infinite;
+  animation: float-diagonal 29s ease-in-out infinite;
 }
 
 .animate-float-up {
-  animation: float-up 18s ease-in-out infinite;
+  animation: float-up 31s ease-in-out infinite;
+}
+
+/* Full Screen Orb Movement */
+@keyframes orb-drift {
+  0%, 100% {
+    transform: translateX(0px) translateY(0px) scale(1);
+  }
+  25% {
+    transform: translateX(200px) translateY(-150px) scale(1.2);
+  }
+  50% {
+    transform: translateX(-100px) translateY(180px) scale(0.8);
+  }
+  75% {
+    transform: translateX(150px) translateY(-80px) scale(1.1);
+  }
+}
+
+@keyframes orb-drift-reverse {
+  0%, 100% {
+    transform: translateX(0px) translateY(0px) scale(1);
+  }
+  25% {
+    transform: translateX(-180px) translateY(120px) scale(0.9);
+  }
+  50% {
+    transform: translateX(220px) translateY(-160px) scale(1.15);
+  }
+  75% {
+    transform: translateX(-120px) translateY(100px) scale(0.95);
+  }
+}
+
+.animate-orb-drift {
+  animation: orb-drift 90s ease-in-out infinite;
+}
+
+.animate-orb-drift-reverse {
+  animation: orb-drift-reverse 95s ease-in-out infinite reverse;
 }

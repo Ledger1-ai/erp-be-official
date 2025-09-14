@@ -76,7 +76,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'hostpro'
   ],
   'Staff': [
-    'dashboard' // Very limited access
+    'dashboard', // Very limited access
+    'inventory' // Allow basic inventory access for staff
   ]
 };
 

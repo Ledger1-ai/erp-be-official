@@ -3,11 +3,16 @@
 
 import { syncEmployeesForRestaurant } from '@/lib/services/toast-sync';
 import ToastAPIClient from '@/lib/services/toast-api-client';
+import { isDemoMode } from '@/lib/config/demo';
 
 let schedulerInitialized = false;
 
 async function runSyncCycle(): Promise<void> {
   try {
+    if (isDemoMode()) {
+      console.log('[Toast Scheduler] Demo mode: skipping sync cycle');
+      return;
+    }
     const api = new ToastAPIClient();
     const restaurants = await api.getConnectedRestaurants();
 

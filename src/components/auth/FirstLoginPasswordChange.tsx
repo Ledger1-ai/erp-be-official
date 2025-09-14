@@ -120,7 +120,7 @@ export default function FirstLoginPasswordChange({
           </div>
           <div>
             <CardTitle className="text-2xl font-bold text-gray-900">
-              {isFirstLogin ? "Welcome to The Graine Ledger" : "Password Change Required"}
+              {isFirstLogin ? "Welcome to ledger1" : "Password Change Required"}
             </CardTitle>
             <p className="text-gray-600 mt-2">
               {isFirstLogin 
