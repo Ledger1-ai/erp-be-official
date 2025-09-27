@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
   try {
-    const { AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_REALTIME_DEPLOYMENT, AZURE_OPENAI_REALTIME_API_VERSION } = process.env;
+    const { AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_REALTIME_DEPLOYMENT, AZURE_OPENAI_REALTIME_API_VERSION, AZURE_OPENAI_REALTIME_WEBRTC_URL, NEXT_PUBLIC_AZURE_OPENAI_REALTIME_WEBRTC_URL } = process.env;
 
     if (!AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_API_KEY || !AZURE_OPENAI_REALTIME_DEPLOYMENT || !AZURE_OPENAI_REALTIME_API_VERSION) {
       return NextResponse.json({ error: 'Azure OpenAI environment variables are not set.' }, { status: 500 });
@@ -31,7 +31,8 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    const webrtcUrl = AZURE_OPENAI_REALTIME_WEBRTC_URL || NEXT_PUBLIC_AZURE_OPENAI_REALTIME_WEBRTC_URL || '';
+    return NextResponse.json({ ...data, webrtcUrl, deployment: AZURE_OPENAI_REALTIME_DEPLOYMENT });
 
   } catch (error) {
     console.error('Error creating voice session:', error);

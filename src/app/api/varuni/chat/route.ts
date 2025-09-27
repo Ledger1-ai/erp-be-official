@@ -6,6 +6,7 @@ import { marked } from 'marked';
 import { searchEmbedding } from '@/lib/services/rag';
 import ChatSession from '@/lib/models/ChatSession';
 import { connectDB } from '@/lib/db/connection';
+import { getDemoNow } from '@/lib/config/demo';
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,7 +14,8 @@ export async function POST(req: NextRequest) {
     const { message, toolset, runtime, turnId } = await req.json();
     const activeToolset = (toolset && String(toolset)) || 'main';
     const authHeader = req.headers.get('authorization') || '';
-    const endpoint = process.env.NEXT_PUBLIC_GRAPHQL_URL || 'http://localhost:3000/api/graphql';
+    // Prefer explicit env; otherwise derive from request origin to avoid localhost in Azure
+    const endpoint = process.env.NEXT_PUBLIC_GRAPHQL_URL || (new URL(req.url).origin + '/api/graphql');
     const userId = (() => {
       try {
         const bearer = (authHeader.split(' ')[1] || '');
@@ -141,12 +143,23 @@ export async function POST(req: NextRequest) {
       tools: [
         {
           name: 'getInventoryAnalyticsSummary',
-          description: 'Fetch inventory analytics summary',
-          parameters: { type: 'object', properties: { startDate: { type: 'string' }, endDate: { type: 'string' } }, required: ['startDate','endDate'] },
-          handler: async (args: any, ctx: any) => ctx.callGraphQL(
-            `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`,
-            { startDate: args.startDate, endDate: args.endDate }
-          )
+          description: 'Fetch inventory analytics summary (defaults to the frozen demo week)',
+          parameters: { type: 'object', properties: { startDate: { type: 'string' }, endDate: { type: 'string' } } },
+          handler: async (args: any, ctx: any) => {
+            const provided = (args && typeof args === 'object' ? (args.variables || args) : {}) as any;
+            const reference = getDemoNow();
+            const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
+            let end = provided.endDate ? new Date(String(provided.endDate)) : new Date(reference.getTime());
+            if (isNaN(end.getTime())) end = new Date(reference.getTime());
+            let start = provided.startDate ? new Date(String(provided.startDate)) : new Date(end.getTime());
+            if (isNaN(start.getTime())) start = new Date(end.getTime());
+            if (!provided.startDate) start.setDate(end.getDate() - 6);
+            const vars = { startDate: toDateStr(start), endDate: toDateStr(end) };
+            return ctx.callGraphQL(
+              `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`,
+              vars
+            );
+          }
         },
         {
           name: 'getLowStockItems',
@@ -628,8 +641,24 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({ query, variables }),
       });
-      const json = await res.json();
-      return json.data;
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {}
+      if (!res.ok) {
+        const message = (() => {
+          if (json?.errors?.length) return json.errors.map((err: any) => err?.message || 'Unknown error').join('; ');
+          if (typeof json?.message === 'string' && json.message) return json.message;
+          return text || `HTTP ${res.status}`;
+        })();
+        throw new Error(`GraphQL request failed (${res.status}): ${message}`);
+      }
+      if (json?.errors?.length) {
+        const message = json.errors.map((err: any) => err?.message || 'Unknown error').join('; ');
+        throw new Error(`GraphQL error: ${message}`);
+      }
+      return json?.data;
     };
 
     // REST caller helper using same auth

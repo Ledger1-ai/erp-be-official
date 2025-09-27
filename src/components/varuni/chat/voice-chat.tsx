@@ -261,7 +261,7 @@ export function VoiceChat() {
     }
   }, [logMessage, activeToolset]);
 
-  const initWebRTC = useCallback(async (ephemeralKey: string) => {
+  const initWebRTC = useCallback(async (ephemeralKey: string, webrtcUrl: string, deployment: string) => {
     const pc = new RTCPeerConnection();
     peerConnectionRef.current = pc;
 
@@ -378,9 +378,6 @@ export function VoiceChat() {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const webrtcUrl = process.env.NEXT_PUBLIC_AZURE_OPENAI_REALTIME_WEBRTC_URL;
-    const deployment = process.env.NEXT_PUBLIC_AZURE_OPENAI_REALTIME_DEPLOYMENT;
-
     if (!webrtcUrl || !deployment) {
       throw new Error('WebRTC URL or deployment name is not configured in environment variables.');
     }
@@ -451,7 +448,7 @@ export function VoiceChat() {
   }, [tools, computedInstructions, logMessage]);
 
   const buildInstructions = useCallback(async (): Promise<string> => {
-    const endpoint = process.env.NEXT_PUBLIC_GRAPHQL_URL || 'http://localhost:3000/api/graphql';
+    const endpoint = process.env.NEXT_PUBLIC_GRAPHQL_URL || '/api/graphql';
     const auth = typeof window !== 'undefined' ? `Bearer ${sessionStorage.getItem('accessToken') || ''}` : '';
     const who = await (async () => {
       try {
@@ -566,8 +563,10 @@ Operating rules: Ask concise clarifying questions before tool calls when ambigui
         logMessage('Ephemeral Key Received: ***');
         logMessage(`WebRTC Session Id = ${data.id}`);
       }
+      const webrtcUrl: string = (data.webrtcUrl || process.env.NEXT_PUBLIC_AZURE_OPENAI_REALTIME_WEBRTC_URL || '').toString();
+      const deployment: string = (data.deployment || process.env.NEXT_PUBLIC_AZURE_OPENAI_REALTIME_DEPLOYMENT || '').toString();
 
-      await initWebRTC(ephemeralKey);
+      await initWebRTC(ephemeralKey, webrtcUrl, deployment);
       setIsSessionActive(true);
 
     } catch (error) {

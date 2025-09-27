@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { VaruniAgent, createGraphQLTool, createRESTTool } from '@/lib/services/varuni-agent';
+import { getDemoNow } from '@/lib/config/demo';
 import { searchEmbedding } from '@/lib/services/rag';
 
 // This function instantiates the agent and registers all toolsets.
@@ -106,18 +107,47 @@ export function initializeAgent(): VaruniAgent {
     name: 'inventory',
     description: 'Inventory analytics and stock tools',
     tools: [
-      // Use createGraphQLTool so start/end dates are auto-filled when omitted
-      createGraphQLTool(
-        'getInventoryAnalyticsSummary',
-        'Fetch inventory analytics summary',
-        `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`
-      ),
+      {
+        name: 'getInventoryAnalyticsSummary',
+        description: 'Fetch inventory analytics summary (defaults to the frozen demo week)',
+        parameters: { type: 'object', properties: { startDate: { type: 'string' }, endDate: { type: 'string' } } },
+        handler: async (args: any, ctx: any) => {
+          const provided = (args && typeof args === 'object' ? (args.variables || args) : {}) as any;
+          const reference = getDemoNow();
+          const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
+          let end = provided.endDate ? new Date(String(provided.endDate)) : new Date(reference.getTime());
+          if (isNaN(end.getTime())) end = new Date(reference.getTime());
+          let start = provided.startDate ? new Date(String(provided.startDate)) : new Date(end.getTime());
+          if (isNaN(start.getTime())) start = new Date(end.getTime());
+          if (!provided.startDate) start.setDate(end.getDate() - 6);
+          const vars = { startDate: toDateStr(start), endDate: toDateStr(end) };
+          return ctx.callGraphQL(
+            `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`,
+            vars
+          );
+        }
+      },
       // Snake_case alias for compatibility
-      createGraphQLTool(
-        'get_inventory_analytics_summary',
-        'Fetch inventory analytics summary',
-        `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`
-      ),
+      {
+        name: 'get_inventory_analytics_summary',
+        description: 'Fetch inventory analytics summary (defaults to the frozen demo week)',
+        parameters: { type: 'object', properties: { startDate: { type: 'string' }, endDate: { type: 'string' } } },
+        handler: async (args: any, ctx: any) => {
+          const provided = (args && typeof args === 'object' ? (args.variables || args) : {}) as any;
+          const reference = getDemoNow();
+          const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
+          let end = provided.endDate ? new Date(String(provided.endDate)) : new Date(reference.getTime());
+          if (isNaN(end.getTime())) end = new Date(reference.getTime());
+          let start = provided.startDate ? new Date(String(provided.startDate)) : new Date(end.getTime());
+          if (isNaN(start.getTime())) start = new Date(end.getTime());
+          if (!provided.startDate) start.setDate(end.getDate() - 6);
+          const vars = { startDate: toDateStr(start), endDate: toDateStr(end) };
+          return ctx.callGraphQL(
+            `query($startDate: Date!, $endDate: Date!){ inventoryAnalyticsSummary(startDate:$startDate,endDate:$endDate){ totalInventoryValue totalItems lowStockItems criticalItems wasteCostInPeriod wasteQtyInPeriod turnoverRatio } }`,
+            vars
+          );
+        }
+      },
       {
         name: 'getLowStockItems',
         description: 'Fetch low stock items',

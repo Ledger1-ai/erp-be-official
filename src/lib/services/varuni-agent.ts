@@ -1,5 +1,6 @@
 import { AzureOpenAI } from "openai";
 import { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
+import { getDemoNow } from "@/lib/config/demo";
 
 type ToolHandler = (args: Record<string, any>, context: AgentContext) => Promise<any>;
 
@@ -319,9 +320,11 @@ export function createGraphQLTool(name: string, description: string, query: stri
 					variables.period = 'weekly';
 				}
 				if ((needs('startDate') || needs('endDate'))) {
-					const now = new Date();
-					const end = variables.endDate ? new Date(String(variables.endDate)) : now;
-					const start = variables.startDate ? new Date(String(variables.startDate)) : new Date(end);
+					const reference = getDemoNow();
+					let end = variables.endDate ? new Date(String(variables.endDate)) : new Date(reference.getTime());
+					if (isNaN(end.getTime())) end = new Date(reference.getTime());
+					let start = variables.startDate ? new Date(String(variables.startDate)) : new Date(end.getTime());
+					if (isNaN(start.getTime())) start = new Date(end.getTime());
 					if (!variables.startDate) start.setDate(end.getDate() - 13);
 					if (!variables.endDate) variables.endDate = toDateStr(end);
 					variables.startDate = toDateStr(start);
