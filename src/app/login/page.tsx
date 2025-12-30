@@ -217,11 +217,11 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">
             <Image
-              src="/l1logows.png"
-              alt="ledger1"
+              src="/BasaltERPWide.png"
+              alt="basalterp"
               width={160}
               height={50}
-              className="h-16 w-auto"
+              className="h-20 w-auto"
             />
           </div>
           <div className="flex items-center justify-center text-sm text-white/70 mb-2 -mt-2 drop-shadow">
@@ -275,7 +275,7 @@ export default function LoginPage() {
                       <FormLabel>Email Address</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="admin@ledger1.ai"
+                          placeholder="info@basalthq.com"
                           type="email"
                           disabled={isLoading}
                           {...field}
@@ -353,8 +353,8 @@ export default function LoginPage() {
 
         {/* Footer */}
         <div className="text-center mt-8 text-xs text-white/50 drop-shadow">
-          <p>© 2025 ledger1. All rights reserved.</p>
-          <p className="mt-1">Visit <a href="https://ledger1.ai" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">ledger1.ai</a> for more information</p>
+          <p>© 2025 BasaltHQ. All rights reserved.</p>
+          <p className="mt-1">Visit <a href="https://basalthq.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">basalthq.com</a> for more information</p>
           <p className="mt-3 text-[10px] text-white/30">An Endeavor of The Utility Co.</p>
         </div>
       </div>
