@@ -95,7 +95,7 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMessage("");
     setRateLimitInfo({});
-    
+
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -113,7 +113,7 @@ export default function LoginPage() {
         // The refresh token is automatically stored as an httpOnly cookie
         sessionStorage.setItem('accessToken', result.accessToken);
         localStorage.setItem('user', JSON.stringify(result.user));
-        
+
         // Redirect to first allowed route based on permissions
         const landing = computeLandingRoute(result.user as any);
         window.location.href = landing;
@@ -127,7 +127,7 @@ export default function LoginPage() {
       } else {
         // Handle login failure
         setErrorMessage(result.message || 'Login failed');
-        
+
         // Handle rate limiting
         if (response.status === 429) {
           setRateLimitInfo({
@@ -151,7 +151,7 @@ export default function LoginPage() {
     // Store the new tokens and user data
     sessionStorage.setItem('accessToken', accessToken);
     localStorage.setItem('user', JSON.stringify(user));
-    
+
     // Redirect to first allowed route based on permissions
     const landing = computeLandingRoute(user);
     window.location.href = landing;
@@ -160,7 +160,7 @@ export default function LoginPage() {
   const formatRetryTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
-    return minutes > 0 
+    return minutes > 0
       ? `${minutes}m ${remainingSeconds}s`
       : `${remainingSeconds}s`;
   };
@@ -211,7 +211,7 @@ export default function LoginPage() {
           }}
         ></div>
       </div>
-      
+
       <div className="w-full max-w-md relative z-10">
         {/* Logo and Branding */}
         <div className="text-center mb-8">
@@ -238,7 +238,7 @@ export default function LoginPage() {
               Sign in to your backoffice dashboard
             </p>
           </CardHeader>
-          
+
           <CardContent>
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -272,7 +272,7 @@ export default function LoginPage() {
                   name="email"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Email Address</FormLabel>
+                      <FormLabel className="text-white">Email Address</FormLabel>
                       <FormControl>
                         <Input
                           placeholder="info@basalthq.com"
@@ -286,13 +286,13 @@ export default function LoginPage() {
                     </FormItem>
                   )}
                 />
-                
+
                 <FormField
                   control={form.control}
                   name="password"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Password</FormLabel>
+                      <FormLabel className="text-white">Password</FormLabel>
                       <FormControl>
                         <div className="relative">
                           <Input
@@ -340,7 +340,7 @@ export default function LoginPage() {
               </form>
             </Form>
           </CardContent>
-          
+
           <CardFooter className="flex flex-col space-y-2 text-center text-sm text-white/60">
             <p className="drop-shadow-sm">Forgot your password? Contact your system administrator</p>
             <div className="pt-2 border-t border-white/20">
