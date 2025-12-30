@@ -82,7 +82,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: "basalt-erp-site"
+          app-name: "basalt-erp"
           slot-name: "Production"
           package: release.zip
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_31C33E2EDE394EEC9D8147C5E317D6BE }}
