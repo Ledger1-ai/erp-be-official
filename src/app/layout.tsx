@@ -8,36 +8,36 @@ import { initVaruniScheduler } from "@/lib/services/varuni-scheduler";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: "Ledger1 Demo",
-  description: "Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics",
-  applicationName: 'Ledger1 Demo',
+  title: "BasaltERP Demo",
+  description: "BasaltERP Backoffice demo: inventory, scheduling, invoicing, and robotics",
+  applicationName: 'BasaltERP Demo',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
-      { url: '/l1logows.png', type: 'image/png', sizes: '512x512' }
+      { url: '/bssymbol.png', type: 'image/png', sizes: '512x512' }
     ],
     apple: [
-      { url: '/l1logows.png', sizes: '180x180', type: 'image/png' }
+      { url: '/bssymbol.png', sizes: '180x180', type: 'image/png' }
     ],
-    shortcut: ['/l1logows.png']
+    shortcut: ['/BasaltERP.png']
   },
   themeColor: '#0f172a',
-  appleWebApp: { capable: true, title: 'Ledger1 Demo', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'BasaltERP Demo', statusBarStyle: 'default' },
   openGraph: {
-    title: 'Ledger1 Demo',
-    description: 'Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics',
-    url: 'https://ledger1.ai',
-    siteName: 'Ledger1 Demo',
+    title: 'BasaltERP Demo',
+    description: 'BasaltERP Backoffice demo: inventory, scheduling, invoicing, and robotics',
+    url: 'https://erp.basalthq.com',
+    siteName: 'BasaltERP Demo',
     images: [
-      { url: 'https://engram1.blob.core.windows.net/varuni/socialbanner.png', width: 1536, height: 1024, alt: 'Ledger1 Backoffice' }
+      { url: 'https://engram1.blob.core.windows.net/varuni/socialbanner.png', width: 1536, height: 1024, alt: 'BasaltERP Backoffice' }
     ],
     type: 'website'
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Ledger1 Demo',
-    description: 'Ledger1 Backoffice demo: inventory, scheduling, invoicing, and robotics',
+    title: 'BasaltERP Demo',
+    description: 'BasaltERP Backoffice demo: inventory, scheduling, invoicing, and robotics',
     images: ['https://engram1.blob.core.windows.net/varuni/socialbanner.png']
   }
 };

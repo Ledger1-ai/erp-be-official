@@ -478,8 +478,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Logo */}
       <div className="flex items-center h-16 px-6 border-b">
         <Image
-          src="/l1logows.png"
-          alt="ledger1"
+          src="/BasaltERPWide.png"
+          alt="BasaltERP"
           width={120}
           height={40}
           className="h-8 w-auto"
@@ -752,7 +752,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                       const name = (user?.name && user.name.split(' ')[0]) || (user?.email ? user.email.split('@')[0] : 'there');
                       const h = new Date().getHours();
                       const tod = h < 12 ? 'morning' : (h < 17 ? 'afternoon' : 'evening');
-                      return `Good ${tod}, ${name}! Welcome to ledger1. Ask me anything, or choose a suggestion below.`;
+                      return `Good ${tod}, ${name}! Welcome to BasaltERP. Ask me anything, or choose a suggestion below.`;
                     })()}
                   </p>
                 </div>
